@@ -12,7 +12,14 @@ module Wasmtime
     Context,
     storeContext,
 
+    -- * Module
+    Module,
+    newModule,
+
     -- * Conversion
+    Wasm,
+    wasmToBytes,
+    unsafeFromByteString,
     wat2wasm,
   )
 where
@@ -20,6 +27,7 @@ where
 import Bindings.Wasm
 import Bindings.Wasmtime
 import Bindings.Wasmtime.Error
+import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
 import Control.Exception (Exception, mask_, throwIO)
 import Control.Monad (when)
@@ -83,16 +91,28 @@ storeContext wasmtimeStore =
 -- Conversion
 --------------------------------------------------------------------------------
 
--- | Converts from the text format of WebAssembly to to the binary format.
-wat2wasm :: B.ByteString -> IO B.ByteString
-wat2wasm (BI.BS inp_fp inp_size) = withForeignPtr inp_fp $ \(inp_p :: Ptr Word8) ->
+-- | WASM code.
+newtype Wasm = Wasm {wasmToBytes :: B.ByteString}
+
+-- | Convert bytes into WASM. This function doesn't check if the bytes
+-- are actual WASM code hence it's unsafe.
+unsafeFromByteString :: B.ByteString -> Wasm
+unsafeFromByteString = Wasm
+
+-- | Converts from the text format of WebAssembly to the binary format.
+--
+-- Throws a 'WasmtimeError' in case conversion fails.
+wat2wasm :: B.ByteString -> IO Wasm
+wat2wasm (BI.BS inp_fp inp_size) = withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
   alloca $ \(wasm_byte_vec_ptr :: Ptr C'wasm_byte_vec_t) -> mask_ $ do
     let cchar_ptr :: Ptr CChar
-        cchar_ptr = castPtr inp_p
-    error_ptr <- c'wasmtime_wat2wasm cchar_ptr (fromIntegral inp_size) wasm_byte_vec_ptr
-    when (error_ptr /= nullPtr) $ do
-      wasmtimeError <- newWasmtimeError error_ptr
-      throwIO wasmtimeError
+        cchar_ptr = castPtr inp_ptr
+    error_ptr <-
+      c'wasmtime_wat2wasm
+        cchar_ptr
+        (fromIntegral inp_size)
+        wasm_byte_vec_ptr
+    checkWasmtimeError error_ptr
     data_ptr :: Ptr CChar <- peek $ p'wasm_byte_vec_t'data wasm_byte_vec_ptr
     size <- peek $ p'wasm_byte_vec_t'size wasm_byte_vec_ptr
     let word_ptr :: Ptr Word8
@@ -100,7 +120,28 @@ wat2wasm (BI.BS inp_fp inp_size) = withForeignPtr inp_fp $ \(inp_p :: Ptr Word8)
     out_fp <-
       Foreign.Concurrent.newForeignPtr word_ptr $
         c'wasm_byte_vec_delete wasm_byte_vec_ptr
-    pure $ BI.fromForeignPtr0 out_fp $ fromIntegral size
+    pure $ Wasm $ BI.fromForeignPtr0 out_fp $ fromIntegral size
+
+--------------------------------------------------------------------------------
+-- Module
+--------------------------------------------------------------------------------
+
+newtype Module = Module {_unModule :: ForeignPtr C'wasmtime_module_t}
+
+newModule :: Engine -> Wasm -> IO Module
+newModule engine (Wasm (BI.BS inp_fp inp_size)) =
+  withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
+    withForeignPtr (unEngine engine) $ \engine_ptr ->
+      alloca $ \module_ptr_ptr -> mask_ $ do
+        error_ptr <-
+          c'wasmtime_module_new
+            engine_ptr
+            inp_ptr
+            (fromIntegral inp_size)
+            module_ptr_ptr
+        checkWasmtimeError error_ptr
+        module_ptr <- peek module_ptr_ptr
+        Module <$> newForeignPtr p'wasmtime_module_delete module_ptr
 
 --------------------------------------------------------------------------------
 -- Errors
@@ -122,6 +163,11 @@ newtype WasmtimeError = WasmtimeError {unWasmtimeError :: ForeignPtr C'wasmtime_
 
 newWasmtimeError :: Ptr C'wasmtime_error_t -> IO WasmtimeError
 newWasmtimeError error_ptr = WasmtimeError <$> newForeignPtr p'wasmtime_error_delete error_ptr
+
+checkWasmtimeError :: Ptr C'wasmtime_error_t -> IO ()
+checkWasmtimeError error_ptr = when (error_ptr /= nullPtr) $ do
+  wasmtimeError <- newWasmtimeError error_ptr
+  throwIO wasmtimeError
 
 instance Exception WasmtimeError
 

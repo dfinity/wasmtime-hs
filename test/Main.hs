@@ -1,12 +1,11 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
+-- | Haskell translation of: https://docs.wasmtime.dev/examples-c-hello-world.html
 module Main (main) where
 
 import qualified Data.ByteString as B
 import Paths_wasmtime
 import qualified Wasmtime
-
--- Haskell translation of: https://docs.wasmtime.dev/examples-c-hello-world.html
 
 main :: IO ()
 main = do
@@ -20,7 +19,11 @@ main = do
   helloWatPath <- getDataFileName "test/hello.wat"
   watBytes <- B.readFile helloWatPath
 
-  _wasmBytes <- Wasmtime.wat2wasm watBytes
+  wasm :: Wasmtime.Wasm <- Wasmtime.wat2wasm watBytes
+
+  putStrLn "Compiling module..."
+
+  _module :: Wasmtime.Module <- Wasmtime.newModule engine wasm
 
   -- TODO
   pure ()
