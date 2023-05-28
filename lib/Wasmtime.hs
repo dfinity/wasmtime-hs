@@ -25,6 +25,10 @@ module Wasmtime
     -- * Function types
     FuncType,
     newUnitFuncType,
+
+    -- * Errors
+    WasmException (..),
+    WasmtimeError,
   )
 where
 
