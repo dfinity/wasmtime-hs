@@ -31,12 +31,12 @@ library
     default-language: Haskell2010
     extra-libraries:  wasmtime
 
-test-suite wasmtime-hs-test
+test-suite hello-world
     import:           warnings
     default-language: Haskell2010
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test
-    main-is:          Main.hs
+    main-is:          hello-world.hs
     other-modules:    Paths_wasmtime
     build-depends:    base >=4.15
     build-depends:    bytestring

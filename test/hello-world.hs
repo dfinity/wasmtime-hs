@@ -22,7 +22,6 @@ main = do
   wasm :: Wasmtime.Wasm <- Wasmtime.wat2wasm watBytes
 
   putStrLn "Compiling module..."
-
   _module :: Wasmtime.Module <- Wasmtime.newModule engine wasm
 
   -- TODO
