@@ -1,0 +1,42 @@
+cabal-version:      3.0
+name:               wasmtime
+version:            0.0.0.0
+synopsis:           Haskell bindings to the wasmtime WASM engine
+homepage:           https://github.com/basvandijk/wasmtime-hs
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             Bas van Dijk
+maintainer:         bas@dfinity.org
+copyright:          DFINITY
+category:           System
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+data-files:         test/*.wat
+
+common warnings
+    ghc-options: -Wall
+
+library
+    import:           warnings
+    exposed-modules:  Wasmtime
+    other-modules:    Bindings.Wasm
+    other-modules:    Bindings.Wasmtime
+    other-modules:    Bindings.Wasmtime.Error
+    other-modules:    Bindings.Wasmtime.Store
+    build-depends:    base >=4.15
+    build-depends:    bindings-DSL >= 1.0.25
+    build-depends:    bytestring >= 0.11.4
+    hs-source-dirs:   lib
+    default-language: Haskell2010
+    extra-libraries:  wasmtime
+
+test-suite wasmtime-hs-test
+    import:           warnings
+    default-language: Haskell2010
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Main.hs
+    other-modules:    Paths_wasmtime
+    build-depends:    base >=4.15
+    build-depends:    bytestring
+    build-depends:    wasmtime
