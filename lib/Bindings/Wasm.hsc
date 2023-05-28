@@ -49,3 +49,15 @@ module Bindings.Wasm where
 --
 -- See: <https://docs.wasmtime.dev/c-api/wasm_8h.html#a5a6e9ac85b29c62a9fb679a974a7cdaa>.
 #synonym_t wasm_name_t , <wasm_byte_vec_t>
+
+-- | An opaque object representing the type of a function.
+--
+-- See: <https://docs.wasmtime.dev/c-api/structwasm__functype__t.html>.
+#opaque_t wasm_functype_t
+
+#cinline wasm_functype_new_0_0 , IO (Ptr <wasm_functype_t>)
+
+-- | Deletes a type.
+--
+-- See: <https://docs.wasmtime.dev/c-api/wasm_8h.html#a37522fa30054f355ae3f58b28a884e7a>.
+#ccall wasm_functype_delete , Ptr <wasm_functype_t> -> IO ()

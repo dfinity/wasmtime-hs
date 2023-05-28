@@ -12,15 +12,19 @@ module Wasmtime
     Context,
     storeContext,
 
-    -- * Module
-    Module,
-    newModule,
-
     -- * Conversion
     Wasm,
     wasmToBytes,
     unsafeFromByteString,
     wat2wasm,
+
+    -- * Module
+    Module,
+    newModule,
+
+    -- * Function types
+    FuncType,
+    newUnitFuncType,
   )
 where
 
@@ -142,6 +146,19 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) =
         checkWasmtimeError error_ptr
         module_ptr <- peek module_ptr_ptr
         Module <$> newForeignPtr p'wasmtime_module_delete module_ptr
+
+--------------------------------------------------------------------------------
+-- Functions
+--------------------------------------------------------------------------------
+
+-- TODO: Add a phantom type variable which represents the Haskell type of the function.
+
+newtype FuncType = FuncType {_unFuncType :: ForeignPtr C'wasm_functype_t}
+
+newUnitFuncType :: IO FuncType
+newUnitFuncType = mask_ $ do
+  functype_ptr <- c'wasm_functype_new_0_0
+  FuncType <$> newForeignPtr p'wasm_functype_delete functype_ptr
 
 --------------------------------------------------------------------------------
 -- Errors

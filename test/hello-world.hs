@@ -24,5 +24,7 @@ main = do
   putStrLn "Compiling module..."
   _module :: Wasmtime.Module <- Wasmtime.newModule engine wasm
 
+  _helloFuncType :: Wasmtime.FuncType <- Wasmtime.newUnitFuncType
+
   -- TODO
   pure ()
