@@ -27,6 +27,8 @@ library
     other-modules:    Bindings.Wasmtime.Store
     other-modules:    Bindings.Wasmtime.Module
     other-modules:    Bindings.Wasmtime.Val
+    other-modules:    Bindings.Wasmtime.Func
+    other-modules:    Bindings.Wasmtime.Extern
 
     build-depends:    base >=4.15
     build-depends:    bindings-DSL >= 1.0.25

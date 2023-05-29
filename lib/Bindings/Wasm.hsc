@@ -59,3 +59,5 @@ module Bindings.Wasm where
 #synonym_t wasm_valkind_t , Word8
 
 #opaque_t wasm_valtype_t
+
+#opaque_t wasm_trap_t

@@ -15,3 +15,5 @@ module Bindings.Wasmtime.Val where
 #num WASMTIME_V128
 #num WASMTIME_FUNCREF
 #num WASMTIME_EXTERNREF
+
+#opaque_t wasmtime_val_t
