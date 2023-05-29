@@ -4,27 +4,27 @@
 module Main (main) where
 
 import qualified Data.ByteString as B
-import Paths_wasmtime
-import qualified Wasmtime
+import Paths_wasmtime (getDataFileName)
+import Wasmtime
 
 main :: IO ()
 main = do
   putStrLn "Initializing..."
-  engine :: Wasmtime.Engine <- Wasmtime.newEngine
+  engine :: Engine <- newEngine
 
-  store :: Wasmtime.Store <- Wasmtime.newStore engine
+  store :: Store <- newStore engine
 
-  _ctx :: Wasmtime.Context <- Wasmtime.storeContext store
+  _ctx :: Context <- storeContext store
 
   helloWatPath <- getDataFileName "test/hello.wat"
   watBytes <- B.readFile helloWatPath
 
-  wasm :: Wasmtime.Wasm <- Wasmtime.wat2wasm watBytes
+  wasm :: Wasm <- wat2wasm watBytes
 
   putStrLn "Compiling module..."
-  _module :: Wasmtime.Module <- Wasmtime.newModule engine wasm
+  _module :: Module <- newModule engine wasm
 
-  _helloFuncType :: Wasmtime.FuncType <- Wasmtime.newUnitFuncType
+  _helloFuncType :: FuncType (IO ()) <- newFuncType
 
   -- TODO
   pure ()

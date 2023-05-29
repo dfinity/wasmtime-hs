@@ -1,4 +1,7 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -- | High-level Haskell API to the wasmtime C API.
 module Wasmtime
@@ -24,7 +27,7 @@ module Wasmtime
 
     -- * Function types
     FuncType,
-    newUnitFuncType,
+    newFuncType,
 
     -- * Errors
     WasmException (..),
@@ -37,10 +40,14 @@ import Bindings.Wasmtime
 import Bindings.Wasmtime.Error
 import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
+import Bindings.Wasmtime.Val
 import Control.Exception (Exception, mask_, throwIO)
 import Control.Monad (when)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
+import Data.Foldable (for_)
+import Data.Int (Int32, Int64)
+import Data.Proxy (Proxy (..))
 import Data.Typeable (Typeable)
 import Data.Word (Word8)
 import Foreign.C.String (peekCStringLen)
@@ -48,8 +55,9 @@ import Foreign.C.Types (CChar)
 import qualified Foreign.Concurrent
 import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
 import Foreign.Marshal.Alloc (alloca)
+import Foreign.Marshal.Array
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
-import Foreign.Storable (peek)
+import Foreign.Storable (peek, pokeElemOff)
 import System.IO.Unsafe (unsafePerformIO)
 
 --------------------------------------------------------------------------------
@@ -65,6 +73,9 @@ newEngine = mask_ $ do
   checkAllocation engine_ptr
   Engine <$> newForeignPtr p'wasm_engine_delete engine_ptr
 
+withEngine :: Engine -> (Ptr C'wasm_engine_t -> IO a) -> IO a
+withEngine engine = withForeignPtr (unEngine engine)
+
 --------------------------------------------------------------------------------
 -- Store
 --------------------------------------------------------------------------------
@@ -73,10 +84,13 @@ newEngine = mask_ $ do
 newtype Store = Store {unStore :: ForeignPtr C'wasmtime_store_t}
 
 newStore :: Engine -> IO Store
-newStore engine = withForeignPtr (unEngine engine) $ \engine_ptr -> mask_ $ do
+newStore engine = withEngine engine $ \engine_ptr -> mask_ $ do
   wasmtime_store_ptr <- c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
   checkAllocation wasmtime_store_ptr
   Store <$> newForeignPtr p'wasmtime_store_delete wasmtime_store_ptr
+
+withStore :: Store -> (Ptr C'wasmtime_store_t -> IO a) -> IO a
+withStore store = withForeignPtr (unStore store)
 
 data Context = Context
   { -- | Usage of a @wasmtime_context_t@ must not outlive the original @wasmtime_store_t@
@@ -86,12 +100,12 @@ data Context = Context
   }
 
 storeContext :: Store -> IO Context
-storeContext wasmtimeStore =
-  withForeignPtr (unStore wasmtimeStore) $ \wasmtime_store_ptr -> do
+storeContext store =
+  withStore store $ \wasmtime_store_ptr -> do
     wasmtime_ctx_ptr <- c'wasmtime_store_context wasmtime_store_ptr
     pure
       Context
-        { storeContextStore = wasmtimeStore,
+        { storeContextStore = store,
           storeContextPtr = wasmtime_ctx_ptr
         }
 
@@ -139,7 +153,7 @@ newtype Module = Module {_unModule :: ForeignPtr C'wasmtime_module_t}
 newModule :: Engine -> Wasm -> IO Module
 newModule engine (Wasm (BI.BS inp_fp inp_size)) =
   withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
-    withForeignPtr (unEngine engine) $ \engine_ptr ->
+    withEngine engine $ \engine_ptr ->
       alloca $ \module_ptr_ptr -> mask_ $ do
         error_ptr <-
           c'wasmtime_module_new
@@ -152,17 +166,92 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) =
         Module <$> newForeignPtr p'wasmtime_module_delete module_ptr
 
 --------------------------------------------------------------------------------
--- Functions
+-- Function Types
 --------------------------------------------------------------------------------
 
--- TODO: Add a phantom type variable which represents the Haskell type of the function.
+newtype FuncType f = FuncType {_unFuncType :: ForeignPtr C'wasm_functype_t}
 
-newtype FuncType = FuncType {_unFuncType :: ForeignPtr C'wasm_functype_t}
+newFuncType :: forall f. FuncKind f => IO (FuncType f)
+newFuncType =
+  withKinds (params (Proxy @f)) $ \params_ptr ->
+    withKinds (result (Proxy @f)) $ \result_ptr -> do
+      functype_ptr <- c'wasm_functype_new params_ptr result_ptr
+      FuncType <$> newForeignPtr p'wasm_functype_delete functype_ptr
 
-newUnitFuncType :: IO FuncType
-newUnitFuncType = mask_ $ do
-  functype_ptr <- c'wasm_functype_new_0_0
-  FuncType <$> newForeignPtr p'wasm_functype_delete functype_ptr
+withKinds :: [C'wasm_valkind_t] -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
+withKinds kinds f =
+  allocaArray n $ \(valtypes_ptr :: Ptr (Ptr C'wasm_valtype_t)) -> mask_ $ do
+    for_ (zip [0 ..] kinds) $ \(ix, k) -> do
+      -- FIXME: is the following a memory leak?
+      valtype_ptr <- c'wasm_valtype_new k
+      pokeElemOff valtypes_ptr ix valtype_ptr
+    alloca $ \(valtype_vec_ptr :: Ptr C'wasm_valtype_vec_t) -> do
+      c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr
+      f valtype_vec_ptr
+  where
+    n = length kinds
+
+class FuncKind f where
+  params :: Proxy f -> [C'wasm_valkind_t]
+  result :: Proxy f -> [C'wasm_valkind_t]
+
+instance (Kind a, FuncKind b) => FuncKind (a -> b) where
+  params _proxy = kind (Proxy @a) : params (Proxy @b)
+  result _proxy = result (Proxy @b)
+
+instance Results r => FuncKind (IO r) where
+  params _proxy = []
+  result _proxy = results (Proxy @r)
+
+class Kind a where
+  kind :: Proxy a -> C'wasm_valkind_t
+
+instance Kind Int32 where kind _proxy = c'WASMTIME_I32
+
+instance Kind Int64 where kind _proxy = c'WASMTIME_I64
+
+instance Kind Float where kind _proxy = c'WASMTIME_F32
+
+instance Kind Double where kind _proxy = c'WASMTIME_F64
+
+class Results r where
+  results :: Proxy r -> [C'wasm_valkind_t]
+
+instance Results () where
+  results _proxy = []
+
+-- The instance:
+--
+-- instance {-# OVERLAPPABLE #-} Kind a => Results a where
+--   results proxy = [kind proxy]
+--
+-- leads to:
+--
+--   Overlapping instances for Results ()
+--
+-- when type checking:
+--
+--   newFuncType :: IO (IO ())
+--
+-- I don't understand why yet but in the mean time we just have
+-- individual instances for all primitive types:
+
+instance Results Int32 where results proxy = [kind proxy]
+
+instance Results Int64 where results proxy = [kind proxy]
+
+instance Results Float where results proxy = [kind proxy]
+
+instance Results Double where results proxy = [kind proxy]
+
+instance (Kind a, Kind b) => Results (a, b) where
+  results _proxy = [kind (Proxy @a), kind (Proxy @b)]
+
+instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
+  results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c)]
+
+instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
+  results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c), kind (Proxy @d)]
 
 --------------------------------------------------------------------------------
 -- Errors
@@ -182,19 +271,22 @@ checkAllocation ptr = when (ptr == nullPtr) $ throwIO AllocationFailed
 -- | Errors generated by Wasmtime.
 newtype WasmtimeError = WasmtimeError {unWasmtimeError :: ForeignPtr C'wasmtime_error_t}
 
-newWasmtimeError :: Ptr C'wasmtime_error_t -> IO WasmtimeError
-newWasmtimeError error_ptr = WasmtimeError <$> newForeignPtr p'wasmtime_error_delete error_ptr
+newWasmtimeErrorFromPtr :: Ptr C'wasmtime_error_t -> IO WasmtimeError
+newWasmtimeErrorFromPtr = fmap WasmtimeError . newForeignPtr p'wasmtime_error_delete
 
 checkWasmtimeError :: Ptr C'wasmtime_error_t -> IO ()
 checkWasmtimeError error_ptr = when (error_ptr /= nullPtr) $ do
-  wasmtimeError <- newWasmtimeError error_ptr
+  wasmtimeError <- newWasmtimeErrorFromPtr error_ptr
   throwIO wasmtimeError
+
+withWasmtimeError :: WasmtimeError -> (Ptr C'wasmtime_error_t -> IO a) -> IO a
+withWasmtimeError wasmtimeError = withForeignPtr (unWasmtimeError wasmtimeError)
 
 instance Exception WasmtimeError
 
 instance Show WasmtimeError where
   show wasmtimeError = unsafePerformIO $
-    withForeignPtr (unWasmtimeError wasmtimeError) $ \error_ptr ->
+    withWasmtimeError wasmtimeError $ \error_ptr ->
       alloca $ \(wasm_name_ptr :: Ptr C'wasm_name_t) -> do
         c'wasmtime_error_message error_ptr wasm_name_ptr
         let p :: Ptr C'wasm_byte_vec_t
