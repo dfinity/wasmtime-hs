@@ -8,4 +8,11 @@
 module Bindings.Wasmtime.Extern where
 #strict_import
 
-#opaque_t wasmtime_func_t
+import Data.Word (Word64)
+
+#starttype struct wasmtime_func
+#field store_id , Word64
+#field index , CSize
+#stoptype
+
+#synonym_t wasmtime_func_t , C'wasmtime_func

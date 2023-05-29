@@ -13,6 +13,10 @@ import Bindings.Wasmtime.Error
 
 #opaque_t wasmtime_module_t
 
-#ccall wasmtime_module_new , Ptr <wasm_engine_t> -> Ptr Word8 -> CSize -> Ptr (Ptr <wasmtime_module_t>) -> IO (Ptr <wasmtime_error_t>)
+#ccall wasmtime_module_new , \
+  Ptr <wasm_engine_t> -> \
+  Ptr Word8 -> CSize -> \
+  Ptr (Ptr <wasmtime_module_t>) -> \
+  IO (Ptr <wasmtime_error_t>)
 
 #ccall wasmtime_module_delete , Ptr <wasmtime_module_t> -> IO ()

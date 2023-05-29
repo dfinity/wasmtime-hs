@@ -14,7 +14,7 @@ main = do
 
   store :: Store <- newStore engine
 
-  _ctx :: Context <- storeContext store
+  ctx :: Context <- storeContext store
 
   helloWatPath <- getDataFileName "test/hello.wat"
   watBytes <- B.readFile helloWatPath
@@ -25,6 +25,13 @@ main = do
   _module :: Module <- newModule engine wasm
 
   _helloFuncType :: FuncType (IO ()) <- newFuncType
+
+  let hello :: IO ()
+      hello = do
+        putStrLn "Calling back..."
+        putStrLn "> Hello World!"
+
+  _func :: Func <- newFunc ctx hello
 
   -- TODO
   pure ()

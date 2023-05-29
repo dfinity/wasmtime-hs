@@ -29,6 +29,10 @@ module Wasmtime
     FuncType,
     newFuncType,
 
+    -- * Functions
+    Func,
+    newFunc,
+
     -- * Errors
     WasmException (..),
     WasmtimeError,
@@ -38,6 +42,8 @@ where
 import Bindings.Wasm
 import Bindings.Wasmtime
 import Bindings.Wasmtime.Error
+import Bindings.Wasmtime.Extern
+import Bindings.Wasmtime.Func
 import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
 import Bindings.Wasmtime.Val
@@ -51,7 +57,7 @@ import Data.Proxy (Proxy (..))
 import Data.Typeable (Typeable)
 import Data.Word (Word8)
 import Foreign.C.String (peekCStringLen)
-import Foreign.C.Types (CChar)
+import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
 import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
 import Foreign.Marshal.Alloc (alloca)
@@ -108,6 +114,10 @@ storeContext store =
         { storeContextStore = store,
           storeContextPtr = wasmtime_ctx_ptr
         }
+
+withContext :: Context -> (Ptr C'wasmtime_context_t -> IO a) -> IO a
+withContext ctx f = withStore (storeContextStore ctx) $ \_store_ptr ->
+  f $ storeContextPtr ctx
 
 --------------------------------------------------------------------------------
 -- Conversion
@@ -169,7 +179,10 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) =
 -- Function Types
 --------------------------------------------------------------------------------
 
-newtype FuncType f = FuncType {_unFuncType :: ForeignPtr C'wasm_functype_t}
+newtype FuncType f = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
+
+withFuncType :: FuncType f -> (Ptr C'wasm_functype_t -> IO a) -> IO a
+withFuncType funcType = withForeignPtr (unFuncType funcType)
 
 newFuncType :: forall f. FuncKind f => IO (FuncType f)
 newFuncType =
@@ -252,6 +265,40 @@ instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
 
 instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c), kind (Proxy @d)]
+
+--------------------------------------------------------------------------------
+-- Functions
+--------------------------------------------------------------------------------
+
+-- | Representation of a function in Wasmtime.
+--
+-- Functions are represented with a 64-bit identifying integer in Wasmtime. They
+-- do not have any destructor associated with them. Functions cannot
+-- interoperate between 'Store' instances and if the wrong function is passed to
+-- the wrong store then it may trigger an assertion to abort the process.
+newtype Func = Func {_unFunc :: C'wasmtime_func_t}
+
+newFunc :: forall f. FuncKind f => Context -> f -> IO Func
+newFunc ctx _f = withContext ctx $ \ctx_ptr -> do
+  funcType :: FuncType f <- newFuncType
+  withFuncType funcType $ \functype_ptr -> do
+    let callback ::
+          Ptr () -> -- env
+          Ptr C'wasmtime_caller_t -> -- caller
+          Ptr C'wasmtime_val_t -> -- args
+          CSize -> -- nargs
+          Ptr C'wasmtime_val_t -> -- results
+          CSize -> -- nresults
+          IO (Ptr C'wasm_trap_t)
+        callback _env _caller args_ptr nargs _result_ptr _nresults = do
+          _args :: [C'wasmtime_val_t] <- peekArray (fromIntegral nargs) args_ptr
+          pure nullPtr
+
+    callback_funptr <- mk'wasmtime_func_callback_t callback
+
+    alloca $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+      c'wasmtime_func_new ctx_ptr functype_ptr callback_funptr nullPtr nullFunPtr func_ptr
+      Func <$> peek func_ptr
 
 --------------------------------------------------------------------------------
 -- Errors

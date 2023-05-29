@@ -13,7 +13,7 @@ import Bindings.Wasmtime.Extern
 import Bindings.Wasmtime.Val
 import Bindings.Wasmtime.Store
 
--- FIXME: the Ptr in the return type triggers the warning:
+-- FIXME: the Ptr in the return type triggers the following warning only on darwin:
 --
 --   var/folders/7_/m1k33c791pz5v9nt2bdd89d80000gn/T/ghc91762_0/ghc_3.c:19:17: error:
 --        warning: incompatible pointer to integer conversion assigning to 'ffi_arg' (aka 'unsigned long') from 'HsPtr' (aka 'void *') [-Wint-conversion]

@@ -8,6 +8,10 @@
 module Bindings.Wasmtime.Val where
 #strict_import
 
+import Bindings.Wasmtime.Extern
+import Data.Int
+import Data.WideWord.Word128 (Word128)
+
 #num WASMTIME_I32
 #num WASMTIME_I64
 #num WASMTIME_F32
@@ -16,4 +20,25 @@ module Bindings.Wasmtime.Val where
 #num WASMTIME_FUNCREF
 #num WASMTIME_EXTERNREF
 
-#opaque_t wasmtime_val_t
+#synonym_t wasmtime_valkind_t , Word8
+
+#starttype struct wasmtime_val
+#field kind , <wasmtime_valkind_t>
+#field of , <wasmtime_valunion_t>
+#stoptype
+
+#synonym_t wasmtime_val_t , <wasmtime_val>
+
+#starttype union wasmtime_valunion
+#field i32 , Int32
+#field i64 , Int64
+#field f32 , Float
+#field f64 , Double
+#field funcref , <wasmtime_func>
+#field externref , Ptr <wasmtime_externref_t>
+#field v128 , Word128
+#stoptype
+
+#synonym_t wasmtime_valunion_t , <wasmtime_valunion>
+
+#opaque_t wasmtime_externref_t
