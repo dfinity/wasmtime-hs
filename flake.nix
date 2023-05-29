@@ -13,6 +13,8 @@
           inherit system;
           overlays = [
             (final: prev: {
+              # The following override is to fix libwasmtime on darwin.
+              # I'm backporting this in https://github.com/NixOS/nixpkgs/pull/234873.
               wasmtime = prev.wasmtime.overrideAttrs (oldAttrs: {
                 postInstall =
                   (oldAttrs.postInstall or "") +
