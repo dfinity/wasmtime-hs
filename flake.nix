@@ -17,7 +17,9 @@
                 postInstall =
                   (oldAttrs.postInstall or "") +
                     final.lib.optionalString final.stdenv.isDarwin ''
-                      install_name_tool -id $dev/lib/libwasmtime.dylib $dev/lib/libwasmtime.dylib
+                      install_name_tool -id \
+                        $dev/lib/libwasmtime.dylib \
+                        $dev/lib/libwasmtime.dylib
                     '';
               });
             })
@@ -37,7 +39,10 @@
         packages.wasmtime = pkgs.wasmtime.dev;
         devShells.default = haskellPackages.shellFor {
           packages = _: [ wasmtime-hs ];
-          nativeBuildInputs = [ pkgs.cabal-install ];
+          nativeBuildInputs = [
+            pkgs.cabal-install
+            haskellPackages.haskell-language-server
+          ];
         };
       }
     );
