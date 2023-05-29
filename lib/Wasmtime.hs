@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 -- | High-level Haskell API to the wasmtime C API.
@@ -53,8 +54,10 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
 import Data.Foldable (for_)
 import Data.Int (Int32, Int64)
+import Data.Kind (Type)
 import Data.Proxy (Proxy (..))
 import Data.Typeable (Typeable)
+import Data.WideWord.Word128 (Word128)
 import Data.Word (Word8)
 import Foreign.C.String (peekCStringLen)
 import Foreign.C.Types (CChar, CSize)
@@ -63,7 +66,7 @@ import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
 import Foreign.Marshal.Alloc (alloca)
 import Foreign.Marshal.Array
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
-import Foreign.Storable (peek, pokeElemOff)
+import Foreign.Storable (Storable, peek, pokeElemOff)
 import System.IO.Unsafe (unsafePerformIO)
 
 --------------------------------------------------------------------------------
@@ -227,6 +230,12 @@ instance Kind Float where kind _proxy = c'WASMTIME_F32
 
 instance Kind Double where kind _proxy = c'WASMTIME_F64
 
+instance Kind Word128 where kind _proxy = c'WASMTIME_V128
+
+-- TODO:
+-- instance Kind ? where kind _proxy = c'WASMTIME_FUNCREF
+-- instance Kind ? where kind _proxy = c'WASMTIME_EXTERNREF
+
 class Results r where
   results :: Proxy r -> [C'wasm_valkind_t]
 
@@ -257,6 +266,8 @@ instance Results Float where results proxy = [kind proxy]
 
 instance Results Double where results proxy = [kind proxy]
 
+instance Results Word128 where results proxy = [kind proxy]
+
 instance (Kind a, Kind b) => Results (a, b) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b)]
 
@@ -278,8 +289,17 @@ instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
 -- the wrong store then it may trigger an assertion to abort the process.
 newtype Func = Func {_unFunc :: C'wasmtime_func_t}
 
-newFunc :: forall f. FuncKind f => Context -> f -> IO Func
-newFunc ctx _f = withContext ctx $ \ctx_ptr -> do
+newFunc ::
+  forall f r.
+  ( FuncKind f,
+    Apply f,
+    Result f ~ IO r,
+    Show r
+  ) =>
+  Context ->
+  f ->
+  IO Func
+newFunc ctx f = withContext ctx $ \ctx_ptr -> do
   funcType :: FuncType f <- newFuncType
   withFuncType funcType $ \functype_ptr -> do
     let callback ::
@@ -291,7 +311,13 @@ newFunc ctx _f = withContext ctx $ \ctx_ptr -> do
           CSize -> -- nresults
           IO (Ptr C'wasm_trap_t)
         callback _env _caller args_ptr nargs _result_ptr _nresults = do
-          _args :: [C'wasmtime_val_t] <- peekArray (fromIntegral nargs) args_ptr
+          mbResult <- apply f args_ptr (fromIntegral nargs)
+          case mbResult of
+            Nothing -> error "TODO"
+            Just (action :: Result f) -> do
+              r <- action
+              print r
+          -- TODO
           pure nullPtr
 
     callback_funptr <- mk'wasmtime_func_callback_t callback
@@ -299,6 +325,48 @@ newFunc ctx _f = withContext ctx $ \ctx_ptr -> do
     alloca $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
       c'wasmtime_func_new ctx_ptr functype_ptr callback_funptr nullPtr nullFunPtr func_ptr
       Func <$> peek func_ptr
+
+class Apply f where
+  type Result f :: Type
+  apply :: f -> Ptr C'wasmtime_val_t -> Int -> IO (Maybe (Result f))
+
+instance (KindMatch a, Apply b, Storable a) => Apply (a -> b) where
+  type Result (a -> b) = Result b
+  apply _ _ 0 = pure Nothing
+  apply f p n = do
+    k :: C'wasmtime_valkind_t <- peek $ p'wasmtime_val'kind p
+    if kindMatches (Proxy @a) k
+      then do
+        let valunion_ptr :: Ptr C'wasmtime_valunion_t
+            valunion_ptr = p'wasmtime_val'of p
+
+            val_ptr :: Ptr a
+            val_ptr = castPtr valunion_ptr
+        val :: a <- peek val_ptr
+        apply (f val) (advancePtr p 1) (n - 1)
+      else pure Nothing
+
+instance Apply (IO r) where
+  type Result (IO r) = IO r
+  apply x _ 0 = pure $ Just x
+  apply _ _ _ = pure Nothing
+
+class KindMatch a where
+  kindMatches :: Proxy a -> C'wasmtime_valkind_t -> Bool
+
+instance KindMatch Int32 where kindMatches _proxy k = k == c'WASMTIME_I32
+
+instance KindMatch Int64 where kindMatches _proxy k = k == c'WASMTIME_I64
+
+instance KindMatch Float where kindMatches _proxy k = k == c'WASMTIME_F32
+
+instance KindMatch Double where kindMatches _proxy k = k == c'WASMTIME_F64
+
+instance KindMatch Word128 where kindMatches _proxy k = k == c'WASMTIME_V128
+
+-- TODO:
+-- instance KindMatch ? where kindMatches _proxy k = k == c'WASMTIME_FUNCREF
+-- instance KindMatch ? where kindMatches _proxy k = k == c'WASMTIME_EXTERNREF
 
 --------------------------------------------------------------------------------
 -- Errors

@@ -15,7 +15,8 @@ import Bindings.Wasmtime.Error
 
 #ccall wasmtime_module_new , \
   Ptr <wasm_engine_t> -> \
-  Ptr Word8 -> CSize -> \
+  Ptr Word8 -> \
+  CSize -> \
   Ptr (Ptr <wasmtime_module_t>) -> \
   IO (Ptr <wasmtime_error_t>)
 
