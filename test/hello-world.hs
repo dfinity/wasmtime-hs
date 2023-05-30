@@ -24,14 +24,12 @@ main = do
   putStrLn "Compiling module..."
   _module :: Module <- newModule engine wasm
 
-  _helloFuncType :: FuncType (IO ()) <- newFuncType
-
-  let hello :: IO ()
-      hello = do
-        putStrLn "Calling back..."
-        putStrLn "> Hello World!"
-
   _func :: Func <- newFunc ctx hello
 
   -- TODO
   pure ()
+
+hello :: IO ()
+hello = do
+  putStrLn "Calling back..."
+  putStrLn "> Hello World!"
