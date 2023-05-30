@@ -9,9 +9,14 @@ module Bindings.Wasmtime.Func where
 #strict_import
 
 import Bindings.Wasm
+import Bindings.Wasmtime.Error
 import Bindings.Wasmtime.Extern
 import Bindings.Wasmtime.Val
 import Bindings.Wasmtime.Store
+
+#opaque_t wasmtime_caller
+
+#synonym_t wasmtime_caller_t , <wasmtime_caller>
 
 -- FIXME: the Ptr in the return type triggers the following warning only on darwin:
 --
@@ -44,4 +49,61 @@ import Bindings.Wasmtime.Store
   Ptr <wasmtime_func_t> -> \
   IO ()
 
-#opaque_t wasmtime_caller_t
+#callback_t wasmtime_func_unchecked_callback_t , \
+  Ptr () -> \
+  Ptr <wasmtime_caller_t> -> \
+  Ptr <wasmtime_val_raw_t> -> \
+  CSize -> \
+  IO (Ptr <wasm_trap_t>)
+
+#ccall wasmtime_func_new_unchecked , \
+  Ptr <wasmtime_context_t> -> \
+  Ptr <wasm_functype_t> -> \
+  <wasmtime_func_unchecked_callback_t> -> \
+  Ptr () -> \
+  FunPtr (Ptr () -> IO ()) -> \
+  Ptr <wasmtime_func_t> -> \
+  IO ()
+
+#ccall wasmtime_func_type , \
+  Ptr <wasmtime_context_t> -> \
+  Ptr <wasmtime_func_t> -> \
+  IO (Ptr <wasm_functype_t>)
+
+#ccall wasmtime_func_call , \
+  Ptr <wasmtime_context_t> -> \
+  Ptr <wasmtime_func_t> -> \
+  Ptr <wasmtime_val_t> -> \
+  CSize -> \
+  Ptr <wasmtime_val_t> -> \
+  CSize -> \
+  Ptr (Ptr <wasm_trap_t>) -> \
+  IO (Ptr <wasmtime_error_t>)
+
+#ccall wasmtime_func_call_unchecked , \
+  Ptr <wasmtime_context_t> -> \
+  Ptr <wasmtime_func_t> -> \
+  Ptr <wasmtime_val_raw_t> -> \
+  CSize -> \
+  Ptr (Ptr <wasm_trap_t>) -> \
+  IO (Ptr <wasmtime_error_t>)
+
+#ccall wasmtime_caller_export_get , \
+  Ptr <wasmtime_caller_t> -> \
+  Ptr CChar -> \
+  CSize -> \
+  Ptr <wasmtime_extern_t> -> \
+  IO Bool
+
+#ccall wasmtime_caller_context , Ptr <wasmtime_caller_t> -> IO (Ptr <wasmtime_context_t>)
+
+#ccall wasmtime_func_from_raw , \
+  Ptr <wasmtime_context_t> -> \
+  Ptr () -> \
+  Ptr <wasmtime_func_t> -> \
+  IO ()
+
+#ccall wasmtime_func_to_raw , \
+  Ptr <wasmtime_context_t> -> \
+  Ptr <wasmtime_func_t> -> \
+  IO (Ptr ())

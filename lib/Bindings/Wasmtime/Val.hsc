@@ -41,4 +41,16 @@ import Data.WideWord.Word128 (Word128)
 
 #synonym_t wasmtime_valunion_t , <wasmtime_valunion>
 
+#starttype union wasmtime_val_raw
+#field i32       , Int32
+#field i64       , Int64
+#field f32       , Float
+#field f64       , Double
+#field v128      , Word128
+#field funcref   , Ptr ()
+#field externref , Ptr ()
+#stoptype
+
+#synonym_t wasmtime_val_raw_t , <wasmtime_val_raw>
+
 #opaque_t wasmtime_externref_t

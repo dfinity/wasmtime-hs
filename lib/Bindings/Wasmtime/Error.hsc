@@ -10,8 +10,14 @@ module Bindings.Wasmtime.Error where
 
 import Bindings.Wasm
 
-#opaque_t wasmtime_error_t
+#opaque_t wasmtime_error
+
+#synonym_t wasmtime_error_t , <wasmtime_error>
 
 #ccall wasmtime_error_delete , Ptr <wasmtime_error_t> -> IO ()
 
 #ccall wasmtime_error_message , Ptr <wasmtime_error_t> -> Ptr <wasm_name_t> -> IO ()
+
+#ccall wasmtime_error_exit_status , Ptr <wasmtime_error_t> -> Ptr Int -> IO Bool
+
+#ccall wasmtime_error_wasm_trace , Ptr <wasmtime_error_t> -> Ptr <wasm_frame_vec_t> -> IO ()

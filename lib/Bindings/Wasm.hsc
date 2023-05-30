@@ -51,7 +51,7 @@ module Bindings.Wasm where
 
 #starttype struct wasm_functype_vec_t
 #field size , CSize
-#field data , Ptr (Ptr <wasm_functype_t >)
+#field data , Ptr (Ptr <wasm_functype_t>)
 #stoptype
 
 #ccall wasm_functype_vec_new , Ptr <wasm_functype_vec_t> -> CSize -> Ptr <wasm_functype_t> -> IO ()
@@ -61,3 +61,12 @@ module Bindings.Wasm where
 #opaque_t wasm_valtype_t
 
 #opaque_t wasm_trap_t
+
+#opaque_t wasm_externtype_t
+
+#starttype struct wasm_frame_vec_t
+#field size , CSize
+#field data , Ptr (Ptr <wasm_frame_t>)
+#stoptype
+
+#opaque_t wasm_frame_t
