@@ -18,11 +18,11 @@
               wasmtime = prev.wasmtime.overrideAttrs (oldAttrs: {
                 postInstall =
                   (oldAttrs.postInstall or "") +
-                    final.lib.optionalString final.stdenv.isDarwin ''
-                      install_name_tool -id \
-                        $dev/lib/libwasmtime.dylib \
-                        $dev/lib/libwasmtime.dylib
-                    '';
+                  final.lib.optionalString final.stdenv.isDarwin ''
+                    install_name_tool -id \
+                      $dev/lib/libwasmtime.dylib \
+                      $dev/lib/libwasmtime.dylib
+                  '';
               });
             })
           ];
@@ -34,7 +34,7 @@
 
         # TODO: filter source to only include files added to git and strip flake.* files.
         src = ./.;
-        wasmtime-hs = haskellPackages.callCabal2nix "wasmtime" src {};
+        wasmtime-hs = haskellPackages.callCabal2nix "wasmtime" src { };
       in
       {
         packages.default = wasmtime-hs;
@@ -46,6 +46,8 @@
             haskellPackages.haskell-language-server
           ];
         };
+        # so that we can format .nix code using: nix fmt
+        formatter = pkgs.nixpkgs-fmt;
       }
     );
 }
