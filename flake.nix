@@ -28,8 +28,6 @@
           ];
         };
 
-        wasmtime = pkgs.wasmtime;
-
         haskellPackages = pkgs.haskellPackages;
 
         # TODO: filter source to only include files added to git and strip flake.* files.
