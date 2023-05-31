@@ -10,7 +10,11 @@ import Wasmtime
 main :: IO ()
 main = do
   putStrLn "Initializing..."
-  engine :: Engine <- newEngine
+  engine :: Engine <-
+    newEngineWithConfig $
+      setConsumeFuel True
+        . setDebugInfo False
+        . setDebugInfo True
 
   store :: Store <- newStore engine
 

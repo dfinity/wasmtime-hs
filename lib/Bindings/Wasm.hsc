@@ -91,4 +91,4 @@ module Bindings.Wasm where
 
 #ccall wasm_config_new , IO (Ptr <wasm_config_t>)
 
-#ccall wasm_config_Delete , Ptr <wasm_config_t> -> IO ()
+#ccall wasm_config_delete , Ptr <wasm_config_t> -> IO ()
