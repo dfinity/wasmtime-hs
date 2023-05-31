@@ -391,13 +391,13 @@ instance KindMatch Word128 where kindMatches _proxy k = k == c'WASMTIME_V128
 
 data Extern
   = forall extern.
-    (Externable extern, Storable (CType extern)) =>
+    (Externable extern) =>
     Extern (Proxy extern) (ForeignPtr C'wasmtime_extern)
 
-class Externable a where
-  type CType a :: Type
-  getCExtern :: a -> CType a
-  externKind :: Proxy a -> C'wasmtime_extern_kind_t
+class (Storable (CType extern)) => Externable extern where
+  type CType extern :: Type
+  getCExtern :: extern -> CType extern
+  externKind :: Proxy extern -> C'wasmtime_extern_kind_t
 
 instance Externable Func where
   type CType Func = C'wasmtime_func
@@ -406,7 +406,7 @@ instance Externable Func where
 
 extern ::
   forall extern.
-  (Externable extern, Storable (CType extern)) =>
+  (Externable extern) =>
   extern ->
   Extern
 extern x = unsafePerformIO $ do
