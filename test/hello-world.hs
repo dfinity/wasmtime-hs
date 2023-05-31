@@ -5,10 +5,13 @@ module Main (main) where
 
 import qualified Data.ByteString as B
 import Paths_wasmtime (getDataFileName)
+import System.IO
 import Wasmtime
 
 main :: IO ()
 main = do
+  hSetBuffering stdout NoBuffering
+
   putStrLn "Initializing..."
   engine :: Engine <- newEngine
 
@@ -26,8 +29,7 @@ main = do
 
   func :: Func <- newFunc ctx hello
 
-  let funcExtern :: Extern
-      funcExtern = extern func
+  let funcExtern :: Extern = extern func
 
   _instance :: Instance <- newInstance ctx myModule [funcExtern]
 

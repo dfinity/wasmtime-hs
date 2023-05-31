@@ -190,7 +190,7 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) =
         Module <$> newForeignPtr p'wasmtime_module_delete module_ptr
 
 withModule :: Module -> (Ptr C'wasmtime_module_t -> IO a) -> IO a
-withModule mod = withForeignPtr (unModule mod)
+withModule m = withForeignPtr (unModule m)
 
 --------------------------------------------------------------------------------
 -- Function Types
@@ -304,7 +304,7 @@ instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
 -- do not have any destructor associated with them. Functions cannot
 -- interoperate between 'Store' instances and if the wrong function is passed to
 -- the wrong store then it may trigger an assertion to abort the process.
-newtype Func = Func {unFunc :: C'wasmtime_func_t}
+newtype Func = Func {unFunc :: C'wasmtime_func_t} deriving (Show)
 
 newFunc ::
   forall f r.
@@ -319,29 +319,28 @@ newFunc ::
 newFunc ctx f = withContext ctx $ \ctx_ptr -> do
   funcType :: FuncType <- newFuncType (Proxy @f)
   withFuncType funcType $ \functype_ptr -> do
-    let callback ::
-          Ptr () -> -- env
-          Ptr C'wasmtime_caller_t -> -- caller
-          Ptr C'wasmtime_val_t -> -- args
-          CSize -> -- nargs
-          Ptr C'wasmtime_val_t -> -- results
-          CSize -> -- nresults
-          IO (Ptr C'wasm_trap_t)
-        callback _env _caller args_ptr nargs _result_ptr _nresults = do
-          mbResult <- apply f args_ptr (fromIntegral nargs)
-          case mbResult of
-            Nothing -> error "TODO"
-            Just (action :: Result f) -> do
-              r <- action
-              print r
-          -- TODO
-          pure nullPtr
-
     callback_funptr <- mk'wasmtime_func_callback_t callback
-
     alloca $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
       c'wasmtime_func_new ctx_ptr functype_ptr callback_funptr nullPtr nullFunPtr func_ptr
       Func <$> peek func_ptr
+  where
+    callback ::
+      Ptr () -> -- env
+      Ptr C'wasmtime_caller_t -> -- caller
+      Ptr C'wasmtime_val_t -> -- args
+      CSize -> -- nargs
+      Ptr C'wasmtime_val_t -> -- results
+      CSize -> -- nresults
+      IO (Ptr C'wasm_trap_t)
+    callback _env _caller args_ptr nargs _result_ptr _nresults = do
+      mbResult <- apply f args_ptr (fromIntegral nargs)
+      case mbResult of
+        Nothing -> error "TODO"
+        Just (action :: Result f) -> do
+          r <- action
+          print r
+      -- TODO
+      pure nullPtr
 
 class Apply f where
   type Result f :: Type
@@ -408,12 +407,12 @@ extern ::
   Extern
 extern x = unsafePerformIO $ do
   fp :: ForeignPtr C'wasmtime_extern <- mallocForeignPtr
-  withForeignPtr fp $ \p -> do
-    poke (p'wasmtime_extern'kind p) $ externKind (Proxy @extern)
-    let extern_union_ptr = p'wasmtime_extern'of p :: Ptr C'wasmtime_extern_union_t
-        extern_ptr = castPtr extern_union_ptr :: Ptr (CType extern)
+  withForeignPtr fp $ \extern_ptr -> do
+    poke (p'wasmtime_extern'kind extern_ptr) $ externKind (Proxy @extern)
+    let extern_union_ptr = p'wasmtime_extern'of extern_ptr :: Ptr C'wasmtime_extern_union_t
+        of_ptr = castPtr extern_union_ptr :: Ptr (CType extern)
         c_extern = getCExtern x :: CType extern
-    poke extern_ptr c_extern
+    poke of_ptr c_extern
     pure $ Extern fp
 
 withExterns :: [Extern] -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
@@ -440,9 +439,9 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
 newtype Instance = Instance {_unInstance :: C'wasmtime_instance_t}
 
 newInstance :: Context -> Module -> [Extern] -> IO Instance
-newInstance ctx mod externs =
+newInstance ctx m externs =
   withContext ctx $ \ctx_ptr ->
-    withModule mod $ \mod_ptr ->
+    withModule m $ \mod_ptr ->
       withExterns externs $ \externs_ptr n ->
         alloca $ \(instance_ptr :: Ptr C'wasmtime_instance_t) ->
           alloca $ \(trap_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
