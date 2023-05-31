@@ -21,15 +21,16 @@ library
 
     exposed-modules:  Wasmtime
 
+    other-modules:    Bindings.Wasi
     other-modules:    Bindings.Wasm
     other-modules:    Bindings.Wasmtime
     other-modules:    Bindings.Wasmtime.Error
-    other-modules:    Bindings.Wasmtime.Store
-    other-modules:    Bindings.Wasmtime.Module
-    other-modules:    Bindings.Wasmtime.Instance
-    other-modules:    Bindings.Wasmtime.Val
-    other-modules:    Bindings.Wasmtime.Func
     other-modules:    Bindings.Wasmtime.Extern
+    other-modules:    Bindings.Wasmtime.Func
+    other-modules:    Bindings.Wasmtime.Instance
+    other-modules:    Bindings.Wasmtime.Module
+    other-modules:    Bindings.Wasmtime.Store
+    other-modules:    Bindings.Wasmtime.Val
 
     build-depends:    base >=4.15
     build-depends:    bindings-DSL >= 1.0.25

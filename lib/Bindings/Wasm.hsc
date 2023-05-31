@@ -70,3 +70,17 @@ module Bindings.Wasm where
 #stoptype
 
 #opaque_t wasm_frame_t
+
+#starttype struct wasm_importtype_vec_t
+#field size , CSize
+#field data , Ptr (Ptr <wasm_importtype_t>)
+#stoptype
+
+#opaque_t wasm_importtype_t
+
+#starttype struct wasm_exporttype_vec_t
+#field size , CSize
+#field data , Ptr (Ptr <wasm_exporttype_t>)
+#stoptype
+
+#opaque_t wasm_exporttype_t
