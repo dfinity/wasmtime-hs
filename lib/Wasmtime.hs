@@ -33,7 +33,7 @@ module Wasmtime
     setCaneliftNanCanonicalization,
     setCraneliftOptLevel,
     setProfilerSet,
-    setStaticMemoryForced,
+    -- setStaticMemoryForced, -- seems absent
     setStaticMemoryMaximumSize,
     setStaticMemoryGuardSize,
     setDynamicMemoryGuardSize,
@@ -247,9 +247,11 @@ setCraneliftOptLevel (OptLevel ol) = setConfig c'wasmtime_config_cranelift_opt_l
 setProfilerSet :: ProfilingStrategy -> Config -> Config
 setProfilerSet (ProfilingStrategy ps) = setConfig c'wasmtime_config_profiler_set ps
 
+-- Seems absent
+
 -- | Indicates that the “static” style of memory should always be used.
-setStaticMemoryForced :: Bool -> Config -> Config
-setStaticMemoryForced = setConfig c'wasmtime_config_static_memory_forced_set
+-- setStaticMemoryForced :: Bool -> Config -> Config
+-- setStaticMemoryForced = setConfig c'wasmtime_config_static_memory_forced_set
 
 -- | Configures the maximum size, in bytes, where a linear memory is considered static, above which it’ll be considered dynamic.
 --
