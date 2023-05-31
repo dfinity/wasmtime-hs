@@ -404,11 +404,7 @@ instance Externable Func where
   getCExtern = unFunc
   externKind _proxy = c'WASMTIME_EXTERN_FUNC
 
-extern ::
-  forall extern.
-  (Externable extern) =>
-  extern ->
-  Extern
+extern :: forall extern. (Externable extern) => extern -> Extern
 extern x = unsafePerformIO $ do
   fp :: ForeignPtr C'wasmtime_extern <- mallocForeignPtr
   withForeignPtr fp $ \extern_ptr -> do
