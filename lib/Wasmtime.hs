@@ -438,116 +438,71 @@ setDebugInfo :: Bool -> Config -> Config
 setDebugInfo = setConfig c'wasmtime_config_debug_info_set
 
 setConsumeFuel :: Bool -> Config -> Config
-setConsumeFuel b conf =
-  unsafePerformIO $
-    c'wasmtime_config_consume_fuel_set (unConfig conf) b $> conf
+setConsumeFuel = setConfig c'wasmtime_config_consume_fuel_set
 
 setEpochInterruption :: Bool -> Config -> Config
-setEpochInterruption b conf =
-  unsafePerformIO $
-    c'wasmtime_config_epoch_interruption_set (unConfig conf) b $> conf
+setEpochInterruption = setConfig c'wasmtime_config_epoch_interruption_set
 
 setMaxWasmStack :: CSize -> Config -> Config
-setMaxWasmStack size conf =
-  unsafePerformIO $
-    c'wasmtime_config_max_wasm_stack_set (unConfig conf) size $> conf
+setMaxWasmStack = setConfig c'wasmtime_config_max_wasm_stack_set
 
 setWasmThreads :: Bool -> Config -> Config
-setWasmThreads b conf =
-  unsafePerformIO $
-    c'wasmtime_config_wasm_threads_set (unConfig conf) b $> conf
+setWasmThreads = setConfig c'wasmtime_config_wasm_threads_set
 
 setWasmReferenceTypes :: Bool -> Config -> Config
-setWasmReferenceTypes b conf =
-  unsafePerformIO $
-    c'wasmtime_config_wasm_reference_types_set (unConfig conf) b $> conf
+setWasmReferenceTypes = setConfig c'wasmtime_config_wasm_reference_types_set
 
 setWasmSimd :: Bool -> Config -> Config
-setWasmSimd b conf =
-  unsafePerformIO $
-    c'wasmtime_config_wasm_simd_set (unConfig conf) b $> conf
+setWasmSimd = setConfig c'wasmtime_config_wasm_simd_set
 
 setWasmRelaxedSimd :: Bool -> Config -> Config
-setWasmRelaxedSimd b conf =
-  unsafePerformIO $
-    c'wasmtime_config_wasm_relaxed_simd_set (unConfig conf) b $> conf
+setWasmRelaxedSimd = setConfig c'wasmtime_config_wasm_relaxed_simd_set
 
 setWasmRelaxedSimdDeterministic :: Bool -> Config -> Config
-setWasmRelaxedSimdDeterministic b conf =
-  unsafePerformIO $
-    c'wasmtime_config_wasm_relaxed_simd_deterministic_set (unConfig conf) b $> conf
+setWasmRelaxedSimdDeterministic = setConfig c'wasmtime_config_wasm_relaxed_simd_deterministic_set
 
 setWasmBulkMemory :: Bool -> Config -> Config
-setWasmBulkMemory b conf =
-  unsafePerformIO $
-    c'wasmtime_config_wasm_bulk_memory_set (unConfig conf) b $> conf
+setWasmBulkMemory = setConfig c'wasmtime_config_wasm_bulk_memory_set
 
 setWasmMultiValue :: Bool -> Config -> Config
-setWasmMultiValue b conf =
-  unsafePerformIO $
-    c'wasmtime_config_wasm_multi_value_set (unConfig conf) b $> conf
+setWasmMultiValue = setConfig c'wasmtime_config_wasm_multi_value_set
 
 setWasmMultiMemory :: Bool -> Config -> Config
-setWasmMultiMemory b conf =
-  unsafePerformIO $
-    c'wasmtime_config_wasm_multi_memory_set (unConfig conf) b $> conf
+setWasmMultiMemory = setConfig c'wasmtime_config_wasm_multi_memory_set
 
 setWasmMemory64 :: Bool -> Config -> Config
-setWasmMemory64 b conf =
-  unsafePerformIO $
-    c'wasmtime_config_wasm_memory64_set (unConfig conf) b $> conf
+setWasmMemory64 = setConfig c'wasmtime_config_wasm_memory64_set
 
 setStrategy :: C'wasmtime_strategy_t -> Config -> Config
-setStrategy strat conf =
-  unsafePerformIO $
-    c'wasmtime_config_strategy_set (unConfig conf) strat $> conf
+setStrategy = setConfig c'wasmtime_config_strategy_set
 
 setParallelCompilation :: Bool -> Config -> Config
-setParallelCompilation b conf =
-  unsafePerformIO $
-    c'wasmtime_config_parallel_compilation_set (unConfig conf) b $> conf
+setParallelCompilation = setConfig c'wasmtime_config_parallel_compilation_set
 
 setCraneliftDebugVerifier :: Bool -> Config -> Config
-setCraneliftDebugVerifier b conf =
-  unsafePerformIO $
-    c'wasmtime_config_cranelift_debug_verifier_set (unConfig conf) b $> conf
+setCraneliftDebugVerifier = setConfig c'wasmtime_config_cranelift_debug_verifier_set
 
 setCaneliftNanCanonicalization :: Bool -> Config -> Config
-setCaneliftNanCanonicalization b conf =
-  unsafePerformIO $
-    c'wasmtime_config_cranelift_nan_canonicalization_set (unConfig conf) b $> conf
+setCaneliftNanCanonicalization = setConfig c'wasmtime_config_cranelift_nan_canonicalization_set
 
 setCraneliftOptLevel :: C'wasmtime_opt_level_t -> Config -> Config
-setCraneliftOptLevel level conf =
-  unsafePerformIO $
-    c'wasmtime_config_cranelift_opt_level_set (unConfig conf) level $> conf
+setCraneliftOptLevel = setConfig c'wasmtime_config_cranelift_opt_level_set
 
 setProfilerSet :: C'wasmtime_profiling_strategy_t -> Config -> Config
-setProfilerSet strat conf =
-  unsafePerformIO $
-    c'wasmtime_config_profiler_set (unConfig conf) strat $> conf
+setProfilerSet = setConfig c'wasmtime_config_profiler_set
 
 setStaticMemoryForced :: Bool -> Config -> Config
-setStaticMemoryForced b conf =
-  unsafePerformIO $
-    c'wasmtime_config_static_memory_forced_set (unConfig conf) b $> conf
+setStaticMemoryForced = setConfig c'wasmtime_config_static_memory_forced_set
 
 setStaticMemoryMaximumSize :: Word64 -> Config -> Config
-setStaticMemoryMaximumSize size conf =
-  unsafePerformIO $
-    c'wasmtime_config_static_memory_maximum_size_set (unConfig conf) size $> conf
+setStaticMemoryMaximumSize = setConfig c'wasmtime_config_static_memory_maximum_size_set
 
 setStaticMemoryGuardSize :: Word64 -> Config -> Config
-setStaticMemoryGuardSize size conf =
-  unsafePerformIO $
-    c'wasmtime_config_static_memory_guard_size_set (unConfig conf) size $> conf
+setStaticMemoryGuardSize = setConfig c'wasmtime_config_static_memory_guard_size_set
 
 setDynamicMemoryGuardSize :: Word64 -> Config -> Config
-setDynamicMemoryGuardSize size conf =
-  unsafePerformIO $
-    c'wasmtime_config_dynamic_memory_guard_size_set (unConfig conf) size $> conf
+setDynamicMemoryGuardSize = setConfig c'wasmtime_config_dynamic_memory_guard_size_set
 
 loadCacheConfig :: FilePath -> Config -> Config
-loadCacheConfig filePath conf =
-  unsafePerformIO $
-    withCString filePath (c'wasmtime_config_cache_config_load (unConfig conf)) $> conf
+loadCacheConfig = setConfig $
+  \ptr filePath -> withCString filePath (c'wasmtime_config_cache_config_load ptr)
