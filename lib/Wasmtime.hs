@@ -417,16 +417,21 @@ extern x = unsafePerformIO $ do
     pure $ Extern fp
 
 withExterns :: [Extern] -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
-withExterns externs f = allocaArray n $ \externs_ptr -> go externs_ptr externs
+withExterns externs f = allocaArray n $ \externs_ptr0 ->
+  let go _externs_ptr [] = f externs_ptr0 $ fromIntegral n
+      go externs_ptr (e : es) =
+        withForeignPtr (unExtern e) $ \(extern_ptr :: Ptr C'wasmtime_extern) -> do
+          k :: C'wasmtime_extern_kind_t <- peek $ p'wasmtime_extern'kind extern_ptr
+          poke (p'wasmtime_extern'kind externs_ptr) k
+
+          let of_ptr = p'wasmtime_extern'of extern_ptr :: Ptr C'wasmtime_extern_union_t
+          func <- peek (castPtr of_ptr :: Ptr C'wasmtime_func)
+          poke (castPtr (p'wasmtime_extern'of externs_ptr)) func
+
+          go (advancePtr externs_ptr 1) es
+   in go externs_ptr0 externs
   where
     n = length externs
-
-    go externs_ptr [] = f externs_ptr $ fromIntegral n
-    go externs_ptr (extern : externs) =
-      withForeignPtr (unExtern extern) $ \extern_ptr -> do
-        extern <- peek extern_ptr
-        poke externs_ptr extern
-        go (advancePtr externs_ptr 1) externs
 
 --------------------------------------------------------------------------------
 -- Instances
