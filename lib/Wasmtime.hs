@@ -1,3 +1,4 @@
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -388,7 +389,10 @@ instance KindMatch Word128 where kindMatches _proxy k = k == c'WASMTIME_V128
 -- Externs
 --------------------------------------------------------------------------------
 
-newtype Extern = Extern {unExtern :: ForeignPtr C'wasmtime_extern}
+data Extern
+  = forall extern.
+    (Externable extern, Storable (CType extern)) =>
+    Extern (Proxy extern) (ForeignPtr C'wasmtime_extern)
 
 class Externable a where
   type CType a :: Type
@@ -413,18 +417,18 @@ extern x = unsafePerformIO $ do
         of_ptr = castPtr extern_union_ptr :: Ptr (CType extern)
         c_extern = getCExtern x :: CType extern
     poke of_ptr c_extern
-    pure $ Extern fp
+    pure $ Extern (Proxy @extern) fp
 
 withExterns :: [Extern] -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
 withExterns externs f = allocaArray n $ \externs_ptr0 ->
   let go _externs_ptr [] = f externs_ptr0 $ fromIntegral n
-      go externs_ptr (e : es) =
-        withForeignPtr (unExtern e) $ \(extern_ptr :: Ptr C'wasmtime_extern) -> do
+      go externs_ptr ((Extern (Proxy :: Proxy extern) extern_fp) : es) =
+        withForeignPtr extern_fp $ \(extern_ptr :: Ptr C'wasmtime_extern) -> do
           k :: C'wasmtime_extern_kind_t <- peek $ p'wasmtime_extern'kind extern_ptr
           poke (p'wasmtime_extern'kind externs_ptr) k
 
           let of_ptr = p'wasmtime_extern'of extern_ptr :: Ptr C'wasmtime_extern_union_t
-          func <- peek (castPtr of_ptr :: Ptr C'wasmtime_func)
+          func <- peek (castPtr of_ptr :: Ptr (CType extern))
           poke (castPtr (p'wasmtime_extern'of externs_ptr)) func
 
           go (advancePtr externs_ptr 1) es
