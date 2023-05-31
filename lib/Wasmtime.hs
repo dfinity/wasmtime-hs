@@ -3,6 +3,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 -- | High-level Haskell API to the wasmtime C API.
 module Wasmtime
@@ -42,6 +43,7 @@ where
 
 import Bindings.Wasm
 import Bindings.Wasmtime
+import Bindings.Wasmtime.Config
 import Bindings.Wasmtime.Error
 import Bindings.Wasmtime.Extern
 import Bindings.Wasmtime.Func
@@ -53,13 +55,14 @@ import Control.Monad (when)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
 import Data.Foldable (for_)
+import Data.Functor (($>))
 import Data.Int (Int32, Int64)
 import Data.Kind (Type)
 import Data.Proxy (Proxy (..))
 import Data.Typeable (Typeable)
 import Data.WideWord.Word128 (Word128)
-import Data.Word (Word8)
-import Foreign.C.String (peekCStringLen)
+import Data.Word (Word64, Word8)
+import Foreign.C.String (peekCStringLen, withCString)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
 import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
@@ -84,6 +87,13 @@ newEngine = mask_ $ do
 
 withEngine :: Engine -> (Ptr C'wasm_engine_t -> IO a) -> IO a
 withEngine engine = withForeignPtr (unEngine engine)
+
+newEngineWithConfig :: (Config -> Config) -> IO Engine
+newEngineWithConfig cfg_update = mask_ $ do
+  cfg_ptr <- unConfig . cfg_update <$> defaultConfig
+  engine_ptr <- c'wasm_engine_new_with_config cfg_ptr
+  checkAllocation engine_ptr
+  Engine <$> newForeignPtr p'wasm_engine_delete engine_ptr
 
 --------------------------------------------------------------------------------
 -- Store
@@ -409,3 +419,135 @@ instance Show WasmtimeError where
         data_ptr <- peek $ p'wasm_byte_vec_t'data p
         size <- peek $ p'wasm_byte_vec_t'size p
         peekCStringLen (data_ptr, fromIntegral size)
+
+--------------------------------------------------------------------------------
+-- Config
+--------------------------------------------------------------------------------
+
+-- Config will be deallocated by Engine, so no need for ForeignPtr/Finalizer
+newtype Config = Config {unConfig :: Ptr C'wasm_config_t}
+
+defaultConfig :: IO Config
+defaultConfig = do
+  Config <$> c'wasm_config_new
+
+setConfig :: (Ptr C'wasm_config_t -> a -> IO b) -> a -> Config -> Config
+setConfig f x conf = unsafePerformIO $ f (unConfig conf) x $> conf
+
+setDebugInfo :: Bool -> Config -> Config
+setDebugInfo = setConfig c'wasmtime_config_debug_info_set
+
+setConsumeFuel :: Bool -> Config -> Config
+setConsumeFuel b conf =
+  unsafePerformIO $
+    c'wasmtime_config_consume_fuel_set (unConfig conf) b $> conf
+
+setEpochInterruption :: Bool -> Config -> Config
+setEpochInterruption b conf =
+  unsafePerformIO $
+    c'wasmtime_config_epoch_interruption_set (unConfig conf) b $> conf
+
+setMaxWasmStack :: CSize -> Config -> Config
+setMaxWasmStack size conf =
+  unsafePerformIO $
+    c'wasmtime_config_max_wasm_stack_set (unConfig conf) size $> conf
+
+setWasmThreads :: Bool -> Config -> Config
+setWasmThreads b conf =
+  unsafePerformIO $
+    c'wasmtime_config_wasm_threads_set (unConfig conf) b $> conf
+
+setWasmReferenceTypes :: Bool -> Config -> Config
+setWasmReferenceTypes b conf =
+  unsafePerformIO $
+    c'wasmtime_config_wasm_reference_types_set (unConfig conf) b $> conf
+
+setWasmSimd :: Bool -> Config -> Config
+setWasmSimd b conf =
+  unsafePerformIO $
+    c'wasmtime_config_wasm_simd_set (unConfig conf) b $> conf
+
+setWasmRelaxedSimd :: Bool -> Config -> Config
+setWasmRelaxedSimd b conf =
+  unsafePerformIO $
+    c'wasmtime_config_wasm_relaxed_simd_set (unConfig conf) b $> conf
+
+setWasmRelaxedSimdDeterministic :: Bool -> Config -> Config
+setWasmRelaxedSimdDeterministic b conf =
+  unsafePerformIO $
+    c'wasmtime_config_wasm_relaxed_simd_deterministic_set (unConfig conf) b $> conf
+
+setWasmBulkMemory :: Bool -> Config -> Config
+setWasmBulkMemory b conf =
+  unsafePerformIO $
+    c'wasmtime_config_wasm_bulk_memory_set (unConfig conf) b $> conf
+
+setWasmMultiValue :: Bool -> Config -> Config
+setWasmMultiValue b conf =
+  unsafePerformIO $
+    c'wasmtime_config_wasm_multi_value_set (unConfig conf) b $> conf
+
+setWasmMultiMemory :: Bool -> Config -> Config
+setWasmMultiMemory b conf =
+  unsafePerformIO $
+    c'wasmtime_config_wasm_multi_memory_set (unConfig conf) b $> conf
+
+setWasmMemory64 :: Bool -> Config -> Config
+setWasmMemory64 b conf =
+  unsafePerformIO $
+    c'wasmtime_config_wasm_memory64_set (unConfig conf) b $> conf
+
+setStrategy :: C'wasmtime_strategy_t -> Config -> Config
+setStrategy strat conf =
+  unsafePerformIO $
+    c'wasmtime_config_strategy_set (unConfig conf) strat $> conf
+
+setParallelCompilation :: Bool -> Config -> Config
+setParallelCompilation b conf =
+  unsafePerformIO $
+    c'wasmtime_config_parallel_compilation_set (unConfig conf) b $> conf
+
+setCraneliftDebugVerifier :: Bool -> Config -> Config
+setCraneliftDebugVerifier b conf =
+  unsafePerformIO $
+    c'wasmtime_config_cranelift_debug_verifier_set (unConfig conf) b $> conf
+
+setCaneliftNanCanonicalization :: Bool -> Config -> Config
+setCaneliftNanCanonicalization b conf =
+  unsafePerformIO $
+    c'wasmtime_config_cranelift_nan_canonicalization_set (unConfig conf) b $> conf
+
+setCraneliftOptLevel :: C'wasmtime_opt_level_t -> Config -> Config
+setCraneliftOptLevel level conf =
+  unsafePerformIO $
+    c'wasmtime_config_cranelift_opt_level_set (unConfig conf) level $> conf
+
+setProfilerSet :: C'wasmtime_profiling_strategy_t -> Config -> Config
+setProfilerSet strat conf =
+  unsafePerformIO $
+    c'wasmtime_config_profiler_set (unConfig conf) strat $> conf
+
+setStaticMemoryForced :: Bool -> Config -> Config
+setStaticMemoryForced b conf =
+  unsafePerformIO $
+    c'wasmtime_config_static_memory_forced_set (unConfig conf) b $> conf
+
+setStaticMemoryMaximumSize :: Word64 -> Config -> Config
+setStaticMemoryMaximumSize size conf =
+  unsafePerformIO $
+    c'wasmtime_config_static_memory_maximum_size_set (unConfig conf) size $> conf
+
+setStaticMemoryGuardSize :: Word64 -> Config -> Config
+setStaticMemoryGuardSize size conf =
+  unsafePerformIO $
+    c'wasmtime_config_static_memory_guard_size_set (unConfig conf) size $> conf
+
+setDynamicMemoryGuardSize :: Word64 -> Config -> Config
+setDynamicMemoryGuardSize size conf =
+  unsafePerformIO $
+    c'wasmtime_config_dynamic_memory_guard_size_set (unConfig conf) size $> conf
+
+loadCacheConfig :: FilePath -> Config -> Config
+loadCacheConfig filePath conf =
+  unsafePerformIO $
+    withCString filePath (c'wasmtime_config_cache_config_load (unConfig conf)) $> conf
