@@ -24,6 +24,7 @@ library
     other-modules:    Bindings.Wasi
     other-modules:    Bindings.Wasm
     other-modules:    Bindings.Wasmtime
+    other-modules:    Bindings.Wasmtime.Config
     other-modules:    Bindings.Wasmtime.Error
     other-modules:    Bindings.Wasmtime.Extern
     other-modules:    Bindings.Wasmtime.Func
