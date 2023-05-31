@@ -22,9 +22,14 @@ main = do
   wasm :: Wasm <- wat2wasm watBytes
 
   putStrLn "Compiling module..."
-  _module :: Module <- newModule engine wasm
+  myModule :: Module <- newModule engine wasm
 
-  _func :: Func <- newFunc ctx hello
+  func :: Func <- newFunc ctx hello
+
+  let funcExtern :: Extern
+      funcExtern = extern func
+
+  _instance :: Instance <- newInstance ctx myModule [funcExtern]
 
   -- TODO
   pure ()
