@@ -424,8 +424,8 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
           poke (p'wasmtime_extern'kind externs_ptr) k
 
           let of_ptr = p'wasmtime_extern'of extern_ptr :: Ptr C'wasmtime_extern_union_t
-          func <- peek (castPtr of_ptr :: Ptr (CType extern))
-          poke (castPtr (p'wasmtime_extern'of externs_ptr)) func
+          c_extern <- peek (castPtr of_ptr :: Ptr (CType extern))
+          poke (castPtr (p'wasmtime_extern'of externs_ptr)) c_extern
 
           go (advancePtr externs_ptr 1) es
    in go externs_ptr0 externs
