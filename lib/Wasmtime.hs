@@ -219,7 +219,7 @@ setWasmMemory64 = setConfig c'wasmtime_config_wasm_memory64_set
 
 -- | Configures which compilation strategy will be used for wasm modules.
 --
--- Defaults to Strategy::Auto
+-- Defaults to 'autoStrategy'
 setStrategy :: Strategy -> Config -> Config
 setStrategy (Strategy s) = setConfig c'wasmtime_config_strategy_set s
 
@@ -239,7 +239,7 @@ setCaneliftNanCanonicalization = setConfig c'wasmtime_config_cranelift_nan_canon
 
 -- | Configures the Cranelift code generator optimization level.
 --
--- Defaults to OptLevel::None
+-- Defaults to 'noneOptLevel'
 setCraneliftOptLevel :: OptLevel -> Config -> Config
 setCraneliftOptLevel (OptLevel ol) = setConfig c'wasmtime_config_cranelift_opt_level_set ol
 
@@ -274,8 +274,8 @@ setDynamicMemoryGuardSize = setConfig c'wasmtime_config_dynamic_memory_guard_siz
 
 -- | Loads cache configuration specified at filePath.
 loadCacheConfig :: FilePath -> Config -> Config
-loadCacheConfig = setConfig $
-  \ptr filePath -> withCString filePath (c'wasmtime_config_cache_config_load ptr)
+loadCacheConfig = setConfig $ \ptr filePath ->
+  withCString filePath (c'wasmtime_config_cache_config_load ptr)
 
 -- Config Enums
 
