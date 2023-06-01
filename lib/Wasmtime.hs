@@ -663,6 +663,8 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
   where
     n = length externs
 
+-- | Converts an Extern object back into an ordinary Haskell value (like 'Func')
+-- of the correct type.
 fromExtern :: forall e. Externable e => Extern -> Maybe e
 fromExtern (Extern t v)
   | Just HRefl <- t `eqTypeRep` rep = Just v
@@ -705,6 +707,7 @@ newInstance ctx m externs =
 withInstance :: Instance -> (Ptr C'wasmtime_instance_t -> IO a) -> IO a
 withInstance inst = withForeignPtr (unInstance inst)
 
+-- | Get an export by name from an instance.
 getExport :: Context -> Instance -> String -> IO (Maybe Extern)
 getExport ctx inst name =
   withContext ctx $ \ctx_ptr ->
