@@ -389,8 +389,11 @@ instance KindMatch Word128 where kindMatches _proxy k = k == c'WASMTIME_V128
 -- Externs
 --------------------------------------------------------------------------------
 
+-- | Container for different kinds of extern items like @'Func's@
+-- that can be passed to 'newInstance' and exported from @'Instance's@.
 data Extern = forall extern. (Externable extern) => Extern extern
 
+-- | Class of types that can be imported and exported from @'Instance's@.
 class (Storable (CType extern)) => Externable extern where
   type CType extern :: Type
   getCExtern :: extern -> CType extern
@@ -401,6 +404,7 @@ instance Externable Func where
   getCExtern = unFunc
   externKind _proxy = c'WASMTIME_EXTERN_FUNC
 
+-- | Turn any externable value into the 'Extern' container.
 extern :: (Externable extern) => extern -> Extern
 extern = Extern
 
@@ -421,6 +425,11 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
 
 newtype Instance = Instance {_unInstance :: C'wasmtime_instance_t}
 
+-- | Instantiate a wasm module.
+--
+-- This function will instantiate a WebAssembly module with the provided
+-- imports, creating a WebAssembly instance. The returned instance can then
+-- afterwards be inspected for exports.
 newInstance :: Context -> Module -> [Extern] -> IO Instance
 newInstance ctx m externs =
   withContext ctx $ \ctx_ptr ->
