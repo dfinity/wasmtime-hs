@@ -423,6 +423,7 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
 -- Instances
 --------------------------------------------------------------------------------
 
+-- | Representation of a instance in Wasmtime.
 newtype Instance = Instance {_unInstance :: C'wasmtime_instance_t}
 
 -- | Instantiate a wasm module.
