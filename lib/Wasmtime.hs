@@ -74,7 +74,7 @@ import Data.Word (Word8)
 import Foreign.C.String (peekCStringLen)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
-import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtr, newForeignPtr, withForeignPtr)
+import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
 import Foreign.Marshal.Alloc (alloca, malloc)
 import Foreign.Marshal.Array
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
@@ -411,9 +411,9 @@ extern = Extern
 withExterns :: [Extern] -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
 withExterns externs f = allocaArray n $ \externs_ptr0 ->
   let go _externs_ptr [] = f externs_ptr0 $ fromIntegral n
-      go externs_ptr ((Extern (extern :: extern)) : es) = do
+      go externs_ptr ((Extern (e :: extern)) : es) = do
         poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @extern)
-        poke (castPtr (p'wasmtime_extern'of externs_ptr)) $ getCExtern extern
+        poke (castPtr (p'wasmtime_extern'of externs_ptr)) $ getCExtern e
         go (advancePtr externs_ptr 1) es
    in go externs_ptr0 externs
   where

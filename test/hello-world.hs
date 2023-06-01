@@ -5,7 +5,7 @@ module Main (main) where
 
 import qualified Data.ByteString as B
 import Paths_wasmtime (getDataFileName)
-import System.IO
+import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Wasmtime
 
 main :: IO ()
