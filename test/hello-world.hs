@@ -1,8 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 
 -- | Haskell translation of: https://docs.wasmtime.dev/examples-c-hello-world.html
 module Main (main) where
 
+import Control.Exception (throwIO)
 import qualified Data.ByteString as B
 import Paths_wasmtime (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
@@ -26,16 +28,25 @@ main = do
   helloWatPath <- getDataFileName "test/hello.wat"
   watBytes <- B.readFile helloWatPath
 
-  wasm :: Wasm <- wat2wasm watBytes
+  wasm :: Wasm <- either throwIO pure $ wat2wasm watBytes
 
   putStrLn "Compiling module..."
   myModule :: Module <- newModule engine wasm
 
+  putStrLn "Creating callback..."
   func :: Func <- newFunc ctx hello
 
-  let funcExtern :: Extern = extern func
+  putStrLn "Instantiating module..."
+  let funcExtern :: Extern = toExtern func
 
-  _instance :: Instance <- newInstance ctx myModule [funcExtern]
+  inst :: Instance <- newInstance ctx myModule [funcExtern]
+
+  putStrLn "Extracting export..."
+  Just (e :: Extern) <- getExport ctx inst "run"
+
+  let Just (_runFunc :: Func) = fromExtern e
+
+  putStrLn "Calling export..."
 
   -- TODO
   pure ()
