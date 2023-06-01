@@ -14,6 +14,8 @@ module Bindings.Wasm where
 
 #ccall wasm_engine_new , IO (Ptr <wasm_engine_t>)
 
+#ccall wasm_engine_new_with_config , Ptr <wasm_config_t> -> IO (Ptr <wasm_engine_t>)
+
 #ccall wasm_engine_delete , Ptr <wasm_engine_t> -> IO ()
 
 #integral_t wasm_byte_t
@@ -84,3 +86,9 @@ module Bindings.Wasm where
 #stoptype
 
 #opaque_t wasm_exporttype_t
+
+#opaque_t wasm_config_t
+
+#ccall wasm_config_new , IO (Ptr <wasm_config_t>)
+
+#ccall wasm_config_delete , Ptr <wasm_config_t> -> IO ()
