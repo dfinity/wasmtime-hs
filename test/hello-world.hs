@@ -5,6 +5,7 @@
 module Main (main) where
 
 import Control.Exception (throwIO)
+import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Paths_wasmtime (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
@@ -15,36 +16,36 @@ main = do
   hSetBuffering stdout NoBuffering
 
   putStrLn "Initializing..."
-  engine :: Engine <-
+  engine <-
     newEngineWithConfig $
       setConsumeFuel True
         . setDebugInfo False
         . setDebugInfo True
 
-  store :: Store <- newStore engine
+  store <- newStore engine
 
-  ctx :: Context <- storeContext store
+  ctx <- storeContext store
 
   helloWatPath <- getDataFileName "test/hello.wat"
   watBytes <- B.readFile helloWatPath
 
-  wasm :: Wasm <- either throwIO pure $ wat2wasm watBytes
+  wasm <- handleWasmtimeError $ wat2wasm watBytes
 
   putStrLn "Compiling module..."
-  myModule :: Module <- newModule engine wasm
+  myModule <- handleWasmtimeError $ newModule engine wasm
 
   putStrLn "Creating callback..."
-  func :: Func <- newFunc ctx hello
+  func <- newFunc ctx hello
 
   putStrLn "Instantiating module..."
-  let funcExtern :: Extern = toExtern func
+  let funcExtern = toExtern func
 
-  inst :: Instance <- newInstance ctx myModule [funcExtern]
+  inst <- newInstance ctx myModule [funcExtern]
 
   putStrLn "Extracting export..."
-  Just (e :: Extern) <- getExport ctx inst "run"
+  Just e <- getExport ctx inst "run"
 
-  let Just (_runFunc :: Func) = fromExtern e
+  let Just (_runFunc :: Func RealWorld) = fromExtern e
 
   putStrLn "Calling export..."
 
@@ -55,3 +56,6 @@ hello :: IO ()
 hello = do
   putStrLn "Calling back..."
   putStrLn "> Hello World!"
+
+handleWasmtimeError :: Either WasmtimeError a -> IO a
+handleWasmtimeError = either throwIO pure

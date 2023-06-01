@@ -36,6 +36,7 @@ library
     build-depends:    base >=4.15
     build-depends:    bindings-DSL >= 1.0.25
     build-depends:    bytestring >= 0.11.4
+    build-depends:    primitive >= 0.7.3
     build-depends:    wide-word >= 0.1.5
 
     default-language: Haskell2010
@@ -56,4 +57,5 @@ test-suite hello-world
 
     build-depends:    base >=4.15
     build-depends:    bytestring
+    build-depends:    primitive
     build-depends:    wasmtime
