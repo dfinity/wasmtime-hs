@@ -401,7 +401,7 @@ instance Externable Func where
   getCExtern = unFunc
   externKind _proxy = c'WASMTIME_EXTERN_FUNC
 
-extern :: forall extern. (Externable extern) => extern -> Extern
+extern :: (Externable extern) => extern -> Extern
 extern = Extern
 
 withExterns :: [Extern] -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
@@ -409,8 +409,7 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
   let go _externs_ptr [] = f externs_ptr0 $ fromIntegral n
       go externs_ptr ((Extern (extern :: extern)) : es) = do
         poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @extern)
-        let c_extern = getCExtern extern
-        poke (castPtr (p'wasmtime_extern'of externs_ptr)) c_extern
+        poke (castPtr (p'wasmtime_extern'of externs_ptr)) $ getCExtern extern
         go (advancePtr externs_ptr 1) es
    in go externs_ptr0 externs
   where
