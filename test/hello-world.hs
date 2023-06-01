@@ -37,7 +37,7 @@ main = do
   func :: Func <- newFunc ctx hello
 
   putStrLn "Instantiating module..."
-  let funcExtern :: Extern = extern func
+  let funcExtern :: Extern = toExtern func
 
   inst :: Instance <- newInstance ctx myModule [funcExtern]
 

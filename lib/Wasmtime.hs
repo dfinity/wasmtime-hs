@@ -80,7 +80,7 @@ module Wasmtime
     -- * Externs
     Extern,
     Externable,
-    extern,
+    toExtern,
     fromExtern,
 
     -- * Instances
@@ -648,9 +648,18 @@ instance Externable Func where
   getCExtern = unFunc
   externKind _proxy = c'WASMTIME_EXTERN_FUNC
 
--- | Turn any externable value into the 'Extern' container.
-extern :: forall e. Externable e => e -> Extern
-extern = Extern (typeRep :: TypeRep e)
+-- | Turn any externable value (like a 'Func') into the 'Extern' container.
+toExtern :: forall e. Externable e => e -> Extern
+toExtern = Extern (typeRep :: TypeRep e)
+
+-- | Converts an 'Extern' object back into an ordinary Haskell value (like a 'Func')
+-- of the correct type.
+fromExtern :: forall e. Externable e => Extern -> Maybe e
+fromExtern (Extern t v)
+  | Just HRefl <- t `eqTypeRep` rep = Just v
+  | otherwise = Nothing
+  where
+    rep = typeRep :: TypeRep e
 
 withExterns :: [Extern] -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
 withExterns externs f = allocaArray n $ \externs_ptr0 ->
@@ -662,15 +671,6 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
    in go externs_ptr0 externs
   where
     n = length externs
-
--- | Converts an Extern object back into an ordinary Haskell value (like 'Func')
--- of the correct type.
-fromExtern :: forall e. Externable e => Extern -> Maybe e
-fromExtern (Extern t v)
-  | Just HRefl <- t `eqTypeRep` rep = Just v
-  | otherwise = Nothing
-  where
-    rep = typeRep :: TypeRep e
 
 --------------------------------------------------------------------------------
 -- Instances
@@ -734,7 +734,7 @@ getExport ctx inst name =
                   let func_ptr :: Ptr C'wasmtime_func_t
                       func_ptr = castPtr of_ptr
                   func <- Func <$> peek func_ptr
-                  pure $ Just $ extern func
+                  pure $ Just $ toExtern func
                 else pure Nothing
             else pure Nothing
 
