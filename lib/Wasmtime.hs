@@ -1,3 +1,5 @@
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -75,6 +77,15 @@ module Wasmtime
     Func,
     newFunc,
 
+    -- * Externs
+    Extern,
+    Externable,
+    extern,
+
+    -- * Instances
+    Instance,
+    newInstance,
+
     -- * Errors
     WasmException (..),
     WasmtimeError,
@@ -87,6 +98,7 @@ import Bindings.Wasmtime.Config
 import Bindings.Wasmtime.Error
 import Bindings.Wasmtime.Extern
 import Bindings.Wasmtime.Func
+import Bindings.Wasmtime.Instance
 import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
 import Bindings.Wasmtime.Val
@@ -106,10 +118,10 @@ import Foreign.C.String (peekCStringLen, withCString)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
 import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
-import Foreign.Marshal.Alloc (alloca)
+import Foreign.Marshal.Alloc (alloca, malloc)
 import Foreign.Marshal.Array
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
-import Foreign.Storable (Storable, peek, pokeElemOff)
+import Foreign.Storable (Storable, peek, poke, pokeElemOff)
 import System.IO.Unsafe (unsafePerformIO)
 
 --------------------------------------------------------------------------------
@@ -400,7 +412,7 @@ wat2wasm (BI.BS inp_fp inp_size) = withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word
 -- Module
 --------------------------------------------------------------------------------
 
-newtype Module = Module {_unModule :: ForeignPtr C'wasmtime_module_t}
+newtype Module = Module {unModule :: ForeignPtr C'wasmtime_module_t}
 
 newModule :: Engine -> Wasm -> IO Module
 newModule engine (Wasm (BI.BS inp_fp inp_size)) =
@@ -417,21 +429,27 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) =
         module_ptr <- peek module_ptr_ptr
         Module <$> newForeignPtr p'wasmtime_module_delete module_ptr
 
+withModule :: Module -> (Ptr C'wasmtime_module_t -> IO a) -> IO a
+withModule m = withForeignPtr (unModule m)
+
 --------------------------------------------------------------------------------
 -- Function Types
 --------------------------------------------------------------------------------
 
-newtype FuncType f = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
+newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
 
-withFuncType :: FuncType f -> (Ptr C'wasm_functype_t -> IO a) -> IO a
+withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
 withFuncType funcType = withForeignPtr (unFuncType funcType)
 
-newFuncType :: forall f. FuncKind f => IO (FuncType f)
-newFuncType =
-  withKinds (params (Proxy @f)) $ \params_ptr ->
-    withKinds (result (Proxy @f)) $ \result_ptr -> do
+newFuncType :: forall f. FuncKind f => Proxy f -> IO FuncType
+newFuncType _proxy = do
+  withKinds ps $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
+    withKinds rs $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
       functype_ptr <- c'wasm_functype_new params_ptr result_ptr
       FuncType <$> newForeignPtr p'wasm_functype_delete functype_ptr
+  where
+    ps = params (Proxy @f)
+    rs = result (Proxy @f)
 
 withKinds :: [C'wasm_valkind_t] -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
 withKinds kinds f =
@@ -440,9 +458,9 @@ withKinds kinds f =
       -- FIXME: is the following a memory leak?
       valtype_ptr <- c'wasm_valtype_new k
       pokeElemOff valtypes_ptr ix valtype_ptr
-    alloca $ \(valtype_vec_ptr :: Ptr C'wasm_valtype_vec_t) -> do
-      c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr
-      f valtype_vec_ptr
+    (valtype_vec_ptr :: Ptr C'wasm_valtype_vec_t) <- malloc
+    c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr
+    f valtype_vec_ptr
   where
     n = length kinds
 
@@ -526,7 +544,7 @@ instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
 -- do not have any destructor associated with them. Functions cannot
 -- interoperate between 'Store' instances and if the wrong function is passed to
 -- the wrong store then it may trigger an assertion to abort the process.
-newtype Func = Func {_unFunc :: C'wasmtime_func_t}
+newtype Func = Func {unFunc :: C'wasmtime_func_t} deriving (Show)
 
 newFunc ::
   forall f r.
@@ -539,31 +557,30 @@ newFunc ::
   f ->
   IO Func
 newFunc ctx f = withContext ctx $ \ctx_ptr -> do
-  funcType :: FuncType f <- newFuncType
+  funcType :: FuncType <- newFuncType (Proxy @f)
   withFuncType funcType $ \functype_ptr -> do
-    let callback ::
-          Ptr () -> -- env
-          Ptr C'wasmtime_caller_t -> -- caller
-          Ptr C'wasmtime_val_t -> -- args
-          CSize -> -- nargs
-          Ptr C'wasmtime_val_t -> -- results
-          CSize -> -- nresults
-          IO (Ptr C'wasm_trap_t)
-        callback _env _caller args_ptr nargs _result_ptr _nresults = do
-          mbResult <- apply f args_ptr (fromIntegral nargs)
-          case mbResult of
-            Nothing -> error "TODO"
-            Just (action :: Result f) -> do
-              r <- action
-              print r
-          -- TODO
-          pure nullPtr
-
     callback_funptr <- mk'wasmtime_func_callback_t callback
-
     alloca $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
       c'wasmtime_func_new ctx_ptr functype_ptr callback_funptr nullPtr nullFunPtr func_ptr
       Func <$> peek func_ptr
+  where
+    callback ::
+      Ptr () -> -- env
+      Ptr C'wasmtime_caller_t -> -- caller
+      Ptr C'wasmtime_val_t -> -- args
+      CSize -> -- nargs
+      Ptr C'wasmtime_val_t -> -- results
+      CSize -> -- nresults
+      IO (Ptr C'wasm_trap_t)
+    callback _env _caller args_ptr nargs _result_ptr _nresults = do
+      mbResult <- apply f args_ptr (fromIntegral nargs)
+      case mbResult of
+        Nothing -> error "TODO"
+        Just (action :: Result f) -> do
+          r <- action
+          print r
+      -- TODO
+      pure nullPtr
 
 class Apply f where
   type Result f :: Type
@@ -606,6 +623,71 @@ instance KindMatch Word128 where kindMatches _proxy k = k == c'WASMTIME_V128
 -- TODO:
 -- instance KindMatch ? where kindMatches _proxy k = k == c'WASMTIME_FUNCREF
 -- instance KindMatch ? where kindMatches _proxy k = k == c'WASMTIME_EXTERNREF
+
+--------------------------------------------------------------------------------
+-- Externs
+--------------------------------------------------------------------------------
+
+-- | Container for different kinds of extern items like @'Func's@
+-- that can be passed to 'newInstance' and exported from @'Instance's@.
+data Extern = forall extern. (Externable extern) => Extern extern
+
+-- | Class of types that can be imported and exported from @'Instance's@.
+class (Storable (CType extern)) => Externable extern where
+  type CType extern :: Type
+  getCExtern :: extern -> CType extern
+  externKind :: Proxy extern -> C'wasmtime_extern_kind_t
+
+instance Externable Func where
+  type CType Func = C'wasmtime_func
+  getCExtern = unFunc
+  externKind _proxy = c'WASMTIME_EXTERN_FUNC
+
+-- | Turn any externable value into the 'Extern' container.
+extern :: (Externable extern) => extern -> Extern
+extern = Extern
+
+withExterns :: [Extern] -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
+withExterns externs f = allocaArray n $ \externs_ptr0 ->
+  let go _externs_ptr [] = f externs_ptr0 $ fromIntegral n
+      go externs_ptr ((Extern (e :: extern)) : es) = do
+        poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @extern)
+        poke (castPtr (p'wasmtime_extern'of externs_ptr)) $ getCExtern e
+        go (advancePtr externs_ptr 1) es
+   in go externs_ptr0 externs
+  where
+    n = length externs
+
+--------------------------------------------------------------------------------
+-- Instances
+--------------------------------------------------------------------------------
+
+-- | Representation of a instance in Wasmtime.
+newtype Instance = Instance {_unInstance :: C'wasmtime_instance_t}
+
+-- | Instantiate a wasm module.
+--
+-- This function will instantiate a WebAssembly module with the provided
+-- imports, creating a WebAssembly instance. The returned instance can then
+-- afterwards be inspected for exports.
+newInstance :: Context -> Module -> [Extern] -> IO Instance
+newInstance ctx m externs =
+  withContext ctx $ \ctx_ptr ->
+    withModule m $ \mod_ptr ->
+      withExterns externs $ \externs_ptr n ->
+        alloca $ \(instance_ptr :: Ptr C'wasmtime_instance_t) ->
+          alloca $ \(trap_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+            error_ptr <-
+              c'wasmtime_instance_new
+                ctx_ptr
+                mod_ptr
+                externs_ptr
+                n
+                instance_ptr
+                trap_ptr
+            checkWasmtimeError error_ptr
+            -- TODO: handle traps!!!
+            Instance <$> peek instance_ptr
 
 --------------------------------------------------------------------------------
 -- Errors

@@ -5,10 +5,13 @@ module Main (main) where
 
 import qualified Data.ByteString as B
 import Paths_wasmtime (getDataFileName)
+import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Wasmtime
 
 main :: IO ()
 main = do
+  hSetBuffering stdout NoBuffering
+
   putStrLn "Initializing..."
   engine :: Engine <-
     newEngineWithConfig $
@@ -26,9 +29,13 @@ main = do
   wasm :: Wasm <- wat2wasm watBytes
 
   putStrLn "Compiling module..."
-  _module :: Module <- newModule engine wasm
+  myModule :: Module <- newModule engine wasm
 
-  _func :: Func <- newFunc ctx hello
+  func :: Func <- newFunc ctx hello
+
+  let funcExtern :: Extern = extern func
+
+  _instance :: Instance <- newInstance ctx myModule [funcExtern]
 
   -- TODO
   pure ()
