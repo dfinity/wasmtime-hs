@@ -632,8 +632,9 @@ instance KindMatch Word128 where kindMatches _proxy k = k == c'WASMTIME_V128
 -- Externs
 --------------------------------------------------------------------------------
 
--- | Container for different kinds of extern items like @'Func's@
--- that can be passed to 'newInstance' and exported from @'Instance's@.
+-- | Container for different kinds of extern items (like @'Func's@) that can be
+-- imported into new @'Instance's@ using 'newInstance' and exported from
+-- existing instances using 'getExport'.
 data Extern where
   Extern :: forall e. (Externable e) => TypeRep e -> e -> Extern
 
