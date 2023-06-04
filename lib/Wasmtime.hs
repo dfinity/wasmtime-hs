@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -77,6 +78,12 @@ module Wasmtime
     Func,
     newFunc,
 
+    -- * ...
+    TypedFunc,
+    fromFunc,
+    FuncCall,
+    funcCall,
+
     -- * Externs
     Extern,
     Externable,
@@ -106,6 +113,7 @@ import Bindings.Wasmtime.Store
 import Bindings.Wasmtime.Val
 import Control.Exception (Exception, mask_, throwIO, try)
 import Control.Monad (when)
+import Data.Bits (Bits (xor))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
 import Data.Foldable (for_)
@@ -113,6 +121,7 @@ import Data.Functor (($>))
 import Data.Int (Int32, Int64)
 import Data.Kind (Type)
 import Data.Proxy (Proxy (..))
+import Data.Traversable (for)
 import Data.Typeable (Typeable)
 import Data.WideWord.Word128 (Word128)
 import Data.Word (Word64, Word8)
@@ -627,6 +636,60 @@ instance KindMatch Word128 where kindMatches _proxy k = k == c'WASMTIME_V128
 -- TODO:
 -- instance KindMatch ? where kindMatches _proxy k = k == c'WASMTIME_FUNCREF
 -- instance KindMatch ? where kindMatches _proxy k = k == c'WASMTIME_EXTERNREF
+
+--------------------------------------------------------------------------------
+-- Exports have internally known types, but when we export them into the haskell world,
+-- we want them to have a haskell-style type, and apply them to arguments like normal functions.
+-- We achieve this by turning a Func into a TypedFunc f, where f is a user-supplied type expectation.
+-- This can then be recursively reduced using funcCall... TODO
+
+-- | Annotate a Func with its type f
+newtype TypedFunc f = TypedFunc Func
+
+-- | Type-hint an expected type f for the Func, and let the Context "typecheck"
+--
+-- Just (someTypedExportedFunc :: TypedFunc (IO ())) <- fromFunc ctx someExportedFunc
+fromFunc :: forall f. FuncKind f => Context -> Func -> IO (Maybe (TypedFunc f))
+fromFunc ctx func = do
+  withContext ctx $ \ctx_ptr -> do
+    -- funcType :: FuncType <- newFuncType $ Proxy @f
+    let desired_params = params $ Proxy @f
+    let desired_results = result $ Proxy @f
+    -- allocate ptr for func
+    alloca $ \func_ptr -> do
+      -- write func to func_ptr
+      poke func_ptr $ unFunc func
+      -- pass pointer
+      (functype_ptr :: Ptr C'wasm_functype_t) <- c'wasmtime_func_type ctx_ptr func_ptr
+      (func_params_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_params functype_ptr
+      (func_results_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_results functype_ptr
+      func_params <- peek func_params_ptr
+      func_results <- peek func_results_ptr
+      -- go through parameters:
+      (actual_params :: [C'wasm_valkind_t]) <- for [0 .. fromIntegral (c'wasm_valtype_vec_t'size func_params)] $ \ix -> do
+        let cur_pos = advancePtr (c'wasm_valtype_vec_t'data func_params) ix
+        cur_kind_ptr <- peek cur_pos
+        c'wasm_valtype_kind cur_kind_ptr
+      (actual_results :: [C'wasm_valkind_t]) <- for [0 .. fromIntegral (c'wasm_valtype_vec_t'size func_results)] $ \ix -> do
+        let cur_pos = advancePtr (c'wasm_valtype_vec_t'data func_results) ix
+        cur_kind_ptr <- peek cur_pos
+        c'wasm_valtype_kind cur_kind_ptr
+      if not (desired_params == actual_params && desired_results == actual_results)
+        then pure Nothing
+        else pure $ Just $ TypedFunc func
+
+class FuncCall f where
+  funcCall :: Context -> TypedFunc f -> f
+
+instance FuncCall b => FuncCall (a -> b) where
+  funcCall :: FuncCall b => Context -> TypedFunc (a -> b) -> a -> b
+  funcCall ctx (TypedFunc x) = funcCall ctx (TypedFunc x)
+
+instance FuncCall (IO r) where
+  funcCall :: Context -> TypedFunc (IO r) -> IO r
+  funcCall ctx (TypedFunc x) = do
+    let func = unFunc x
+    undefined
 
 --------------------------------------------------------------------------------
 -- Externs

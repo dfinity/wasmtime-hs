@@ -92,3 +92,9 @@ module Bindings.Wasm where
 #ccall wasm_config_new , IO (Ptr <wasm_config_t>)
 
 #ccall wasm_config_delete , Ptr <wasm_config_t> -> IO ()
+
+#ccall wasm_functype_params , Ptr <wasm_functype_t> -> IO (Ptr <wasm_valtype_vec_t)
+#ccall wasm_functype_results , Ptr <wasm_functype_t> -> IO (Ptr <wasm_valtype_vec_t)
+#ccall wasm_valtype_kind , Ptr <wasm_valtype_t> -> IO (<wasm_valkind_t>)
+
+
