@@ -508,9 +508,11 @@ instance Kind Word128 where kind _proxy = c'WASMTIME_V128
 
 class Results r where
   results :: Proxy r -> [C'wasm_valkind_t]
+  numResults' :: Proxy r -> Int
 
 instance Results () where
   results _proxy = []
+  numResults' _proxy = 0
 
 -- The instance:
 --
@@ -528,24 +530,37 @@ instance Results () where
 -- I don't understand why yet but in the mean time we just have
 -- individual instances for all primitive types:
 
-instance Results Int32 where results proxy = [kind proxy]
+instance Results Int32 where
+  results proxy = [kind proxy]
+  numResults' _proxy = 1
 
-instance Results Int64 where results proxy = [kind proxy]
+instance Results Int64 where
+  results proxy = [kind proxy]
+  numResults' _proxy = 1
 
-instance Results Float where results proxy = [kind proxy]
+instance Results Float where
+  results proxy = [kind proxy]
+  numResults' _proxy = 1
 
-instance Results Double where results proxy = [kind proxy]
+instance Results Double where
+  results proxy = [kind proxy]
+  numResults' _proxy = 1
 
-instance Results Word128 where results proxy = [kind proxy]
+instance Results Word128 where
+  results proxy = [kind proxy]
+  numResults' _proxy = 1
 
 instance (Kind a, Kind b) => Results (a, b) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b)]
+  numResults' _proxy = 2
 
 instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c)]
+  numResults' _proxy = 3
 
 instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c), kind (Proxy @d)]
+  numResults' _proxy = 4
 
 --------------------------------------------------------------------------------
 -- Functions
@@ -678,18 +693,55 @@ fromFunc ctx func = do
         then pure Nothing
         else pure $ Just $ TypedFunc func
 
+-- | Call exported wasm functions like a haskell function.
+funcCall :: forall f. FuncCall f => Context -> TypedFunc f -> f
+funcCall ctx x = unsafePerformIO $ do
+  let nargs = numArgs $ Proxy @f
+  let nres = numResults $ Proxy @f
+  let n = max nargs nres
+  -- make space for the params/results: a vector of C'wasmtime_val_raw_t
+  allocaArray n $ \(val_raw_ptr :: Ptr C'wasmtime_val_raw_t) -> do
+    -- make space for the trap
+    alloca $ \(trap_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+      pure $ funcCall' 0 3 val_raw_ptr trap_ptr ctx x
+
 class FuncCall f where
-  funcCall :: Context -> TypedFunc f -> f
+  numArgs :: Proxy f -> Int
+  numResults :: Proxy f -> Int
+
+  -- | Since we have a function with known type, we use wasmtime_func_call_unchecked, which is faster and uses less memory and piping
+  --
+  -- position into params/results pointer, params/results pointer, trap pointer
+  funcCall' :: Int -> Int -> Ptr C'wasmtime_val_raw_t -> Ptr (Ptr C'wasm_trap_t) -> Context -> TypedFunc f -> f
 
 instance FuncCall b => FuncCall (a -> b) where
-  funcCall :: FuncCall b => Context -> TypedFunc (a -> b) -> a -> b
-  funcCall ctx (TypedFunc x) = funcCall ctx (TypedFunc x)
+  numArgs :: Proxy (a -> b) -> Int
+  numArgs _ = 1 + numArgs (Proxy @b)
 
-instance FuncCall (IO r) where
-  funcCall :: Context -> TypedFunc (IO r) -> IO r
-  funcCall ctx (TypedFunc x) = do
-    let func = unFunc x
+  numResults :: Proxy (a -> b) -> Int
+  numResults _ = numResults (Proxy @b)
+
+  funcCall' :: FuncCall b => Int -> Int -> Ptr C'wasmtime_val_raw_t -> Ptr (Ptr C'wasm_trap_t) -> Context -> TypedFunc (a -> b) -> a -> b
+  funcCall' pos len param_ptr trap_ptr ctx (TypedFunc x) = do
+    -- write current param to param array at current position
     undefined
+
+instance Results r => FuncCall (IO r) where
+  numArgs :: Proxy (IO r) -> Int
+  numArgs _ = 0
+
+  numResults :: Proxy (IO r) -> Int
+  numResults _ = numResults' (Proxy @r)
+
+  funcCall' :: Int -> Int -> Ptr C'wasmtime_val_raw_t -> Ptr (Ptr C'wasm_trap_t) -> Context -> TypedFunc (IO r) -> IO r
+  funcCall' pos len param_ptr trap_ptr ctx (TypedFunc x) = do
+    withContext ctx $ \ctx_ptr ->
+      alloca $ \func_ptr -> do
+        poke func_ptr $ unFunc x
+        error_ptr <- c'wasmtime_func_call_unchecked ctx_ptr func_ptr param_ptr (fromIntegral len) trap_ptr
+        -- TODO: handle error
+        -- TODO: extract results from param_ptr and load them into r
+        undefined
 
 --------------------------------------------------------------------------------
 -- Externs
