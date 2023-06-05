@@ -19,8 +19,8 @@ main = do
   engine <-
     newEngineWithConfig $
       setConsumeFuel True
-        . setDebugInfo False
-        . setDebugInfo True
+        <> setDebugInfo False
+        <> setDebugInfo True
 
   store <- newStore engine
 
