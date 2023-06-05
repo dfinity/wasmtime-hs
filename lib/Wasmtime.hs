@@ -104,7 +104,7 @@ import Bindings.Wasmtime.Instance
 import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
 import Bindings.Wasmtime.Val
-import Control.Exception (Exception, mask_, throwIO, try)
+import Control.Exception (Exception, mask_, onException, throwIO, try)
 import Control.Monad (when)
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
 import Control.Monad.ST (ST)
@@ -149,7 +149,7 @@ newEngineWithConfig :: Config -> IO Engine
 newEngineWithConfig cfg = mask_ $ do
   -- Config will be deallocated by Engine
   cfg_ptr <- c'wasm_config_new
-  unConfig cfg cfg_ptr
+  unConfig cfg cfg_ptr `onException` c'wasm_config_delete cfg_ptr
   engine_ptr <- c'wasm_engine_new_with_config cfg_ptr
   checkAllocation engine_ptr
   Engine <$> newForeignPtr p'wasm_engine_delete engine_ptr
