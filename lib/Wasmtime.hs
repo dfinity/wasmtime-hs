@@ -300,22 +300,15 @@ setDynamicMemoryGuardSize = setConfig c'wasmtime_config_dynamic_memory_guard_siz
 
 -- | Enables Wasmtime's cache and loads configuration from the specified path.
 --
--- By default the Wasmtime compilation cache is disabled. The configuration path
--- here can be 'Nothing' to use the default settings, and otherwise the argument
--- here must be 'Just' a file on the filesystem with TOML configuration -
+-- The path should point to a file on the filesystem with TOML configuration -
 -- <https://bytecodealliance.github.io/wasmtime/cli-cache.html>.
 --
 -- A 'WasmtimeError' is thrown if the cache configuration could not be loaded or
 -- if the cache could not be enabled.
-loadCacheConfig :: Maybe FilePath -> Config
-loadCacheConfig mbFilePath = Config $ \cfg_ptr -> do
-  let wasmtime_config_cache_config_load :: Ptr CChar -> IO ()
-      wasmtime_config_cache_config_load str_ptr = do
-        error_ptr <- c'wasmtime_config_cache_config_load cfg_ptr str_ptr
-        checkWasmtimeError error_ptr
-  case mbFilePath of
-    Nothing -> wasmtime_config_cache_config_load nullPtr
-    Just filePath -> withCString filePath wasmtime_config_cache_config_load
+loadCacheConfig :: FilePath -> Config
+loadCacheConfig filePath = Config $ \cfg_ptr -> withCString filePath $ \str_ptr -> do
+  error_ptr <- c'wasmtime_config_cache_config_load cfg_ptr str_ptr
+  checkWasmtimeError error_ptr
 
 -- Config Enums
 
