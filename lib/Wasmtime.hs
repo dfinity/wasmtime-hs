@@ -656,7 +656,8 @@ instance KindMatch Word128 where kindMatches _proxy k = k == c'WASMTIME_V128
 -- Exports have internally known types, but when we export them into the haskell world,
 -- we want them to have a haskell-style type, and apply them to arguments like normal functions.
 -- We achieve this by turning a Func into a TypedFunc f, where f is a user-supplied type expectation.
--- This can then be recursively reduced using funcCall... TODO
+-- This can then be recursively reduced using funcCall.
+-- TODO: replace alloca - poke combinations with 'with' - as in https://hackage.haskell.org/package/base-4.18.0.0/docs/Foreign-Marshal-Utils.html
 
 -- | Annotate a Func with its type f
 newtype TypedFunc f = TypedFunc Func
@@ -694,8 +695,8 @@ fromFunc ctx func = do
         else pure $ Just $ TypedFunc func
 
 -- | Call exported wasm functions like a haskell function.
-funcCall :: forall f. FuncCall f => Context -> TypedFunc f -> f
-funcCall ctx x = unsafePerformIO $ do
+funcCall :: forall f. FuncCall f => Context -> TypedFunc f -> IO f
+funcCall ctx x = do
   let nargs = numArgs $ Proxy @f
   let nres = numResults $ Proxy @f
   let n = max nargs nres
@@ -703,7 +704,7 @@ funcCall ctx x = unsafePerformIO $ do
   allocaArray n $ \(val_raw_ptr :: Ptr C'wasmtime_val_raw_t) -> do
     -- make space for the trap
     alloca $ \(trap_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
-      pure $ funcCall' 0 3 val_raw_ptr trap_ptr ctx x
+      funcCall' 0 n val_raw_ptr trap_ptr ctx x
 
 class FuncCall f where
   numArgs :: Proxy f -> Int
@@ -711,10 +712,17 @@ class FuncCall f where
 
   -- | Since we have a function with known type, we use wasmtime_func_call_unchecked, which is faster and uses less memory and piping
   --
-  -- position into params/results pointer, params/results pointer, trap pointer
-  funcCall' :: Int -> Int -> Ptr C'wasmtime_val_raw_t -> Ptr (Ptr C'wasm_trap_t) -> Context -> TypedFunc f -> f
+  -- position and length of params/results array, params/results array, trap pointer, context, Func with type
+  funcCall' ::
+    Int ->
+    Int ->
+    Ptr C'wasmtime_val_raw_t ->
+    Ptr (Ptr C'wasm_trap_t) ->
+    Context ->
+    TypedFunc f ->
+    f
 
-instance FuncCall b => FuncCall (a -> b) where
+instance (Storable a, FuncCall b) => FuncCall (a -> b) where
   numArgs :: Proxy (a -> b) -> Int
   numArgs _ = 1 + numArgs (Proxy @b)
 
@@ -722,9 +730,12 @@ instance FuncCall b => FuncCall (a -> b) where
   numResults _ = numResults (Proxy @b)
 
   funcCall' :: FuncCall b => Int -> Int -> Ptr C'wasmtime_val_raw_t -> Ptr (Ptr C'wasm_trap_t) -> Context -> TypedFunc (a -> b) -> a -> b
-  funcCall' pos len param_ptr trap_ptr ctx (TypedFunc x) = do
+  funcCall' pos len param_ptr trap_ptr ctx (TypedFunc x) z = unsafePerformIO $ do
     -- write current param to param array at current position
-    undefined
+    -- pointer to current position
+    let cur_pos = advancePtr param_ptr pos
+    poke (castPtr cur_pos) z
+    pure $ funcCall' (pos + 1) len param_ptr trap_ptr ctx (TypedFunc x)
 
 instance Results r => FuncCall (IO r) where
   numArgs :: Proxy (IO r) -> Int
@@ -734,12 +745,13 @@ instance Results r => FuncCall (IO r) where
   numResults _ = numResults' (Proxy @r)
 
   funcCall' :: Int -> Int -> Ptr C'wasmtime_val_raw_t -> Ptr (Ptr C'wasm_trap_t) -> Context -> TypedFunc (IO r) -> IO r
-  funcCall' pos len param_ptr trap_ptr ctx (TypedFunc x) = do
+  funcCall' _pos len param_ptr trap_ptr ctx (TypedFunc x) = do
     withContext ctx $ \ctx_ptr ->
       alloca $ \func_ptr -> do
         poke func_ptr $ unFunc x
         error_ptr <- c'wasmtime_func_call_unchecked ctx_ptr func_ptr param_ptr (fromIntegral len) trap_ptr
-        -- TODO: handle error
+        checkWasmtimeError error_ptr
+        -- TODO: handle error check_wasm
         -- TODO: extract results from param_ptr and load them into r
         undefined
 
