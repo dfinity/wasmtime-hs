@@ -13,3 +13,4 @@ jobs:
     with:
       # We use callCabal2nix which uses IFD:
       nix_conf: allow-import-from-derivation = true
+      filter_builds: '.system == "x86_64-linux"'
