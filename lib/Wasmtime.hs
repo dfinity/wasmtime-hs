@@ -306,7 +306,7 @@ setDynamicMemoryGuardSize = setConfig c'wasmtime_config_dynamic_memory_guard_siz
 -- A 'WasmtimeError' is thrown if the cache configuration could not be loaded or
 -- if the cache could not be enabled.
 loadCacheConfig :: FilePath -> Config
-loadCacheConfig filePath = Config $ \cfg_ptr -> withCString filePath $ \str_ptr -> do
+loadCacheConfig = setConfig $ \cfg_ptr filePath -> withCString filePath $ \str_ptr -> do
   error_ptr <- c'wasmtime_config_cache_config_load cfg_ptr str_ptr
   checkWasmtimeError error_ptr
 
