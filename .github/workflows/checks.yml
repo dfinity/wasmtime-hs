@@ -10,3 +10,5 @@ jobs:
     uses: nixbuild/nixbuild-action/.github/workflows/ci-workflow.yml@v17
     secrets:
       nixbuild_ssh_key: ${{ secrets.SSH_KEY_FOR_NIXBUILD }}
+    # We use callCabal2nix which uses IFD:
+    nix_conf: allow-import-from-derivation = true
