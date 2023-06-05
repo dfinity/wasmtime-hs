@@ -1,0 +1,12 @@
+name: Checks
+
+on:
+  push:
+     branches: [ master ]
+  pull_request:
+
+jobs:
+  checks-linux:
+    uses: nixbuild/nixbuild-action/.github/workflows/ci-workflow.yml@v17
+    secrets:
+      nixbuild_ssh_key: ${{ secrets.SSH_KEY_FOR_NIXBUILD }}
