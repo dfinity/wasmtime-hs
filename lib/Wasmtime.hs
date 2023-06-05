@@ -76,6 +76,10 @@ module Wasmtime
     -- * Functions
     Func,
     newFunc,
+    TypedFunc,
+    toTypedFunc,
+    fromTypedFunc,
+    callFunc,
 
     -- * Externs
     Extern,
@@ -121,10 +125,11 @@ import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
 import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtr, newForeignPtr, withForeignPtr)
-import Foreign.Marshal.Alloc (alloca, malloc)
+import Foreign.Marshal.Alloc (alloca, finalizerFree, malloc)
 import Foreign.Marshal.Array
+import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
-import Foreign.Storable (Storable, peek, poke, pokeElemOff)
+import Foreign.Storable (Storable, peek, peekElemOff, poke, pokeElemOff)
 import System.IO.Unsafe (unsafePerformIO)
 import Type.Reflection (TypeRep, eqTypeRep, typeRep, (:~~:) (HRefl))
 
@@ -518,9 +523,11 @@ instance Kind Word128 where kind _proxy = c'WASMTIME_V128
 
 class Results r where
   results :: Proxy r -> [C'wasm_valkind_t]
+  numResults :: Proxy r -> Int
 
 instance Results () where
   results _proxy = []
+  numResults _proxy = 0
 
 -- The instance:
 --
@@ -538,24 +545,37 @@ instance Results () where
 -- I don't understand why yet but in the mean time we just have
 -- individual instances for all primitive types:
 
-instance Results Int32 where results proxy = [kind proxy]
+instance Results Int32 where
+  results proxy = [kind proxy]
+  numResults _proxy = 1
 
-instance Results Int64 where results proxy = [kind proxy]
+instance Results Int64 where
+  results proxy = [kind proxy]
+  numResults _proxy = 1
 
-instance Results Float where results proxy = [kind proxy]
+instance Results Float where
+  results proxy = [kind proxy]
+  numResults _proxy = 1
 
-instance Results Double where results proxy = [kind proxy]
+instance Results Double where
+  results proxy = [kind proxy]
+  numResults _proxy = 1
 
-instance Results Word128 where results proxy = [kind proxy]
+instance Results Word128 where
+  results proxy = [kind proxy]
+  numResults _proxy = 1
 
 instance (Kind a, Kind b) => Results (a, b) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b)]
+  numResults _proxy = 2
 
 instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c)]
+  numResults _proxy = 3
 
 instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c), kind (Proxy @d)]
+  numResults _proxy = 4
 
 --------------------------------------------------------------------------------
 -- Functions
@@ -599,6 +619,7 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
       CSize -> -- nresults
       IO (Ptr C'wasm_trap_t)
     callback _env _caller args_ptr nargs _result_ptr _nresults = do
+      putStrLn "callback..."
       mbResult <- apply f args_ptr (fromIntegral nargs)
       case mbResult of
         Nothing -> error "TODO"
@@ -654,6 +675,117 @@ instance KindMatch Word128 where kindMatches _proxy k = k == c'WASMTIME_V128
 -- TODO:
 -- instance KindMatch ? where kindMatches _proxy k = k == c'WASMTIME_FUNCREF
 -- instance KindMatch ? where kindMatches _proxy k = k == c'WASMTIME_EXTERNREF
+
+-- | A 'Func' annotated with its type.
+newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
+
+-- | Type-hint an expected type f for the Func, and let the Context "typecheck"
+--
+-- Just (someTypedExportedFunc :: TypedFunc (IO ())) <- fromFunc ctx someExportedFunc
+toTypedFunc :: forall s f. FuncKind f => Context s -> Func s -> Maybe (TypedFunc s f)
+toTypedFunc ctx func = unsafePerformIO $ do
+  withContext ctx $ \ctx_ptr ->
+    with (unFunc func) $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+      (functype_ptr :: Ptr C'wasm_functype_t) <- c'wasmtime_func_type ctx_ptr func_ptr
+      (func_params_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_params functype_ptr
+      (func_results_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_results functype_ptr
+      func_params :: C'wasm_valtype_vec_t <- peek func_params_ptr
+      func_results :: C'wasm_valtype_vec_t <- peek func_results_ptr
+      (actual_params :: [C'wasm_valkind_t]) <- kindsOf func_params
+      (actual_results :: [C'wasm_valkind_t]) <- kindsOf func_results
+      if desired_params == actual_params
+        && desired_results == actual_results
+        then pure $ Just $ TypedFunc func
+        else pure Nothing
+  where
+    desired_params = params $ Proxy @f
+    desired_results = result $ Proxy @f
+
+    kindsOf :: C'wasm_valtype_vec_t -> IO [C'wasm_valkind_t]
+    kindsOf valtype_vec = go s []
+      where
+        s :: Int
+        s = fromIntegral $ c'wasm_valtype_vec_t'size valtype_vec
+
+        p :: Ptr (Ptr C'wasm_valtype_t)
+        p = c'wasm_valtype_vec_t'data valtype_vec
+
+        go :: Int -> [C'wasm_valkind_t] -> IO [C'wasm_valkind_t]
+        go 0 acc = pure acc
+        go n acc = do
+          let ix = n - 1
+          cur_valtype_ptr <- peekElemOff p ix
+          valkind <- c'wasm_valtype_kind cur_valtype_ptr
+          go ix (valkind : acc)
+
+callFunc ::
+  forall f r s m.
+  (FuncCall f, FuncCallResult f ~ m r, MonadPrim s m, PrimBase m) =>
+  Context s ->
+  TypedFunc s f ->
+  f
+callFunc ctx typedFunc = unsafePerformIO $ mask_ $ do
+  args_and_results_ptr :: Ptr C'wasmtime_val_raw_t <- mallocArray len
+  args_and_results_fp <- newForeignPtr finalizerFree args_and_results_ptr
+  print ("args_and_results_fp", args_and_results_fp)
+  pure $ funcCall args_and_results_fp 0 (fromIntegral len) ctx (fromTypedFunc typedFunc)
+  where
+    nargs = numArgs $ Proxy @f
+    nres = numFuncCallResults $ Proxy @f
+    len = max nargs nres
+
+class FuncCall f where
+  type FuncCallResult f :: Type
+
+  numArgs :: Proxy f -> Int
+  numFuncCallResults :: Proxy f -> Int
+
+  funcCall :: ForeignPtr C'wasmtime_val_raw_t -> Int -> CSize -> Context s -> Func s -> f
+
+instance (Storable a, FuncCall b) => FuncCall (a -> b) where
+  type FuncCallResult (a -> b) = FuncCallResult b
+
+  numArgs _proxy = 1 + numArgs (Proxy @b)
+  numFuncCallResults _proxy = numFuncCallResults (Proxy @b)
+
+  funcCall args_and_results_fp ix len ctx func (x :: a) = unsafePerformIO $
+    withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
+      let cur_pos = advancePtr args_and_results_ptr ix
+      poke (castPtr cur_pos) x
+      pure $ funcCall args_and_results_fp (ix + 1) len ctx func
+
+instance Results r => FuncCall (IO r) where
+  type FuncCallResult (IO r) = IO r
+
+  numArgs _proxy = 0
+  numFuncCallResults _proxy = numResults (Proxy @r)
+
+  funcCall args_and_results_fp _ix len ctx func =
+    withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) ->
+      withContext ctx $ \ctx_ptr ->
+        with (unFunc func) $ \func_ptr ->
+          alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+            error_ptr <-
+              c'wasmtime_func_call_unchecked
+                ctx_ptr
+                func_ptr
+                args_and_results_ptr
+                len
+                trap_ptr_ptr
+            print ("error_ptr", error_ptr)
+            checkWasmtimeError error_ptr
+            -- TODO: handle traps!!!
+            pure undefined -- TODO
+
+instance Results r => FuncCall (ST s r) where
+  type FuncCallResult (ST s r) = ST s r
+
+  numArgs _proxy = 0
+  numFuncCallResults _proxy = numResults (Proxy @r)
+
+  funcCall args_and_results_fp ix len ctx func =
+    unsafeIOToPrim $
+      funcCall args_and_results_fp ix len ctx func
 
 --------------------------------------------------------------------------------
 -- Externs

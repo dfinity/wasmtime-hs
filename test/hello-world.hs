@@ -45,9 +45,13 @@ main = do
   putStrLn "Extracting export..."
   Just e <- getExport ctx inst "run"
 
-  let Just (_runFunc :: Func RealWorld) = fromExtern e
+  let Just (runFunc :: Func RealWorld) = fromExtern e
+  let Just (runTypedFunc :: TypedFunc RealWorld (IO ())) = toTypedFunc ctx runFunc
 
   putStrLn "Calling export..."
+  callFunc ctx runTypedFunc
+
+  putStrLn "All finished!"
 
   -- TODO
   pure ()
