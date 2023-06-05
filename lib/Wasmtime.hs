@@ -111,7 +111,6 @@ import Control.Monad.ST (ST)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
 import Data.Foldable (for_)
-import Data.Functor (($>))
 import Data.Int (Int32, Int64)
 import Data.Kind (Type)
 import Data.Proxy (Proxy (..))
@@ -146,10 +145,11 @@ withEngine :: Engine -> (Ptr C'wasm_engine_t -> IO a) -> IO a
 withEngine engine = withForeignPtr (unEngine engine)
 
 -- | Create an 'Engine' by modifying the default 'Config'.
-newEngineWithConfig :: (Config -> Config) -> IO Engine
-newEngineWithConfig cfg_update = mask_ $ do
+newEngineWithConfig :: Config -> IO Engine
+newEngineWithConfig cfg = mask_ $ do
   -- Config will be deallocated by Engine
-  cfg_ptr <- unConfig . cfg_update <$> newConfig
+  cfg_ptr <- c'wasm_config_new
+  unConfig cfg cfg_ptr
   engine_ptr <- c'wasm_engine_new_with_config cfg_ptr
   checkAllocation engine_ptr
   Engine <$> newForeignPtr p'wasm_engine_delete engine_ptr
@@ -160,108 +160,117 @@ newEngineWithConfig cfg_update = mask_ $ do
 
 -- | Global 'Engine' configuration.
 --
--- Unless otherwise noted, the flags default to False.
+-- 'mempty' is the default configuration where the flags default to 'False'
+-- unless noted otherwise.
+--
+-- Configurations can be combined using @cfg1 '<>' cfg2@
+-- where @cfg2@ overrides @cfg1@.
 --
 -- For details, see <https://docs.wasmtime.dev/api/wasmtime/struct.Config.html>
-newtype Config = Config {unConfig :: Ptr C'wasm_config_t}
+newtype Config = Config {unConfig :: Ptr C'wasm_config_t -> IO ()}
 
--- | Creates a new configuration object with the default configuration specified.
-newConfig :: IO Config
-newConfig = Config <$> c'wasm_config_new
+instance Semigroup Config where
+  cfg1 <> cfg2 = Config $ \cfg_ptr -> do
+    unConfig cfg1 cfg_ptr
+    unConfig cfg2 cfg_ptr
 
-setConfig :: (Ptr C'wasm_config_t -> a -> IO b) -> a -> Config -> Config
-setConfig f x conf = unsafePerformIO $ f (unConfig conf) x $> conf
+instance Monoid Config where
+  mempty = Config $ \_cfg_ptr -> pure ()
+  mappend = (<>)
+
+setConfig :: (Ptr C'wasm_config_t -> a -> IO ()) -> a -> Config
+setConfig f x = Config $ \cfg_ptr -> f cfg_ptr x
 
 -- | Configures whether DWARF debug information will be emitted during compilation.
-setDebugInfo :: Bool -> Config -> Config
+setDebugInfo :: Bool -> Config
 setDebugInfo = setConfig c'wasmtime_config_debug_info_set
 
 -- | Configures whether execution of WebAssembly will “consume fuel” to either halt or yield execution as desired.
-setConsumeFuel :: Bool -> Config -> Config
+setConsumeFuel :: Bool -> Config
 setConsumeFuel = setConfig c'wasmtime_config_consume_fuel_set
 
 -- | Enables epoch-based interruption.
-setEpochInterruption :: Bool -> Config -> Config
+setEpochInterruption :: Bool -> Config
 setEpochInterruption = setConfig c'wasmtime_config_epoch_interruption_set
 
 -- | Configures the maximum amount of stack space available for executing WebAssembly code.
 --
 -- Defaults to 512 KiB.
-setMaxWasmStack :: CSize -> Config -> Config
-setMaxWasmStack = setConfig c'wasmtime_config_max_wasm_stack_set
+setMaxWasmStack :: Word64 -> Config
+setMaxWasmStack n = setConfig c'wasmtime_config_max_wasm_stack_set (fromIntegral n)
 
 -- | Configures whether the WebAssembly threads proposal will be enabled for compilation.
-setWasmThreads :: Bool -> Config -> Config
+setWasmThreads :: Bool -> Config
 setWasmThreads = setConfig c'wasmtime_config_wasm_threads_set
 
 -- | Configures whether the WebAssembly reference types proposal will be enabled for compilation.
 --
 -- Defaults to True.
-setWasmReferenceTypes :: Bool -> Config -> Config
+setWasmReferenceTypes :: Bool -> Config
 setWasmReferenceTypes = setConfig c'wasmtime_config_wasm_reference_types_set
 
 -- | Configures whether the WebAssembly SIMD proposal will be enabled for compilation.
 --
 -- Defaults to True.
-setWasmSimd :: Bool -> Config -> Config
+setWasmSimd :: Bool -> Config
 setWasmSimd = setConfig c'wasmtime_config_wasm_simd_set
 
 -- | Configures whether the WebAssembly Relaxed SIMD proposal will be enabled for compilation.
-setWasmRelaxedSimd :: Bool -> Config -> Config
+setWasmRelaxedSimd :: Bool -> Config
 setWasmRelaxedSimd = setConfig c'wasmtime_config_wasm_relaxed_simd_set
 
 -- | This option can be used to control the behavior of the relaxed SIMD proposal’s instructions.
-setWasmRelaxedSimdDeterministic :: Bool -> Config -> Config
+setWasmRelaxedSimdDeterministic :: Bool -> Config
 setWasmRelaxedSimdDeterministic = setConfig c'wasmtime_config_wasm_relaxed_simd_deterministic_set
 
 -- | Configures whether the WebAssembly bulk memory operations proposal will be enabled for compilation.
 --
 -- Defaults to True.
-setWasmBulkMemory :: Bool -> Config -> Config
+setWasmBulkMemory :: Bool -> Config
 setWasmBulkMemory = setConfig c'wasmtime_config_wasm_bulk_memory_set
 
 -- | Configures whether the WebAssembly multi-value proposal will be enabled for compilation.
 --
 -- Defaults to True.
-setWasmMultiValue :: Bool -> Config -> Config
+setWasmMultiValue :: Bool -> Config
 setWasmMultiValue = setConfig c'wasmtime_config_wasm_multi_value_set
 
 -- | Configures whether the WebAssembly multi-memory proposal will be enabled for compilation.
-setWasmMultiMemory :: Bool -> Config -> Config
+setWasmMultiMemory :: Bool -> Config
 setWasmMultiMemory = setConfig c'wasmtime_config_wasm_multi_memory_set
 
 -- | Configures whether the WebAssembly memory64 proposal will be enabled for compilation.
-setWasmMemory64 :: Bool -> Config -> Config
+setWasmMemory64 :: Bool -> Config
 setWasmMemory64 = setConfig c'wasmtime_config_wasm_memory64_set
 
 -- | Configures which compilation strategy will be used for wasm modules.
 --
 -- Defaults to 'autoStrategy'
-setStrategy :: Strategy -> Config -> Config
+setStrategy :: Strategy -> Config
 setStrategy (Strategy s) = setConfig c'wasmtime_config_strategy_set s
 
 -- | Configure wether wasmtime should compile a module using multiple threads.
 --
 -- Defaults to True.
-setParallelCompilation :: Bool -> Config -> Config
+setParallelCompilation :: Bool -> Config
 setParallelCompilation = setConfig c'wasmtime_config_parallel_compilation_set
 
 -- | Configures whether the debug verifier of Cranelift is enabled or not.
-setCraneliftDebugVerifier :: Bool -> Config -> Config
+setCraneliftDebugVerifier :: Bool -> Config
 setCraneliftDebugVerifier = setConfig c'wasmtime_config_cranelift_debug_verifier_set
 
 -- | Configures whether Cranelift should perform a NaN-canonicalization pass.
-setCaneliftNanCanonicalization :: Bool -> Config -> Config
+setCaneliftNanCanonicalization :: Bool -> Config
 setCaneliftNanCanonicalization = setConfig c'wasmtime_config_cranelift_nan_canonicalization_set
 
 -- | Configures the Cranelift code generator optimization level.
 --
 -- Defaults to 'noneOptLevel'
-setCraneliftOptLevel :: OptLevel -> Config -> Config
+setCraneliftOptLevel :: OptLevel -> Config
 setCraneliftOptLevel (OptLevel ol) = setConfig c'wasmtime_config_cranelift_opt_level_set ol
 
 -- | Creates a default profiler based on the profiling strategy chosen.
-setProfilerSet :: ProfilingStrategy -> Config -> Config
+setProfilerSet :: ProfilingStrategy -> Config
 setProfilerSet (ProfilingStrategy ps) = setConfig c'wasmtime_config_profiler_set ps
 
 -- Seems absent
@@ -274,25 +283,39 @@ setProfilerSet (ProfilingStrategy ps) = setConfig c'wasmtime_config_profiler_set
 --
 -- The default value for this property depends on the host platform. For 64-bit platforms there’s lots of address space available, so the default configured here is 4GB. WebAssembly linear memories currently max out at 4GB which means that on 64-bit platforms Wasmtime by default always uses a static memory. This, coupled with a sufficiently sized guard region, should produce the fastest JIT code on 64-bit platforms, but does require a large address space reservation for each wasm memory.
 -- For 32-bit platforms this value defaults to 1GB. This means that wasm memories whose maximum size is less than 1GB will be allocated statically, otherwise they’ll be considered dynamic.
-setStaticMemoryMaximumSize :: Word64 -> Config -> Config
+setStaticMemoryMaximumSize :: Word64 -> Config
 setStaticMemoryMaximumSize = setConfig c'wasmtime_config_static_memory_maximum_size_set
 
 -- | Configures the size, in bytes, of the guard region used at the end of a static memory’s address space reservation.
 --
 -- The default value for this property is 2GB on 64-bit platforms. This allows eliminating almost all bounds checks on loads/stores with an immediate offset of less than 2GB. On 32-bit platforms this defaults to 64KB.
-setStaticMemoryGuardSize :: Word64 -> Config -> Config
+setStaticMemoryGuardSize :: Word64 -> Config
 setStaticMemoryGuardSize = setConfig c'wasmtime_config_static_memory_guard_size_set
 
 -- | Configures the size, in bytes, of the guard region used at the end of a dynamic memory’s address space reservation.
 --
 -- Defaults to 64KB
-setDynamicMemoryGuardSize :: Word64 -> Config -> Config
+setDynamicMemoryGuardSize :: Word64 -> Config
 setDynamicMemoryGuardSize = setConfig c'wasmtime_config_dynamic_memory_guard_size_set
 
--- | Loads cache configuration specified at filePath.
-loadCacheConfig :: FilePath -> Config -> Config
-loadCacheConfig = setConfig $ \ptr filePath ->
-  withCString filePath (c'wasmtime_config_cache_config_load ptr)
+-- | Enables Wasmtime's cache and loads configuration from the specified path.
+--
+-- By default the Wasmtime compilation cache is disabled. The configuration path
+-- here can be 'Nothing' to use the default settings, and otherwise the argument
+-- here must be 'Just' a file on the filesystem with TOML configuration -
+-- <https://bytecodealliance.github.io/wasmtime/cli-cache.html>.
+--
+-- A 'WasmtimeError' is thrown if the cache configuration could not be loaded or
+-- if the cache could not be enabled.
+loadCacheConfig :: Maybe FilePath -> Config
+loadCacheConfig mbFilePath = Config $ \cfg_ptr -> do
+  let wasmtime_config_cache_config_load :: Ptr CChar -> IO ()
+      wasmtime_config_cache_config_load str_ptr = do
+        error_ptr <- c'wasmtime_config_cache_config_load cfg_ptr str_ptr
+        checkWasmtimeError error_ptr
+  case mbFilePath of
+    Nothing -> wasmtime_config_cache_config_load nullPtr
+    Just filePath -> withCString filePath wasmtime_config_cache_config_load
 
 -- Config Enums
 
