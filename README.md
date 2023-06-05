@@ -4,6 +4,14 @@ Haskell binding to wasmtime
 This `wasmtime` Haskell package provides a binding to
 [wasmtime](https://wasmtime.dev/) via its C API.
 
+Contributions
+=============
+
+This is an opensource repository licensed under the BSD-2-Clause license.
+See the LICENSE file for details.
+
+We're happy to accept your Pull Requests!
+
 Developing
 ==========
 
