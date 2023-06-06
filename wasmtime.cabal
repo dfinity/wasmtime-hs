@@ -46,7 +46,7 @@ library
 
     extra-libraries:  wasmtime
 
-test-suite hello-world
+test-suite hello
     import:           warnings
     type:             exitcode-stdio-1.0
 
