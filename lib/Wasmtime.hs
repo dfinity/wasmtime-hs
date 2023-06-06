@@ -469,7 +469,7 @@ newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
 withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
 withFuncType funcType = withForeignPtr (unFuncType funcType)
 
-newFuncType :: forall f. FuncKind f => Proxy f -> IO FuncType
+newFuncType :: forall f. Apply f => Proxy f -> IO FuncType
 newFuncType _proxy = do
   withKinds ps $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
     withKinds rs $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
@@ -491,18 +491,6 @@ withKinds kinds f =
     f valtype_vec_ptr
   where
     n = length kinds
-
-class FuncKind f where
-  params :: Proxy f -> [C'wasm_valkind_t]
-  result :: Proxy f -> [C'wasm_valkind_t]
-
-instance (Kind a, FuncKind b) => FuncKind (a -> b) where
-  params _proxy = kind (Proxy @a) : params (Proxy @b)
-  result _proxy = result (Proxy @b)
-
-instance Results r => FuncKind (m r) where
-  params _proxy = []
-  result _proxy = results (Proxy @r)
 
 class Kind a where
   kind :: Proxy a -> C'wasm_valkind_t
@@ -592,8 +580,7 @@ newtype Func s = Func {unFunc :: C'wasmtime_func_t}
 
 newFunc ::
   forall f r s m.
-  ( FuncKind f,
-    Apply f,
+  ( Apply f,
     Result f ~ m r,
     Show r,
     MonadPrim s m,
@@ -631,10 +618,26 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
 
 class Apply f where
   type Result f :: Type
+
+  params :: Proxy f -> [C'wasm_valkind_t]
+  result :: Proxy f -> [C'wasm_valkind_t]
+
+  numArgs :: Proxy f -> Int
+  numFuncCallResults :: Proxy f -> Int
+
   apply :: f -> Ptr C'wasmtime_val_t -> Int -> IO (Maybe (Result f))
 
-instance (KindMatch a, Apply b, Storable a) => Apply (a -> b) where
+  funcCall :: ForeignPtr C'wasmtime_val_raw_t -> Int -> CSize -> Context s -> Func s -> f
+
+instance (Kind a, KindMatch a, Storable a, Apply b) => Apply (a -> b) where
   type Result (a -> b) = Result b
+
+  params _proxy = kind (Proxy @a) : params (Proxy @b)
+  result _proxy = result (Proxy @b)
+
+  numArgs _proxy = 1 + numArgs (Proxy @b)
+  numFuncCallResults _proxy = numFuncCallResults (Proxy @b)
+
   apply _ _ 0 = pure Nothing
   apply f p n = do
     k :: C'wasmtime_valkind_t <- peek $ p'wasmtime_val'kind p
@@ -649,15 +652,56 @@ instance (KindMatch a, Apply b, Storable a) => Apply (a -> b) where
         apply (f val) (advancePtr p 1) (n - 1)
       else pure Nothing
 
-instance Apply (IO r) where
+  funcCall args_and_results_fp ix len ctx func (x :: a) = unsafePerformIO $
+    withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
+      let cur_pos = advancePtr args_and_results_ptr ix
+      poke (castPtr cur_pos) x
+      pure $ funcCall args_and_results_fp (ix + 1) len ctx func
+
+instance Results r => Apply (IO r) where
   type Result (IO r) = IO r
+
+  params _proxy = []
+  result _proxy = results (Proxy @r)
+
+  numArgs _proxy = 0
+  numFuncCallResults _proxy = numResults (Proxy @r)
+
   apply x _ 0 = pure $ Just x
   apply _ _ _ = pure Nothing
 
-instance Apply (ST s r) where
+  funcCall args_and_results_fp _ix len ctx func =
+    withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) ->
+      withContext ctx $ \ctx_ptr ->
+        with (unFunc func) $ \func_ptr ->
+          alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+            error_ptr <-
+              c'wasmtime_func_call_unchecked
+                ctx_ptr
+                func_ptr
+                args_and_results_ptr
+                len
+                trap_ptr_ptr
+            print ("error_ptr", error_ptr)
+            checkWasmtimeError error_ptr
+            -- TODO: handle traps!!!
+            pure undefined -- TODO
+
+instance Results r => Apply (ST s r) where
   type Result (ST s r) = ST s r
+
+  params _proxy = []
+  result _proxy = results (Proxy @r)
+
+  numArgs _proxy = 0
+  numFuncCallResults _proxy = numResults (Proxy @r)
+
   apply x _ 0 = pure $ Just x
   apply _ _ _ = pure Nothing
+
+  funcCall args_and_results_fp ix len ctx func =
+    unsafeIOToPrim $
+      funcCall args_and_results_fp ix len ctx func
 
 class KindMatch a where
   kindMatches :: Proxy a -> C'wasmtime_valkind_t -> Bool
@@ -682,7 +726,7 @@ newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
 -- | Type-hint an expected type f for the Func, and let the Context "typecheck"
 --
 -- Just (someTypedExportedFunc :: TypedFunc (IO ())) <- fromFunc ctx someExportedFunc
-toTypedFunc :: forall s f. FuncKind f => Context s -> Func s -> Maybe (TypedFunc s f)
+toTypedFunc :: forall s f. Apply f => Context s -> Func s -> Maybe (TypedFunc s f)
 toTypedFunc ctx func = unsafePerformIO $ do
   withContext ctx $ \ctx_ptr ->
     with (unFunc func) $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
@@ -720,7 +764,7 @@ toTypedFunc ctx func = unsafePerformIO $ do
 
 callFunc ::
   forall f r s m.
-  (FuncCall f, FuncCallResult f ~ m r, MonadPrim s m, PrimBase m) =>
+  (Apply f, Result f ~ m r, MonadPrim s m, PrimBase m) =>
   Context s ->
   TypedFunc s f ->
   f
@@ -733,59 +777,6 @@ callFunc ctx typedFunc = unsafePerformIO $ mask_ $ do
     nargs = numArgs $ Proxy @f
     nres = numFuncCallResults $ Proxy @f
     len = max nargs nres
-
-class FuncCall f where
-  type FuncCallResult f :: Type
-
-  numArgs :: Proxy f -> Int
-  numFuncCallResults :: Proxy f -> Int
-
-  funcCall :: ForeignPtr C'wasmtime_val_raw_t -> Int -> CSize -> Context s -> Func s -> f
-
-instance (Storable a, FuncCall b) => FuncCall (a -> b) where
-  type FuncCallResult (a -> b) = FuncCallResult b
-
-  numArgs _proxy = 1 + numArgs (Proxy @b)
-  numFuncCallResults _proxy = numFuncCallResults (Proxy @b)
-
-  funcCall args_and_results_fp ix len ctx func (x :: a) = unsafePerformIO $
-    withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
-      let cur_pos = advancePtr args_and_results_ptr ix
-      poke (castPtr cur_pos) x
-      pure $ funcCall args_and_results_fp (ix + 1) len ctx func
-
-instance Results r => FuncCall (IO r) where
-  type FuncCallResult (IO r) = IO r
-
-  numArgs _proxy = 0
-  numFuncCallResults _proxy = numResults (Proxy @r)
-
-  funcCall args_and_results_fp _ix len ctx func =
-    withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) ->
-      withContext ctx $ \ctx_ptr ->
-        with (unFunc func) $ \func_ptr ->
-          alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
-            error_ptr <-
-              c'wasmtime_func_call_unchecked
-                ctx_ptr
-                func_ptr
-                args_and_results_ptr
-                len
-                trap_ptr_ptr
-            print ("error_ptr", error_ptr)
-            checkWasmtimeError error_ptr
-            -- TODO: handle traps!!!
-            pure undefined -- TODO
-
-instance Results r => FuncCall (ST s r) where
-  type FuncCallResult (ST s r) = ST s r
-
-  numArgs _proxy = 0
-  numFuncCallResults _proxy = numResults (Proxy @r)
-
-  funcCall args_and_results_fp ix len ctx func =
-    unsafeIOToPrim $
-      funcCall args_and_results_fp ix len ctx func
 
 --------------------------------------------------------------------------------
 -- Externs
