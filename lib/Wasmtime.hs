@@ -607,7 +607,7 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
       IO (Ptr C'wasm_trap_t)
     callback _env _caller args_ptr nargs _result_ptr _nresults = do
       putStrLn "callback..."
-      mbResult <- apply f args_ptr (fromIntegral nargs)
+      mbResult <- importCall f args_ptr (fromIntegral nargs)
       case mbResult of
         Nothing -> error "TODO"
         Just (action :: m r) -> do
@@ -622,12 +622,11 @@ class Apply f where
   params :: Proxy f -> [C'wasm_valkind_t]
   result :: Proxy f -> [C'wasm_valkind_t]
 
-  numArgs :: Proxy f -> Int
-  numFuncCallResults :: Proxy f -> Int
+  paramsLen :: Proxy f -> Int
+  resultLen :: Proxy f -> Int
 
-  apply :: f -> Ptr C'wasmtime_val_t -> Int -> IO (Maybe (Result f))
-
-  funcCall :: ForeignPtr C'wasmtime_val_raw_t -> Int -> CSize -> Context s -> Func s -> f
+  importCall :: f -> Ptr C'wasmtime_val_t -> Int -> IO (Maybe (Result f))
+  exportCall :: ForeignPtr C'wasmtime_val_raw_t -> Int -> CSize -> Context s -> Func s -> f
 
 instance (Kind a, KindMatch a, Storable a, Apply b) => Apply (a -> b) where
   type Result (a -> b) = Result b
@@ -635,11 +634,11 @@ instance (Kind a, KindMatch a, Storable a, Apply b) => Apply (a -> b) where
   params _proxy = kind (Proxy @a) : params (Proxy @b)
   result _proxy = result (Proxy @b)
 
-  numArgs _proxy = 1 + numArgs (Proxy @b)
-  numFuncCallResults _proxy = numFuncCallResults (Proxy @b)
+  paramsLen _proxy = 1 + paramsLen (Proxy @b)
+  resultLen _proxy = resultLen (Proxy @b)
 
-  apply _ _ 0 = pure Nothing
-  apply f p n = do
+  importCall _ _ 0 = pure Nothing
+  importCall f p n = do
     k :: C'wasmtime_valkind_t <- peek $ p'wasmtime_val'kind p
     if kindMatches (Proxy @a) k
       then do
@@ -649,14 +648,14 @@ instance (Kind a, KindMatch a, Storable a, Apply b) => Apply (a -> b) where
             val_ptr :: Ptr a
             val_ptr = castPtr valunion_ptr
         val :: a <- peek val_ptr
-        apply (f val) (advancePtr p 1) (n - 1)
+        importCall (f val) (advancePtr p 1) (n - 1)
       else pure Nothing
 
-  funcCall args_and_results_fp ix len ctx func (x :: a) = unsafePerformIO $
+  exportCall args_and_results_fp ix len ctx func (x :: a) = unsafePerformIO $
     withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
       let cur_pos = advancePtr args_and_results_ptr ix
       poke (castPtr cur_pos) x
-      pure $ funcCall args_and_results_fp (ix + 1) len ctx func
+      pure $ exportCall args_and_results_fp (ix + 1) len ctx func
 
 instance Results r => Apply (IO r) where
   type Result (IO r) = IO r
@@ -664,13 +663,13 @@ instance Results r => Apply (IO r) where
   params _proxy = []
   result _proxy = results (Proxy @r)
 
-  numArgs _proxy = 0
-  numFuncCallResults _proxy = numResults (Proxy @r)
+  paramsLen _proxy = 0
+  resultLen _proxy = numResults (Proxy @r)
 
-  apply x _ 0 = pure $ Just x
-  apply _ _ _ = pure Nothing
+  importCall x _ 0 = pure $ Just x
+  importCall _ _ _ = pure Nothing
 
-  funcCall args_and_results_fp _ix len ctx func =
+  exportCall args_and_results_fp _ix len ctx func =
     withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) ->
       withContext ctx $ \ctx_ptr ->
         with (unFunc func) $ \func_ptr ->
@@ -693,15 +692,15 @@ instance Results r => Apply (ST s r) where
   params _proxy = []
   result _proxy = results (Proxy @r)
 
-  numArgs _proxy = 0
-  numFuncCallResults _proxy = numResults (Proxy @r)
+  paramsLen _proxy = 0
+  resultLen _proxy = numResults (Proxy @r)
 
-  apply x _ 0 = pure $ Just x
-  apply _ _ _ = pure Nothing
+  importCall x _ 0 = pure $ Just x
+  importCall _ _ _ = pure Nothing
 
-  funcCall args_and_results_fp ix len ctx func =
+  exportCall args_and_results_fp ix len ctx func =
     unsafeIOToPrim $
-      funcCall args_and_results_fp ix len ctx func
+      exportCall args_and_results_fp ix len ctx func
 
 class KindMatch a where
   kindMatches :: Proxy a -> C'wasmtime_valkind_t -> Bool
@@ -772,10 +771,10 @@ callFunc ctx typedFunc = unsafePerformIO $ mask_ $ do
   args_and_results_ptr :: Ptr C'wasmtime_val_raw_t <- mallocArray len
   args_and_results_fp <- newForeignPtr finalizerFree args_and_results_ptr
   print ("args_and_results_fp", args_and_results_fp)
-  pure $ funcCall args_and_results_fp 0 (fromIntegral len) ctx (fromTypedFunc typedFunc)
+  pure $ exportCall args_and_results_fp 0 (fromIntegral len) ctx (fromTypedFunc typedFunc)
   where
-    nargs = numArgs $ Proxy @f
-    nres = numFuncCallResults $ Proxy @f
+    nargs = paramsLen $ Proxy @f
+    nres = resultLen $ Proxy @f
     len = max nargs nres
 
 --------------------------------------------------------------------------------
