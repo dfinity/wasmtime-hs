@@ -16,11 +16,7 @@ main = do
   hSetBuffering stdout NoBuffering
 
   putStrLn "Initializing..."
-  engine <-
-    newEngineWithConfig $
-      setConsumeFuel True
-        <> setDebugInfo False
-        <> setDebugInfo True
+  engine <- newEngine
 
   store <- newStore engine
 

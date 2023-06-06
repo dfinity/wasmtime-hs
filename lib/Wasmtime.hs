@@ -626,8 +626,17 @@ instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
 -- do not have any destructor associated with them. Functions cannot
 -- interoperate between 'Store' instances and if the wrong function is passed to
 -- the wrong store then it may trigger an assertion to abort the process.
-newtype Func s = Func {unFunc :: C'wasmtime_func_t}
+data Func s = Func {getWasmtimeFunc :: C'wasmtime_func_t}
   deriving (Show, Typeable)
+
+type FuncCallback =
+  Ptr () -> -- env
+  Ptr C'wasmtime_caller_t -> -- caller
+  Ptr C'wasmtime_val_t -> -- args
+  CSize -> -- nargs
+  Ptr C'wasmtime_val_t -> -- results
+  CSize -> -- nresults
+  IO (Ptr C'wasm_trap_t)
 
 newFunc ::
   forall f r s m.
@@ -643,21 +652,15 @@ newFunc ::
 newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
   funcType :: FuncType <- newFuncType (Proxy @f)
   withFuncType funcType $ \functype_ptr -> do
+    -- TODO: We probably need to extend the Store with a mutable set of FunPtrs
+    -- that need to be freed using freeHaskellFunPtr when the Store is collected!!!
     callback_funptr <- mk'wasmtime_func_callback_t callback
     alloca $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
       c'wasmtime_func_new ctx_ptr functype_ptr callback_funptr nullPtr nullFunPtr func_ptr
       Func <$> peek func_ptr
   where
-    callback ::
-      Ptr () -> -- env
-      Ptr C'wasmtime_caller_t -> -- caller
-      Ptr C'wasmtime_val_t -> -- args
-      CSize -> -- nargs
-      Ptr C'wasmtime_val_t -> -- results
-      CSize -> -- nresults
-      IO (Ptr C'wasm_trap_t)
+    callback :: FuncCallback
     callback _env _caller args_ptr nargs result_ptr nresults = do
-      putStrLn "callback..."
       mbResult <- importCall f args_ptr (fromIntegral nargs)
       case mbResult of
         Nothing -> error "TODO"
@@ -738,7 +741,7 @@ instance Results r => Funcable (IO r) where
   exportCall args_and_results_fp _ix len ctx func =
     withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) ->
       withContext ctx $ \ctx_ptr ->
-        with (unFunc func) $ \func_ptr ->
+        with (getWasmtimeFunc func) $ \func_ptr ->
           alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             error_ptr <-
               c'wasmtime_func_call_unchecked
@@ -748,7 +751,19 @@ instance Results r => Funcable (IO r) where
                 len
                 trap_ptr_ptr
             checkWasmtimeError error_ptr
-            -- TODO: handle traps!!!
+            trap_ptr <- peek trap_ptr_ptr
+            -- TODO: handle traps properly!!!
+            when (trap_ptr /= nullPtr) $
+              alloca $ \(message_ptr :: Ptr C'wasm_message_t) -> do
+                c'wasm_trap_message trap_ptr message_ptr
+                message_vec :: C'wasm_message_t <- peek message_ptr
+                message <-
+                  peekCStringLen
+                    ( c'wasm_byte_vec_t'data message_vec,
+                      fromIntegral $ c'wasm_byte_vec_t'size message_vec
+                    )
+                putStrLn $ "TRAP: " ++ message
+
             readResults args_and_results_ptr
 
 instance Results r => Funcable (ST s r) where
@@ -793,7 +808,7 @@ newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
 toTypedFunc :: forall s f. Funcable f => Context s -> Func s -> Maybe (TypedFunc s f)
 toTypedFunc ctx func = unsafePerformIO $ do
   withContext ctx $ \ctx_ptr ->
-    with (unFunc func) $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+    with (getWasmtimeFunc func) $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
       (functype_ptr :: Ptr C'wasm_functype_t) <- c'wasmtime_func_type ctx_ptr func_ptr
       (func_params_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_params functype_ptr
       (func_results_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_results functype_ptr
@@ -859,7 +874,7 @@ class (Storable (CType e), Typeable e) => Externable (e :: Type -> Type) where
 
 instance Externable Func where
   type CType Func = C'wasmtime_func
-  getCExtern = unFunc
+  getCExtern = getWasmtimeFunc
   externKind _proxy = c'WASMTIME_EXTERN_FUNC
 
 -- | Turn any externable value (like a 'Func') into the 'Extern' container.
