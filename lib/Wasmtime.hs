@@ -492,7 +492,7 @@ withKinds kinds f =
   where
     n = length kinds
 
-class Kind a where
+class Storable a => Kind a where
   kind :: Proxy a -> C'wasm_valkind_t
 
 instance Kind Int32 where kind _proxy = c'WASMTIME_I32
@@ -512,10 +512,13 @@ instance Kind Word128 where kind _proxy = c'WASMTIME_V128
 class Results r where
   results :: Proxy r -> [C'wasm_valkind_t]
   numResults :: Proxy r -> Int
+  writeResults :: Ptr C'wasmtime_val_t -> r -> IO ()
 
 instance Results () where
   results _proxy = []
   numResults _proxy = 0
+
+  writeResults _result_ptr () = pure ()
 
 -- The instance:
 --
@@ -536,34 +539,56 @@ instance Results () where
 instance Results Int32 where
   results proxy = [kind proxy]
   numResults _proxy = 1
+  writeResults = pokeVal
 
 instance Results Int64 where
   results proxy = [kind proxy]
   numResults _proxy = 1
+  writeResults = pokeVal
 
 instance Results Float where
   results proxy = [kind proxy]
   numResults _proxy = 1
+  writeResults = pokeVal
 
 instance Results Double where
   results proxy = [kind proxy]
   numResults _proxy = 1
+  writeResults = pokeVal
 
 instance Results Word128 where
   results proxy = [kind proxy]
   numResults _proxy = 1
+  writeResults = pokeVal
+
+pokeVal :: forall r. (Kind r) => Ptr C'wasmtime_val_t -> r -> IO ()
+pokeVal result_ptr r = do
+  poke (p'wasmtime_val'kind result_ptr) $ kind $ Proxy @r
+  poke (castPtr $ p'wasmtime_val'of result_ptr) r
 
 instance (Kind a, Kind b) => Results (a, b) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b)]
   numResults _proxy = 2
+  writeResults result_ptr (a, b) = do
+    pokeVal result_ptr a
+    pokeVal (advancePtr result_ptr 1) b
 
 instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c)]
   numResults _proxy = 3
+  writeResults result_ptr (a, b, c) = do
+    pokeVal result_ptr a
+    pokeVal (advancePtr result_ptr 1) b
+    pokeVal (advancePtr result_ptr 2) c
 
 instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c), kind (Proxy @d)]
   numResults _proxy = 4
+  writeResults result_ptr (a, b, c, d) = do
+    pokeVal result_ptr a
+    pokeVal (advancePtr result_ptr 1) b
+    pokeVal (advancePtr result_ptr 2) c
+    pokeVal (advancePtr result_ptr 3) d
 
 --------------------------------------------------------------------------------
 -- Functions
@@ -582,7 +607,7 @@ newFunc ::
   forall f r s m.
   ( Funcable f,
     Result f ~ m r,
-    Show r,
+    Results r,
     MonadPrim s m,
     PrimBase m
   ) =>
@@ -605,16 +630,29 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
       Ptr C'wasmtime_val_t -> -- results
       CSize -> -- nresults
       IO (Ptr C'wasm_trap_t)
-    callback _env _caller args_ptr nargs _result_ptr _nresults = do
+    callback _env _caller args_ptr nargs result_ptr nresults = do
       putStrLn "callback..."
       mbResult <- importCall f args_ptr (fromIntegral nargs)
       case mbResult of
         Nothing -> error "TODO"
         Just (action :: m r) -> do
           r <- unsafePrimToIO action
-          putStrLn $ "DEBUG: " ++ show r
+          let n = fromIntegral nresults
+          if n == expected
+            then writeResults result_ptr r
+            else -- TODO: use throwIO
+
+              error $
+                "Expected the number of results to be "
+                  ++ show expected
+                  ++ " but got "
+                  ++ show n
+
       -- TODO
       pure nullPtr
+
+    expected :: Int
+    expected = numResults $ Proxy @r
 
 -- | Class of Haskell functions / actions that can be imported into and exported
 -- from WASM modules.
@@ -630,7 +668,7 @@ class Funcable f where
   importCall :: f -> Ptr C'wasmtime_val_t -> Int -> IO (Maybe (Result f))
   exportCall :: ForeignPtr C'wasmtime_val_raw_t -> Int -> CSize -> Context s -> Func s -> f
 
-instance (Kind a, KindMatch a, Storable a, Funcable b) => Funcable (a -> b) where
+instance (Kind a, KindMatch a, Funcable b) => Funcable (a -> b) where
   type Result (a -> b) = Result b
 
   params _proxy = kind (Proxy @a) : params (Proxy @b)
@@ -683,7 +721,6 @@ instance Results r => Funcable (IO r) where
                 args_and_results_ptr
                 len
                 trap_ptr_ptr
-            print ("error_ptr", error_ptr)
             checkWasmtimeError error_ptr
             -- TODO: handle traps!!!
             pure undefined -- TODO
@@ -772,7 +809,6 @@ callFunc ::
 callFunc ctx typedFunc = unsafePerformIO $ mask_ $ do
   args_and_results_ptr :: Ptr C'wasmtime_val_raw_t <- mallocArray len
   args_and_results_fp <- newForeignPtr finalizerFree args_and_results_ptr
-  print ("args_and_results_fp", args_and_results_fp)
   pure $ exportCall args_and_results_fp 0 (fromIntegral len) ctx (fromTypedFunc typedFunc)
   where
     nargs = paramsLen $ Proxy @f
