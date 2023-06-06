@@ -513,12 +513,13 @@ class Results r where
   results :: Proxy r -> [C'wasm_valkind_t]
   numResults :: Proxy r -> Int
   writeResults :: Ptr C'wasmtime_val_t -> r -> IO ()
+  readResults :: Ptr C'wasmtime_val_raw_t -> IO r
 
 instance Results () where
   results _proxy = []
   numResults _proxy = 0
-
   writeResults _result_ptr () = pure ()
+  readResults _result_ptr = pure ()
 
 -- The instance:
 --
@@ -540,31 +541,41 @@ instance Results Int32 where
   results proxy = [kind proxy]
   numResults _proxy = 1
   writeResults = pokeVal
+  readResults = peekRawVal
 
 instance Results Int64 where
   results proxy = [kind proxy]
   numResults _proxy = 1
   writeResults = pokeVal
+  readResults = peekRawVal
 
 instance Results Float where
   results proxy = [kind proxy]
   numResults _proxy = 1
   writeResults = pokeVal
+  readResults = peekRawVal
 
 instance Results Double where
   results proxy = [kind proxy]
   numResults _proxy = 1
   writeResults = pokeVal
+  readResults = peekRawVal
 
 instance Results Word128 where
   results proxy = [kind proxy]
   numResults _proxy = 1
   writeResults = pokeVal
+  readResults = peekRawVal
 
 pokeVal :: forall r. (Kind r) => Ptr C'wasmtime_val_t -> r -> IO ()
 pokeVal result_ptr r = do
   poke (p'wasmtime_val'kind result_ptr) $ kind $ Proxy @r
-  poke (castPtr $ p'wasmtime_val'of result_ptr) r
+  let p :: Ptr C'wasmtime_valunion_t
+      p = p'wasmtime_val'of result_ptr
+  poke (castPtr p) r
+
+peekRawVal :: Storable r => Ptr C'wasmtime_val_raw_t -> IO r
+peekRawVal = peek . castPtr
 
 instance (Kind a, Kind b) => Results (a, b) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b)]
@@ -572,6 +583,10 @@ instance (Kind a, Kind b) => Results (a, b) where
   writeResults result_ptr (a, b) = do
     pokeVal result_ptr a
     pokeVal (advancePtr result_ptr 1) b
+  readResults result_ptr =
+    (,)
+      <$> peekRawVal result_ptr
+      <*> peekRawVal (advancePtr result_ptr 1)
 
 instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c)]
@@ -580,6 +595,11 @@ instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
     pokeVal result_ptr a
     pokeVal (advancePtr result_ptr 1) b
     pokeVal (advancePtr result_ptr 2) c
+  readResults result_ptr =
+    (,,)
+      <$> peekRawVal result_ptr
+      <*> peekRawVal (advancePtr result_ptr 1)
+      <*> peekRawVal (advancePtr result_ptr 2)
 
 instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c), kind (Proxy @d)]
@@ -589,6 +609,12 @@ instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
     pokeVal (advancePtr result_ptr 1) b
     pokeVal (advancePtr result_ptr 2) c
     pokeVal (advancePtr result_ptr 3) d
+  readResults result_ptr =
+    (,,,)
+      <$> peekRawVal result_ptr
+      <*> peekRawVal (advancePtr result_ptr 1)
+      <*> peekRawVal (advancePtr result_ptr 2)
+      <*> peekRawVal (advancePtr result_ptr 3)
 
 --------------------------------------------------------------------------------
 -- Functions
@@ -723,7 +749,7 @@ instance Results r => Funcable (IO r) where
                 trap_ptr_ptr
             checkWasmtimeError error_ptr
             -- TODO: handle traps!!!
-            pure undefined -- TODO
+            readResults args_and_results_ptr
 
 instance Results r => Funcable (ST s r) where
   type Result (ST s r) = ST s r
