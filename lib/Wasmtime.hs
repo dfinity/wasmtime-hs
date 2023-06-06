@@ -626,7 +626,7 @@ instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
 -- do not have any destructor associated with them. Functions cannot
 -- interoperate between 'Store' instances and if the wrong function is passed to
 -- the wrong store then it may trigger an assertion to abort the process.
-data Func s = Func {getWasmtimeFunc :: C'wasmtime_func_t}
+newtype Func s = Func {getWasmtimeFunc :: C'wasmtime_func_t}
   deriving (Show, Typeable)
 
 type FuncCallback =
