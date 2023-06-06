@@ -69,13 +69,13 @@ module Wasmtime
     Module,
     newModule,
 
-    -- * Function types
-    FuncType,
-    newFuncType,
-
     -- * Functions
     Func,
     newFunc,
+    Funcable,
+    Kind,
+    Result,
+    Results,
     TypedFunc,
     toTypedFunc,
     fromTypedFunc,
@@ -638,6 +638,7 @@ type FuncCallback =
   CSize -> -- nresults
   IO (Ptr C'wasm_trap_t)
 
+-- | Insert a new function into the 'Store'.
 newFunc ::
   forall f r s m.
   ( Funcable f,
@@ -647,6 +648,7 @@ newFunc ::
     PrimBase m
   ) =>
   Context s ->
+  -- | 'Funcable' Haskell function.
   f ->
   m (Func s)
 newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
@@ -697,7 +699,7 @@ class Funcable f where
   importCall :: f -> Ptr C'wasmtime_val_t -> Int -> IO (Maybe (Result f))
   exportCall :: ForeignPtr C'wasmtime_val_raw_t -> Int -> CSize -> Context s -> Func s -> f
 
-instance (Kind a, KindMatch a, Funcable b) => Funcable (a -> b) where
+instance (Kind a, Funcable b) => Funcable (a -> b) where
   type Result (a -> b) = Result b
 
   params _proxy = kind (Proxy @a) : params (Proxy @b)
@@ -709,7 +711,7 @@ instance (Kind a, KindMatch a, Funcable b) => Funcable (a -> b) where
   importCall _ _ 0 = pure Nothing
   importCall f p n = do
     k :: C'wasmtime_valkind_t <- peek $ p'wasmtime_val'kind p
-    if kindMatches (Proxy @a) k
+    if kind (Proxy @a) == k
       then do
         let valunion_ptr :: Ptr C'wasmtime_valunion_t
             valunion_ptr = p'wasmtime_val'of p
@@ -782,29 +784,23 @@ instance Results r => Funcable (ST s r) where
     unsafeIOToPrim $
       exportCall args_and_results_fp ix len ctx func
 
-class KindMatch a where
-  kindMatches :: Proxy a -> C'wasmtime_valkind_t -> Bool
-
-instance KindMatch Int32 where kindMatches _proxy k = k == c'WASMTIME_I32
-
-instance KindMatch Int64 where kindMatches _proxy k = k == c'WASMTIME_I64
-
-instance KindMatch Float where kindMatches _proxy k = k == c'WASMTIME_F32
-
-instance KindMatch Double where kindMatches _proxy k = k == c'WASMTIME_F64
-
-instance KindMatch Word128 where kindMatches _proxy k = k == c'WASMTIME_V128
-
--- TODO:
--- instance KindMatch ? where kindMatches _proxy k = k == c'WASMTIME_FUNCREF
--- instance KindMatch ? where kindMatches _proxy k = k == c'WASMTIME_EXTERNREF
-
 -- | A 'Func' annotated with its type.
 newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
 
--- | Type-hint an expected type f for the Func, and let the Context "typecheck"
+-- | Retrieves the type of the given 'Func' from the 'Store' and checks if it
+-- matches the desired type @f@ of the returned 'TypedFunc'.
 --
--- Just (someTypedExportedFunc :: TypedFunc (IO ())) <- fromFunc ctx someExportedFunc
+-- You can then call this 'TypedFunc' using 'callFunc' for example:
+--
+-- @
+-- mbTypedFunc <- fromFunc ctx someExportedGcdFunc
+-- case mbTypedFunc of
+--   Nothing -> error "gcd did not have the expected type!"
+--   Just (gcdTypedFunc :: TypedFunc RealWorld (Int32 -> Int32 -> IO Int32)) -> do
+--     -- Call gcd on its two Int32 arguments:
+--     r <- callFunc ctx gcdTypedFunc 6 27
+--     print r -- prints "3"
+-- @
 toTypedFunc :: forall s f. Funcable f => Context s -> Func s -> Maybe (TypedFunc s f)
 toTypedFunc ctx func = unsafePerformIO $ do
   withContext ctx $ \ctx_ptr ->
@@ -841,10 +837,12 @@ toTypedFunc ctx func = unsafePerformIO $ do
           valkind <- c'wasm_valtype_kind cur_valtype_ptr
           go ix (valkind : acc)
 
+-- | Call an exported 'TypedFunc'.
 callFunc ::
   forall f r s m.
   (Funcable f, Result f ~ m r, MonadPrim s m, PrimBase m) =>
   Context s ->
+  -- | See 'toTypedFunc'.
   TypedFunc s f ->
   f
 callFunc ctx typedFunc = unsafePerformIO $ mask_ $ do
