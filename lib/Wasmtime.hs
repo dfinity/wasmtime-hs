@@ -469,7 +469,7 @@ newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
 withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
 withFuncType funcType = withForeignPtr (unFuncType funcType)
 
-newFuncType :: forall f. Apply f => Proxy f -> IO FuncType
+newFuncType :: forall f. Funcable f => Proxy f -> IO FuncType
 newFuncType _proxy = do
   withKinds ps $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
     withKinds rs $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
@@ -580,7 +580,7 @@ newtype Func s = Func {unFunc :: C'wasmtime_func_t}
 
 newFunc ::
   forall f r s m.
-  ( Apply f,
+  ( Funcable f,
     Result f ~ m r,
     Show r,
     MonadPrim s m,
@@ -616,7 +616,9 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
       -- TODO
       pure nullPtr
 
-class Apply f where
+-- | Class of Haskell functions / actions that can be imported into and exported
+-- from WASM modules.
+class Funcable f where
   type Result f :: Type
 
   params :: Proxy f -> [C'wasm_valkind_t]
@@ -628,7 +630,7 @@ class Apply f where
   importCall :: f -> Ptr C'wasmtime_val_t -> Int -> IO (Maybe (Result f))
   exportCall :: ForeignPtr C'wasmtime_val_raw_t -> Int -> CSize -> Context s -> Func s -> f
 
-instance (Kind a, KindMatch a, Storable a, Apply b) => Apply (a -> b) where
+instance (Kind a, KindMatch a, Storable a, Funcable b) => Funcable (a -> b) where
   type Result (a -> b) = Result b
 
   params _proxy = kind (Proxy @a) : params (Proxy @b)
@@ -657,7 +659,7 @@ instance (Kind a, KindMatch a, Storable a, Apply b) => Apply (a -> b) where
       poke (castPtr cur_pos) x
       pure $ exportCall args_and_results_fp (ix + 1) len ctx func
 
-instance Results r => Apply (IO r) where
+instance Results r => Funcable (IO r) where
   type Result (IO r) = IO r
 
   params _proxy = []
@@ -686,7 +688,7 @@ instance Results r => Apply (IO r) where
             -- TODO: handle traps!!!
             pure undefined -- TODO
 
-instance Results r => Apply (ST s r) where
+instance Results r => Funcable (ST s r) where
   type Result (ST s r) = ST s r
 
   params _proxy = []
@@ -725,7 +727,7 @@ newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
 -- | Type-hint an expected type f for the Func, and let the Context "typecheck"
 --
 -- Just (someTypedExportedFunc :: TypedFunc (IO ())) <- fromFunc ctx someExportedFunc
-toTypedFunc :: forall s f. Apply f => Context s -> Func s -> Maybe (TypedFunc s f)
+toTypedFunc :: forall s f. Funcable f => Context s -> Func s -> Maybe (TypedFunc s f)
 toTypedFunc ctx func = unsafePerformIO $ do
   withContext ctx $ \ctx_ptr ->
     with (unFunc func) $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
@@ -763,7 +765,7 @@ toTypedFunc ctx func = unsafePerformIO $ do
 
 callFunc ::
   forall f r s m.
-  (Apply f, Result f ~ m r, MonadPrim s m, PrimBase m) =>
+  (Funcable f, Result f ~ m r, MonadPrim s m, PrimBase m) =>
   Context s ->
   TypedFunc s f ->
   f
