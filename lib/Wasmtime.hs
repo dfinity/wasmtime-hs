@@ -490,19 +490,28 @@ newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
 withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
 withFuncType funcType = withForeignPtr (unFuncType funcType)
 
-newFuncType :: forall f. Funcable f => Proxy f -> IO FuncType
-newFuncType _proxy = do
-  withKinds ps $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
-    withKinds rs $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
+newFuncType ::
+  forall f m r.
+  ( Funcable f,
+    Result f ~ m (Either Trap r),
+    Results r
+  ) =>
+  Proxy f ->
+  IO FuncType
+newFuncType _proxy = mask_ $ do
+  withKinds ps psN $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
+    withKinds rs rsN $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
       functype_ptr <- c'wasm_functype_new params_ptr result_ptr
       FuncType <$> newForeignPtr p'wasm_functype_delete functype_ptr
   where
-    ps = params (Proxy @f)
-    rs = result (Proxy @f)
+    ps = params $ Proxy @f
+    psN = paramsLen $ Proxy @f
+    rs = results $ Proxy @r
+    rsN = resultsLen $ Proxy @r
 
-withKinds :: [C'wasm_valkind_t] -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
-withKinds kinds f =
-  allocaArray n $ \(valtypes_ptr :: Ptr (Ptr C'wasm_valtype_t)) -> mask_ $ do
+withKinds :: [C'wasm_valkind_t] -> Int -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
+withKinds kinds n f =
+  allocaArray n $ \(valtypes_ptr :: Ptr (Ptr C'wasm_valtype_t)) -> do
     for_ (zip [0 ..] kinds) $ \(ix, k) -> do
       -- FIXME: is the following a memory leak?
       valtype_ptr <- c'wasm_valtype_new k
@@ -510,8 +519,6 @@ withKinds kinds f =
     (valtype_vec_ptr :: Ptr C'wasm_valtype_vec_t) <- malloc
     c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr
     f valtype_vec_ptr
-  where
-    n = length kinds
 
 class Storable a => Kind a where
   kind :: Proxy a -> C'wasm_valkind_t
@@ -532,13 +539,13 @@ instance Kind Word128 where kind _proxy = c'WASMTIME_V128
 
 class Results r where
   results :: Proxy r -> [C'wasm_valkind_t]
-  numResults :: Proxy r -> Int
+  resultsLen :: Proxy r -> Int
   writeResults :: Ptr C'wasmtime_val_t -> r -> IO ()
   readResults :: Ptr C'wasmtime_val_raw_t -> IO r
 
 instance Results () where
   results _proxy = []
-  numResults _proxy = 0
+  resultsLen _proxy = 0
   writeResults _result_ptr () = pure ()
   readResults _result_ptr = pure ()
 
@@ -560,31 +567,31 @@ instance Results () where
 
 instance Results Int32 where
   results proxy = [kind proxy]
-  numResults _proxy = 1
+  resultsLen _proxy = 1
   writeResults = pokeVal
   readResults = peekRawVal
 
 instance Results Int64 where
   results proxy = [kind proxy]
-  numResults _proxy = 1
+  resultsLen _proxy = 1
   writeResults = pokeVal
   readResults = peekRawVal
 
 instance Results Float where
   results proxy = [kind proxy]
-  numResults _proxy = 1
+  resultsLen _proxy = 1
   writeResults = pokeVal
   readResults = peekRawVal
 
 instance Results Double where
   results proxy = [kind proxy]
-  numResults _proxy = 1
+  resultsLen _proxy = 1
   writeResults = pokeVal
   readResults = peekRawVal
 
 instance Results Word128 where
   results proxy = [kind proxy]
-  numResults _proxy = 1
+  resultsLen _proxy = 1
   writeResults = pokeVal
   readResults = peekRawVal
 
@@ -600,7 +607,7 @@ peekRawVal = peek . castPtr
 
 instance (Kind a, Kind b) => Results (a, b) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b)]
-  numResults _proxy = 2
+  resultsLen _proxy = 2
   writeResults result_ptr (a, b) = do
     pokeVal result_ptr a
     pokeVal (advancePtr result_ptr 1) b
@@ -611,7 +618,7 @@ instance (Kind a, Kind b) => Results (a, b) where
 
 instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c)]
-  numResults _proxy = 3
+  resultsLen _proxy = 3
   writeResults result_ptr (a, b, c) = do
     pokeVal result_ptr a
     pokeVal (advancePtr result_ptr 1) b
@@ -624,7 +631,7 @@ instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
 
 instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
   results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c), kind (Proxy @d)]
-  numResults _proxy = 4
+  resultsLen _proxy = 4
   writeResults result_ptr (a, b, c, d) = do
     pokeVal result_ptr a
     pokeVal (advancePtr result_ptr 1) b
@@ -719,7 +726,7 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
                       ++ "!"
 
     expected :: Int
-    expected = numResults $ Proxy @r
+    expected = resultsLen $ Proxy @r
 
 -- | Class of Haskell functions / actions that can be imported into and exported
 -- from WASM modules.
@@ -727,10 +734,7 @@ class Funcable f where
   type Result f :: Type
 
   params :: Proxy f -> [C'wasm_valkind_t]
-  result :: Proxy f -> [C'wasm_valkind_t]
-
   paramsLen :: Proxy f -> Int
-  resultLen :: Proxy f -> Int
 
   -- | Call the given Haskell function / action @f@ on the arguments stored in
   -- the given 'C'wasmtime_val_t' array.
@@ -760,10 +764,7 @@ instance (Kind a, Funcable b) => Funcable (a -> b) where
   type Result (a -> b) = Result b
 
   params _proxy = kind (Proxy @a) : params (Proxy @b)
-  result _proxy = result (Proxy @b)
-
   paramsLen _proxy = 1 + paramsLen (Proxy @b)
-  resultLen _proxy = resultLen (Proxy @b)
 
   importCall _ _ 0 = pure Nothing
   importCall f p n = do
@@ -789,10 +790,7 @@ instance Results r => Funcable (IO (Either Trap r)) where
   type Result (IO (Either Trap r)) = IO (Either Trap r)
 
   params _proxy = []
-  result _proxy = results (Proxy @r)
-
   paramsLen _proxy = 0
-  resultLen _proxy = numResults (Proxy @r)
 
   importCall x _ 0 = pure $ Just x
   importCall _ _ _ = pure Nothing
@@ -820,10 +818,7 @@ instance Results r => Funcable (ST s (Either Trap r)) where
   type Result (ST s (Either Trap r)) = ST s (Either Trap r)
 
   params _proxy = []
-  result _proxy = results (Proxy @r)
-
   paramsLen _proxy = 0
-  resultLen _proxy = numResults (Proxy @r)
 
   importCall x _ 0 = pure $ Just x
   importCall _ _ _ = pure Nothing
@@ -850,8 +845,8 @@ newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
 --     print r -- prints "3"
 -- @
 toTypedFunc ::
-  forall s m f.
-  (MonadPrim s m, Funcable f) =>
+  forall s m f r.
+  (MonadPrim s m, Funcable f, Result f ~ m (Either Trap r), Results r) =>
   Context s ->
   Func s ->
   m (Maybe (TypedFunc s f))
@@ -871,7 +866,7 @@ toTypedFunc ctx func = unsafeIOToPrim $ do
         else pure Nothing
   where
     desired_params = params $ Proxy @f
-    desired_results = result $ Proxy @f
+    desired_results = results $ Proxy @r
 
     kindsOf :: C'wasm_valtype_vec_t -> IO [C'wasm_valkind_t]
     kindsOf valtype_vec = go s []
@@ -893,7 +888,12 @@ toTypedFunc ctx func = unsafeIOToPrim $ do
 -- | Call an exported 'TypedFunc'.
 callFunc ::
   forall f r s m.
-  (Funcable f, Result f ~ m (Either Trap r), MonadPrim s m, PrimBase m) =>
+  ( Funcable f,
+    Result f ~ m (Either Trap r),
+    Results r,
+    MonadPrim s m,
+    PrimBase m
+  ) =>
   Context s ->
   -- | See 'toTypedFunc'.
   TypedFunc s f ->
@@ -904,7 +904,7 @@ callFunc ctx typedFunc = unsafePerformIO $ mask_ $ do
   pure $ exportCall args_and_results_fp 0 (fromIntegral len) ctx (fromTypedFunc typedFunc)
   where
     nargs = paramsLen $ Proxy @f
-    nres = resultLen $ Proxy @f
+    nres = resultsLen $ Proxy @r
     len = max nargs nres
 
 --------------------------------------------------------------------------------
@@ -941,16 +941,20 @@ fromExtern (Extern t v)
   where
     rep = typeRep :: TypeRep e
 
-withExterns :: [Extern s] -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
+withExterns :: Vector (Extern s) -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
 withExterns externs f = allocaArray n $ \externs_ptr0 ->
-  let go _externs_ptr [] = f externs_ptr0 $ fromIntegral n
-      go externs_ptr ((Extern _typeRep (e :: e s)) : es) = do
-        poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
-        poke (castPtr (p'wasmtime_extern'of externs_ptr)) $ getCExtern e
-        go (advancePtr externs_ptr 1) es
-   in go externs_ptr0 externs
+  let pokeExternsFrom ix
+        | ix == n = f externs_ptr0 $ fromIntegral n
+        | otherwise =
+            case V.unsafeIndex externs ix of
+              Extern _typeRep (e :: e s) -> do
+                let externs_ptr = advancePtr externs_ptr0 ix
+                poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
+                poke (castPtr (p'wasmtime_extern'of externs_ptr)) $ getCExtern e
+                pokeExternsFrom (ix + 1)
+   in pokeExternsFrom 0
   where
-    n = length externs
+    n = V.length externs
 
 --------------------------------------------------------------------------------
 -- Instances
@@ -964,7 +968,7 @@ newtype Instance s = Instance {unInstance :: ForeignPtr C'wasmtime_instance_t}
 -- This function will instantiate a WebAssembly module with the provided
 -- imports, creating a WebAssembly instance. The returned instance can then
 -- afterwards be inspected for exports.
-newInstance :: MonadPrim s m => Context s -> Module -> [Extern s] -> m (Instance s)
+newInstance :: MonadPrim s m => Context s -> Module -> Vector (Extern s) -> m (Instance s)
 newInstance ctx m externs = unsafeIOToPrim $
   withContext ctx $ \ctx_ptr ->
     withModule m $ \mod_ptr ->
@@ -1022,8 +1026,8 @@ getExport ctx inst name = unsafeIOToPrim $
 -- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally checks if
 -- the type of the function matches the desired type @f@ ('toTypedFunc').
 getExportedTypedFunc ::
-  forall s m f.
-  (MonadPrim s m, Funcable f) =>
+  forall s m f r.
+  (MonadPrim s m, Funcable f, Result f ~ m (Either Trap r), Results r) =>
   Context s ->
   Instance s ->
   String ->
