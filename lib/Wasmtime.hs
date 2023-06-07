@@ -952,7 +952,7 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
               Extern _typeRep (e :: e s) -> do
                 let externs_ptr = advancePtr externs_ptr0 ix
                 poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
-                poke (castPtr (p'wasmtime_extern'of externs_ptr)) $ getCExtern e
+                poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ getCExtern e
                 pokeExternsFrom (ix + 1)
    in pokeExternsFrom 0
   where
