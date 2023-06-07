@@ -1049,3 +1049,5 @@ instance Show WasmtimeError where
         data_ptr <- peek $ p'wasm_byte_vec_t'data p
         size <- peek $ p'wasm_byte_vec_t'size p
         peekCStringLen (data_ptr, fromIntegral size)
+
+
