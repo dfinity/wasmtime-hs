@@ -128,7 +128,7 @@ import Bindings.Wasmtime.Store
 import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
 import Control.Exception (Exception, mask_, onException, throwIO, try)
-import Control.Monad (when)
+import Control.Monad (when, (>=>))
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
 import Control.Monad.ST (ST, runST)
 import qualified Data.ByteString as B
@@ -1152,7 +1152,7 @@ trapTrace trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
     frame_vec <- peek frame_vec_ptr
     let sz = fromIntegral $ c'wasm_frame_vec_t'size frame_vec :: Int
     let dt = c'wasm_frame_vec_t'data frame_vec :: Ptr (Ptr C'wasm_frame_t)
-    vec <- V.generateM sz $ \ix -> peek (advancePtr dt ix) >>= newFrameFromPtr
+    vec <- V.generateM sz $ peekElemOff dt >=> newFrameFromPtr
     c'wasm_frame_vec_delete frame_vec_ptr
     pure vec
 
