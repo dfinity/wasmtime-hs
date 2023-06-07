@@ -62,16 +62,7 @@ module Bindings.Wasm where
 
 #opaque_t wasm_valtype_t
 
-#opaque_t wasm_trap_t
-
 #opaque_t wasm_externtype_t
-
-#starttype struct wasm_frame_vec_t
-#field size , CSize
-#field data , Ptr (Ptr <wasm_frame_t>)
-#stoptype
-
-#opaque_t wasm_frame_t
 
 #starttype struct wasm_importtype_vec_t
 #field size , CSize
@@ -97,6 +88,51 @@ module Bindings.Wasm where
 #ccall wasm_functype_results , Ptr <wasm_functype_t> -> IO (Ptr <wasm_valtype_vec_t)
 #ccall wasm_valtype_kind , Ptr <wasm_valtype_t> -> IO (<wasm_valkind_t>)
 
+#synonym_t wasm_message_t , <wasm_byte_vec_t>
+
+--------------------------------------------------------------------------------
+-- Frames
+--------------------------------------------------------------------------------
+
+#opaque_t wasm_frame_t
+
+#starttype struct wasm_frame_vec_t
+#field size , CSize
+#field data , Ptr (Ptr <wasm_frame_t>)
+#stoptype
+
+#ccall wasm_frame_delete , Ptr <wasm_frame_t> -> IO ()
+
+#ccall wasm_frame_vec_new_empty , Ptr <wasm_frame_vec_t> -> IO ()
+
+#ccall wasm_frame_vec_new_uninitialized , Ptr <wasm_frame_vec_t> -> CSize -> IO ()
+
+#ccall wasm_frame_vec_new , Ptr <wasm_frame_vec_t> -> CSize -> Ptr <wasm_frame_t> -> IO ()
+
+#ccall wasm_frame_vec_copy , Ptr <wasm_frame_vec_t> -> Ptr <wasm_frame_vec_t> -> IO ()
+
+#ccall wasm_frame_vec_delete , Ptr <wasm_frame_vec_t> -> IO ()
+
+#ccall wasm_frame_copy , Ptr <wasm_frame_t> -> IO (Ptr <wasm_frame_t>)
+
+#ccall wasm_frame_func_index , Ptr <wasm_frame_t> -> IO Word32
+
+#ccall wasm_frame_func_offset , Ptr <wasm_frame_t> -> IO Word32
+
+#ccall wasm_frame_module_offset , Ptr <wasm_frame_t> -> IO Word32
+
+--------------------------------------------------------------------------------
+-- Traps
+--------------------------------------------------------------------------------
+
+#opaque_t wasm_trap_t
+
+#ccall wasm_trap_delete , Ptr <wasm_trap_t> -> IO ()
+
+#ccall wasm_trap_copy , Ptr <wasm_trap_t> -> IO (Ptr <wasm_trap_t>)
+
 #ccall wasm_trap_message , Ptr <wasm_trap_t> -> Ptr <wasm_message_t> -> IO ()
 
-#synonym_t wasm_message_t , <wasm_byte_vec_t>
+#ccall wasm_trap_origin , Ptr <wasm_trap_t> -> IO (Ptr <wasm_frame_t>)
+
+#ccall wasm_trap_trace , Ptr <wasm_trap_t> -> Ptr <wasm_frame_vec_t> -> IO ()

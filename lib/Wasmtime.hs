@@ -93,6 +93,22 @@ module Wasmtime
     getExport,
     getExportedTypedFunc,
 
+    -- * Traps
+    Trap,
+    newTrap,
+    trapCode,
+    TrapCode (..),
+    trapOrigin,
+    trapTrace,
+
+    -- * Frames
+    Frame,
+    frameFuncName,
+    frameModuleName,
+    frameFuncIndex,
+    frameFuncOffset,
+    frameModuleOffset,
+
     -- * Errors
     WasmException (..),
     WasmtimeError,
@@ -108,6 +124,7 @@ import Bindings.Wasmtime.Func
 import Bindings.Wasmtime.Instance
 import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
+import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
 import Control.Exception (Exception, mask_, onException, throwIO, try)
 import Control.Monad (when)
@@ -120,8 +137,11 @@ import Data.Int (Int32, Int64)
 import Data.Kind (Type)
 import Data.Proxy (Proxy (..))
 import Data.Typeable (Typeable)
+import Data.Vector.Generic (Vector)
+import qualified Data.Vector.Generic as VG
+import qualified Data.Vector.Generic.Mutable as VGM
 import Data.WideWord.Word128 (Word128)
-import Data.Word (Word64, Word8)
+import Data.Word (Word32, Word64, Word8)
 import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
@@ -643,7 +663,7 @@ type FuncCallback =
 newFunc ::
   forall f r s m.
   ( Funcable f,
-    Result f ~ m r,
+    Result f ~ m (Either Trap r),
     Results r,
     MonadPrim s m,
     PrimBase m
@@ -666,22 +686,37 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
     callback _env _caller args_ptr nargs result_ptr nresults = do
       mbResult <- importCall f args_ptr (fromIntegral nargs)
       case mbResult of
-        Nothing -> error "TODO"
-        Just (action :: m r) -> do
-          r <- unsafePrimToIO action
-          let n = fromIntegral nresults
-          if n == expected
-            then writeResults result_ptr r
-            else -- TODO: use throwIO
-
-              error $
-                "Expected the number of results to be "
-                  ++ show expected
-                  ++ " but got "
-                  ++ show n
-
-      -- TODO
-      pure nullPtr
+        Nothing -> do
+          -- TODO: use throwIO or trap!
+          error "The type of the imported WASM function doesn't match the desired Haskell type!"
+        Just (action :: m (Either Trap r)) -> do
+          e <- unsafePrimToIO action
+          case e of
+            Left trap ->
+              -- As the docs of <wasmtime_func_callback_t> mention:
+              --
+              -- > This callback can optionally return a wasm_trap_t indicating
+              -- > that a trap should be raised in WebAssembly. It's expected
+              -- > that in this case the caller relinquishes ownership of the
+              -- > trap and it is passed back to the engine.
+              --
+              -- Since trap is a ForeignPtr which will be garbage collected
+              -- later we need to copy the trap to safely hand it to the engine.
+              withTrap trap c'wasm_trap_copy
+            Right r -> do
+              let n = fromIntegral nresults
+              if n == expected
+                then do
+                  writeResults result_ptr r
+                  pure nullPtr
+                else do
+                  -- TODO: use throwIO or trap!
+                  error $
+                    "Expected the number of results to be "
+                      ++ show expected
+                      ++ " but got "
+                      ++ show n
+                      ++ "!"
 
     expected :: Int
     expected = numResults $ Proxy @r
@@ -750,8 +785,8 @@ instance (Kind a, Funcable b) => Funcable (a -> b) where
       poke (castPtr cur_pos) x
       pure $ exportCall args_and_results_fp (ix + 1) len ctx func
 
-instance Results r => Funcable (IO r) where
-  type Result (IO r) = IO r
+instance Results r => Funcable (IO (Either Trap r)) where
+  type Result (IO (Either Trap r)) = IO (Either Trap r)
 
   params _proxy = []
   result _proxy = results (Proxy @r)
@@ -777,21 +812,12 @@ instance Results r => Funcable (IO r) where
             checkWasmtimeError error_ptr
             trap_ptr <- peek trap_ptr_ptr
             -- TODO: handle traps properly!!!
-            when (trap_ptr /= nullPtr) $
-              alloca $ \(message_ptr :: Ptr C'wasm_message_t) -> do
-                c'wasm_trap_message trap_ptr message_ptr
-                message_vec :: C'wasm_message_t <- peek message_ptr
-                message <-
-                  peekCStringLen
-                    ( c'wasm_byte_vec_t'data message_vec,
-                      fromIntegral $ c'wasm_byte_vec_t'size message_vec
-                    )
-                putStrLn $ "TRAP: " ++ message
+            if trap_ptr == nullPtr
+              then Right <$> readResults args_and_results_ptr
+              else Left <$> newTrapFromPtr trap_ptr
 
-            readResults args_and_results_ptr
-
-instance Results r => Funcable (ST s r) where
-  type Result (ST s r) = ST s r
+instance Results r => Funcable (ST s (Either Trap r)) where
+  type Result (ST s (Either Trap r)) = ST s (Either Trap r)
 
   params _proxy = []
   result _proxy = results (Proxy @r)
@@ -867,7 +893,7 @@ toTypedFunc ctx func = unsafeIOToPrim $ do
 -- | Call an exported 'TypedFunc'.
 callFunc ::
   forall f r s m.
-  (Funcable f, Result f ~ m r, MonadPrim s m, PrimBase m) =>
+  (Funcable f, Result f ~ m (Either Trap r), MonadPrim s m, PrimBase m) =>
   Context s ->
   -- | See 'toTypedFunc'.
   TypedFunc s f ->
@@ -1009,6 +1035,181 @@ getExportedTypedFunc ctx inst name = do
     Just (func :: Func s) -> toTypedFunc ctx func
 
 --------------------------------------------------------------------------------
+-- Traps
+--------------------------------------------------------------------------------
+
+-- | Under some conditions, certain WASM instructions may produce a
+-- trap, which immediately aborts execution. Traps cannot be handled
+-- by WebAssembly code, but are reported to the outside environment,
+-- where they will be caught.
+newtype Trap = Trap {unTrap :: ForeignPtr C'wasm_trap_t}
+
+-- | A trap with a given message.
+newTrap :: String -> Trap
+newTrap msg = unsafePerformIO $ withCStringLen msg $ \(p, n) ->
+  mask_ $ c'wasmtime_trap_new p (fromIntegral n) >>= newTrapFromPtr
+
+newTrapFromPtr :: Ptr C'wasm_trap_t -> IO Trap
+newTrapFromPtr = fmap Trap . newForeignPtr p'wasm_trap_delete
+
+withTrap :: Trap -> (Ptr C'wasm_trap_t -> IO a) -> IO a
+withTrap trap = withForeignPtr (unTrap trap)
+
+instance Show Trap where
+  show trap = unsafePerformIO $
+    withTrap trap $ \trap_ptr ->
+      alloca $ \(wasm_msg_ptr :: Ptr C'wasm_message_t) -> do
+        c'wasm_trap_message trap_ptr wasm_msg_ptr
+        let p = castPtr wasm_msg_ptr :: Ptr C'wasm_byte_vec_t
+        peekByteVecAsString p
+
+instance Exception Trap
+
+-- | Attempts to extract the trap code from the given trap.
+--
+-- Returns 'Just' the trap code if the trap is an instruction trap
+-- triggered while executing Wasm. Returns 'Nothing' otherwise,
+-- i.e. when the trap was created using 'newTrap' for example.
+trapCode :: Trap -> Maybe TrapCode
+trapCode trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
+  alloca $ \code_ptr -> do
+    isInstructionTrap <- c'wasmtime_trap_code trap_ptr code_ptr
+    if isInstructionTrap
+      then Just . toTrapCode <$> peek code_ptr
+      else pure Nothing
+
+toTrapCode :: C'wasmtime_trap_code_t -> TrapCode
+toTrapCode code
+  | code == c'WASMTIME_TRAP_CODE_STACK_OVERFLOW = TRAP_CODE_STACK_OVERFLOW
+  | code == c'WASMTIME_TRAP_CODE_MEMORY_OUT_OF_BOUNDS = TRAP_CODE_MEMORY_OUT_OF_BOUNDS
+  | code == c'WASMTIME_TRAP_CODE_HEAP_MISALIGNED = TRAP_CODE_HEAP_MISALIGNED
+  | code == c'WASMTIME_TRAP_CODE_TABLE_OUT_OF_BOUNDS = TRAP_CODE_TABLE_OUT_OF_BOUNDS
+  | code == c'WASMTIME_TRAP_CODE_INDIRECT_CALL_TO_NULL = TRAP_CODE_INDIRECT_CALL_TO_NULL
+  | code == c'WASMTIME_TRAP_CODE_BAD_SIGNATURE = TRAP_CODE_BAD_SIGNATURE
+  | code == c'WASMTIME_TRAP_CODE_INTEGER_OVERFLOW = TRAP_CODE_INTEGER_OVERFLOW
+  | code == c'WASMTIME_TRAP_CODE_INTEGER_DIVISION_BY_ZERO = TRAP_CODE_INTEGER_DIVISION_BY_ZERO
+  | code == c'WASMTIME_TRAP_CODE_BAD_CONVERSION_TO_INTEGER = TRAP_CODE_BAD_CONVERSION_TO_INTEGER
+  | code == c'WASMTIME_TRAP_CODE_UNREACHABLE_CODE_REACHED = TRAP_CODE_UNREACHABLE_CODE_REACHED
+  | code == c'WASMTIME_TRAP_CODE_INTERRUPT = TRAP_CODE_INTERRUPT
+  | code == c'WASMTIME_TRAP_CODE_OUT_OF_FUEL = TRAP_CODE_OUT_OF_FUEL
+  | otherwise = error $ "Unknown trap code " ++ show code
+
+-- | Trap codes for instruction traps.
+data TrapCode
+  = -- | The current stack space was exhausted.
+    TRAP_CODE_STACK_OVERFLOW
+  | -- | An out-of-bounds memory access.
+    TRAP_CODE_MEMORY_OUT_OF_BOUNDS
+  | -- | A wasm atomic operation was presented with a not-naturally-aligned
+    -- linear-memory address.
+    TRAP_CODE_HEAP_MISALIGNED
+  | -- | An out-of-bounds access to a table.
+    TRAP_CODE_TABLE_OUT_OF_BOUNDS
+  | -- | Indirect call to a null table entry.
+    TRAP_CODE_INDIRECT_CALL_TO_NULL
+  | -- | Signature mismatch on indirect call.
+    TRAP_CODE_BAD_SIGNATURE
+  | -- | An integer arithmetic operation caused an overflow.
+    TRAP_CODE_INTEGER_OVERFLOW
+  | -- | An integer division by zero.
+    TRAP_CODE_INTEGER_DIVISION_BY_ZERO
+  | -- | Failed float-to-int conversion.
+    TRAP_CODE_BAD_CONVERSION_TO_INTEGER
+  | -- | Code that was supposed to have been unreachable was reached.
+    TRAP_CODE_UNREACHABLE_CODE_REACHED
+  | -- | Execution has potentially run too long and may be interrupted.
+    TRAP_CODE_INTERRUPT
+  | -- | Execution has run out of the configured fuel amount.
+    TRAP_CODE_OUT_OF_FUEL
+  deriving (Show, Eq)
+
+-- | Returns 'Just' the top frame of the wasm stack responsible for this trap.
+--
+-- This function may return 'Nothing', for example, for traps created when there
+-- wasn't anything on the wasm stack.
+trapOrigin :: Trap -> Maybe Frame
+trapOrigin trap = unsafePerformIO $ withTrap trap $ \trap_ptr -> mask_ $ do
+  frame_ptr <- c'wasm_trap_origin trap_ptr
+  if frame_ptr == nullPtr
+    then pure Nothing
+    else Just <$> newFrameFromPtr frame_ptr
+
+-- | Returns the trace of wasm frames for this trap.
+--
+-- Frames are listed in order of increasing depth, with the most recently called
+-- function at the front of the vector and the base function on the stack at the
+-- end.
+trapTrace :: (Vector vec Frame) => Trap -> vec Frame
+trapTrace trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
+  alloca $ \(frame_vec_ptr :: Ptr C'wasm_frame_vec_t) -> mask_ $ do
+    c'wasm_trap_trace trap_ptr frame_vec_ptr
+    frame_vec <- peek frame_vec_ptr
+    let sz = fromIntegral $ c'wasm_frame_vec_t'size frame_vec :: Int
+    let dt = c'wasm_frame_vec_t'data frame_vec :: Ptr (Ptr C'wasm_frame_t)
+    mutVec <- VGM.generateM sz $ \ix -> do
+      frame_ptr <- peek $ advancePtr dt ix
+      newFrameFromPtr frame_ptr
+    vec <- VG.unsafeFreeze mutVec
+    c'wasm_frame_vec_delete frame_vec_ptr
+    pure vec
+
+--------------------------------------------------------------------------------
+-- Frames
+--------------------------------------------------------------------------------
+
+-- | A frame of a wasm stack trace.
+--
+-- Can be retrieved using 'trapOrigin' or 'trapTrace'.
+newtype Frame = Frame {unFrame :: ForeignPtr C'wasm_frame_t}
+
+newFrameFromPtr :: Ptr C'wasm_frame_t -> IO Frame
+newFrameFromPtr = fmap Frame . newForeignPtr p'wasm_frame_delete
+
+withFrame :: Frame -> (Ptr C'wasm_frame_t -> IO a) -> IO a
+withFrame frame = withForeignPtr (unFrame frame)
+
+-- | Returns 'Just' a human-readable name for this frame's function.
+--
+-- This function will attempt to load a human-readable name for the function
+-- this frame points to. This function may return 'Nothing'.
+frameFuncName :: Frame -> Maybe String
+frameFuncName frame = unsafePerformIO $ withFrame frame $ \frame_ptr -> do
+  name_ptr <- c'wasmtime_frame_func_name frame_ptr
+  if name_ptr == nullPtr
+    then pure Nothing
+    else do
+      let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
+      Just <$> peekByteVecAsString p
+
+-- | Returns 'Just' a human-readable name for this frame's module.
+--
+-- This function will attempt to load a human-readable name for the module this
+-- frame points to. This function may return 'Nothing'.
+frameModuleName :: Frame -> Maybe String
+frameModuleName frame = unsafePerformIO $ withFrame frame $ \frame_ptr -> do
+  name_ptr <- c'wasmtime_frame_module_name frame_ptr
+  if name_ptr == nullPtr
+    then pure Nothing
+    else do
+      let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
+      Just <$> peekByteVecAsString p
+
+-- | Returns the function index in the original wasm module that this
+-- frame corresponds to.
+frameFuncIndex :: Frame -> Word32
+frameFuncIndex frame = unsafePerformIO $ withFrame frame c'wasm_frame_func_index
+
+-- | Returns the byte offset from the beginning of the function in the
+-- original wasm file to the instruction this frame points to.
+frameFuncOffset :: Frame -> Word32
+frameFuncOffset frame = unsafePerformIO $ withFrame frame c'wasm_frame_func_offset
+
+-- | Returns the byte offset from the beginning of the original wasm
+-- file to the instruction this frame points to.
+frameModuleOffset :: Frame -> Word32
+frameModuleOffset frame = unsafePerformIO $ withFrame frame c'wasm_frame_module_offset
+
+--------------------------------------------------------------------------------
 -- Errors
 --------------------------------------------------------------------------------
 
@@ -1044,8 +1245,15 @@ instance Show WasmtimeError where
     withWasmtimeError wasmtimeError $ \error_ptr ->
       alloca $ \(wasm_name_ptr :: Ptr C'wasm_name_t) -> do
         c'wasmtime_error_message error_ptr wasm_name_ptr
-        let p :: Ptr C'wasm_byte_vec_t
-            p = castPtr wasm_name_ptr
-        data_ptr <- peek $ p'wasm_byte_vec_t'data p
-        size <- peek $ p'wasm_byte_vec_t'size p
-        peekCStringLen (data_ptr, fromIntegral size)
+        let p = castPtr wasm_name_ptr :: Ptr C'wasm_byte_vec_t
+        peekByteVecAsString p
+
+--------------------------------------------------------------------------------
+-- Utils
+--------------------------------------------------------------------------------
+
+peekByteVecAsString :: Ptr C'wasm_byte_vec_t -> IO String
+peekByteVecAsString p = do
+  data_ptr <- peek $ p'wasm_byte_vec_t'data p
+  size <- peek $ p'wasm_byte_vec_t'size p
+  peekCStringLen (data_ptr, fromIntegral size)
