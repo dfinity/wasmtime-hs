@@ -45,9 +45,6 @@ main = do
 
   putStrLn "All finished!"
 
-  -- TODO
-  pure ()
-
 hello :: IO ()
 hello = do
   putStrLn "Calling back..."
