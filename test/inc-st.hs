@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 
--- | Haskell translation of: https://docs.wasmtime.dev/examples-c-hello-world.html
+-- | Demo on how to use wasmtime within the ST monad.
 module Main (main) where
 
 import Control.Exception (throwIO)
