@@ -975,16 +975,17 @@ getExport ctx inst name = unsafeIOToPrim $
 -- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally checks if
 -- the type of the function matches the desired type @f@ ('toTypedFunc').
 getExportedTypedFunc ::
+  forall s m f.
   (MonadPrim s m, Funcable f) =>
   Context s ->
   Instance s ->
   String ->
   m (Maybe (TypedFunc s f))
 getExportedTypedFunc ctx inst name = do
-  mbFunc <- (>>= fromExtern) <$> getExport ctx inst name
-  case mbFunc of
+  mbExtern <- getExport ctx inst name
+  case mbExtern >>= fromExtern of
     Nothing -> pure Nothing
-    Just func -> toTypedFunc ctx func
+    Just (func :: Func s) -> toTypedFunc ctx func
 
 --------------------------------------------------------------------------------
 -- Errors
