@@ -2,7 +2,7 @@
 {-# OPTIONS_GHC -Wno-unused-imports #-}
 
 #include <bindings.dsl.h>
-#include <wasmtime/extern.h>
+#include <wasmtime/global.h>
 
 -- | <https://docs.wasmtime.dev/c-api/global_8h.html>
 module Bindings.Wasmtime.Global where
@@ -10,6 +10,8 @@ module Bindings.Wasmtime.Global where
 
 import Bindings.Wasm
 import Bindings.Wasmtime.Store
+import Bindings.Wasmtime.Extern
+import Bindings.Wasmtime.Val
 import Data.Word (Word8, Word64)
 
 #ccall wasmtime_global_new ,  Ptr <wasmtime_context_t> -> Ptr <wasm_globaltype_new> -> Ptr <wasmtime_val_t> -> Ptr <wasmtime_global_t> -> IO (Ptr <wasmtime_error_t>)
