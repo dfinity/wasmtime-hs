@@ -697,8 +697,29 @@ class Funcable f where
   paramsLen :: Proxy f -> Int
   resultLen :: Proxy f -> Int
 
-  importCall :: f -> Ptr C'wasmtime_val_t -> Int -> IO (Maybe (Result f))
-  exportCall :: ForeignPtr C'wasmtime_val_raw_t -> Int -> CSize -> Context s -> Func s -> f
+  -- | Call the given Haskell function / action @f@ on the arguments stored in
+  -- the given 'C'wasmtime_val_t' array.
+  importCall ::
+    -- | Haskell function / action.
+    f ->
+    -- | Array of parameters of the function.
+    Ptr C'wasmtime_val_t ->
+    -- | Number of parameters.
+    Int ->
+    IO (Maybe (Result f))
+
+  -- | Returns a Haskell function / action of type @f@ which, when applied to
+  -- parameters, will call the given exported 'Func' on those parameters.
+  exportCall ::
+    -- | Array where to poke the parameters of the function.
+    ForeignPtr C'wasmtime_val_raw_t ->
+    -- | Index where to poke the next parameter in the previous array.
+    Int ->
+    -- | Total number of parameters.
+    CSize ->
+    Context s ->
+    Func s ->
+    f
 
 instance (Kind a, Funcable b) => Funcable (a -> b) where
   type Result (a -> b) = Result b
