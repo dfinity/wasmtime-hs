@@ -32,10 +32,8 @@ main = do
 
   inst <- newInstance ctx myModule []
 
-  Just e <- getExport ctx inst "gcd"
-
-  let Just (gcdFunc :: Func RealWorld) = fromExtern e
-  let Just (gcdTypedFunc :: TypedFunc RealWorld (Int32 -> Int32 -> IO Int32)) = toTypedFunc ctx gcdFunc
+  Just (gcdTypedFunc :: TypedFunc RealWorld (Int32 -> Int32 -> IO Int32)) <-
+    getExportedTypedFunc ctx inst "gcd"
 
   let a = 6
       b = 27

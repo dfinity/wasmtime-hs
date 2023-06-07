@@ -91,6 +91,7 @@ module Wasmtime
     Instance,
     newInstance,
     getExport,
+    getExportedTypedFunc,
 
     -- * Errors
     WasmException (..),
@@ -156,7 +157,7 @@ newEngineWithConfig cfg = mask_ $ do
   cfg_ptr <- c'wasm_config_new
   unConfig cfg cfg_ptr `onException` c'wasm_config_delete cfg_ptr
   engine_ptr <- c'wasm_engine_new_with_config cfg_ptr
-  checkAllocation engine_ptr
+  checkAllocation engine_ptr `onException` c'wasm_config_delete cfg_ptr
   Engine <$> newForeignPtr p'wasm_engine_delete engine_ptr
 
 --------------------------------------------------------------------------------
@@ -793,7 +794,7 @@ newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
 -- You can then call this 'TypedFunc' using 'callFunc' for example:
 --
 -- @
--- mbTypedFunc <- fromFunc ctx someExportedGcdFunc
+-- mbTypedFunc <- toTypedFunc ctx someExportedGcdFunc
 -- case mbTypedFunc of
 --   Nothing -> error "gcd did not have the expected type!"
 --   Just (gcdTypedFunc :: TypedFunc RealWorld (Int32 -> Int32 -> IO Int32)) -> do
@@ -801,8 +802,13 @@ newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
 --     r <- callFunc ctx gcdTypedFunc 6 27
 --     print r -- prints "3"
 -- @
-toTypedFunc :: forall s f. Funcable f => Context s -> Func s -> Maybe (TypedFunc s f)
-toTypedFunc ctx func = unsafePerformIO $ do
+toTypedFunc ::
+  forall s m f.
+  (MonadPrim s m, Funcable f) =>
+  Context s ->
+  Func s ->
+  m (Maybe (TypedFunc s f))
+toTypedFunc ctx func = unsafeIOToPrim $ do
   withContext ctx $ \ctx_ptr ->
     with (getWasmtimeFunc func) $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
       (functype_ptr :: Ptr C'wasm_functype_t) <- c'wasmtime_func_type ctx_ptr func_ptr
@@ -964,6 +970,21 @@ getExport ctx inst name = unsafeIOToPrim $
                   pure $ Just $ toExtern func
                 else pure Nothing
             else pure Nothing
+
+-- | Convenience function which gets the named export from the store
+-- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally checks if
+-- the type of the function matches the desired type @f@ ('toTypedFunc').
+getExportedTypedFunc ::
+  (MonadPrim s m, Funcable f) =>
+  Context s ->
+  Instance s ->
+  String ->
+  m (Maybe (TypedFunc s f))
+getExportedTypedFunc ctx inst name = do
+  mbFunc <- (>>= fromExtern) <$> getExport ctx inst name
+  case mbFunc of
+    Nothing -> pure Nothing
+    Just func -> toTypedFunc ctx func
 
 --------------------------------------------------------------------------------
 -- Errors

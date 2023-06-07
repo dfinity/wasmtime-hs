@@ -45,10 +45,8 @@ st engine myModule = do
 
   inst :: Instance s <- newInstance ctx myModule [funcExtern]
 
-  Just (e :: Extern s) <- getExport ctx inst "run"
-
-  let Just (runFunc :: Func s) = fromExtern e
-  let Just (runTypedFunc :: TypedFunc s (ST s ())) = toTypedFunc ctx runFunc
+  Just (runTypedFunc :: TypedFunc s (ST s ())) <-
+    getExportedTypedFunc ctx inst "run"
 
   callFunc ctx runTypedFunc
 

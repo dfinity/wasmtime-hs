@@ -39,10 +39,8 @@ main = do
   inst <- newInstance ctx myModule [funcExtern]
 
   putStrLn "Extracting export..."
-  Just e <- getExport ctx inst "run"
-
-  let Just (runFunc :: Func RealWorld) = fromExtern e
-  let Just (runTypedFunc :: TypedFunc RealWorld (IO ())) = toTypedFunc ctx runFunc
+  Just ((runTypedFunc :: TypedFunc RealWorld (IO ()))) <-
+    getExportedTypedFunc ctx inst "run"
 
   putStrLn "Calling export..."
   callFunc ctx runTypedFunc
