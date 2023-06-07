@@ -16,11 +16,7 @@ main = do
   hSetBuffering stdout NoBuffering
 
   putStrLn "Initializing..."
-  engine <-
-    newEngineWithConfig $
-      setConsumeFuel True
-        <> setDebugInfo False
-        <> setDebugInfo True
+  engine <- newEngine
 
   store <- newStore engine
 
@@ -38,19 +34,16 @@ main = do
   func <- newFunc ctx hello
 
   putStrLn "Instantiating module..."
-  let funcExtern = toExtern func
-
-  inst <- newInstance ctx myModule [funcExtern]
+  inst <- newInstance ctx myModule [toExtern func]
 
   putStrLn "Extracting export..."
-  Just e <- getExport ctx inst "run"
-
-  let Just (_runFunc :: Func RealWorld) = fromExtern e
+  Just ((runTypedFunc :: TypedFunc RealWorld (IO ()))) <-
+    getExportedTypedFunc ctx inst "run"
 
   putStrLn "Calling export..."
+  callFunc ctx runTypedFunc
 
-  -- TODO
-  pure ()
+  putStrLn "All finished!"
 
 hello :: IO ()
 hello = do

@@ -37,7 +37,8 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "wasmtime": "wasmtime"
       }
     },
     "systems": {
@@ -52,6 +53,23 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default",
+        "type": "github"
+      }
+    },
+    "wasmtime": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1685134521,
+        "narHash": "sha256-wZJ6Dq8QJBRokZBBG6+9BEHfGVd/71PkqYsVLe9GRRo=",
+        "owner": "bytecodealliance",
+        "repo": "wasmtime",
+        "rev": "0aa00479c9fbb39ef19a9f35d2ed0137454c93f5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "bytecodealliance",
+        "ref": "v9.0.2",
+        "repo": "wasmtime",
         "type": "github"
       }
     }
