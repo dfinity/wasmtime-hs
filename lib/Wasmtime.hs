@@ -137,9 +137,9 @@ import Data.Int (Int32, Int64)
 import Data.Kind (Type)
 import Data.Proxy (Proxy (..))
 import Data.Typeable (Typeable)
-import Data.Vector.Generic (Vector)
-import qualified Data.Vector.Generic as VG
-import qualified Data.Vector.Generic.Mutable as VGM
+import Data.Vector (Vector)
+import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as VM
 import Data.WideWord.Word128 (Word128)
 import Data.Word (Word32, Word64, Word8)
 import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
@@ -1139,17 +1139,17 @@ trapOrigin trap = unsafePerformIO $ withTrap trap $ \trap_ptr -> mask_ $ do
 -- Frames are listed in order of increasing depth, with the most recently called
 -- function at the front of the vector and the base function on the stack at the
 -- end.
-trapTrace :: (Vector vec Frame) => Trap -> vec Frame
+trapTrace :: Trap -> Vector Frame
 trapTrace trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
   alloca $ \(frame_vec_ptr :: Ptr C'wasm_frame_vec_t) -> mask_ $ do
     c'wasm_trap_trace trap_ptr frame_vec_ptr
     frame_vec <- peek frame_vec_ptr
     let sz = fromIntegral $ c'wasm_frame_vec_t'size frame_vec :: Int
     let dt = c'wasm_frame_vec_t'data frame_vec :: Ptr (Ptr C'wasm_frame_t)
-    mutVec <- VGM.generateM sz $ \ix -> do
+    mutVec <- VM.generateM sz $ \ix -> do
       frame_ptr <- peek $ advancePtr dt ix
       newFrameFromPtr frame_ptr
-    vec <- VG.unsafeFreeze mutVec
+    vec <- V.unsafeFreeze mutVec
     c'wasm_frame_vec_delete frame_vec_ptr
     pure vec
 
