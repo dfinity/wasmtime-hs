@@ -34,9 +34,7 @@ main = do
   func <- newFunc ctx hello
 
   putStrLn "Instantiating module..."
-  let funcExtern = toExtern func
-
-  inst <- newInstance ctx myModule [funcExtern]
+  inst <- newInstance ctx myModule [toExtern func]
 
   putStrLn "Extracting export..."
   Just ((runTypedFunc :: TypedFunc RealWorld (IO ()))) <-
