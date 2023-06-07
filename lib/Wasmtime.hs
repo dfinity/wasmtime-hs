@@ -140,8 +140,8 @@ import Data.Proxy (Proxy (..))
 import Data.Typeable (Typeable)
 import Data.Vector (Vector)
 import qualified Data.Vector as V
-import Data.Vector.Mutable (MVector)
-import qualified Data.Vector.Mutable as VM
+import qualified Data.Vector.Unboxed as VU
+import qualified Data.Vector.Unboxed.Mutable as VUM
 import Data.WideWord.Word128 (Word128)
 import Data.Word (Word32, Word64, Word8)
 import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
@@ -506,10 +506,10 @@ newFuncType _proxy = mask_ $ do
       functype_ptr <- c'wasm_functype_new params_ptr result_ptr
       FuncType <$> newForeignPtr p'wasm_functype_delete functype_ptr
 
-withKinds :: Vector C'wasm_valkind_t -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
+withKinds :: VU.Vector C'wasm_valkind_t -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
 withKinds kinds f =
   allocaArray n $ \(valtypes_ptr :: Ptr (Ptr C'wasm_valtype_t)) -> do
-    V.iforM_ kinds $ \ix k -> do
+    VU.iforM_ kinds $ \ix k -> do
       -- FIXME: is the following a memory leak?
       valtype_ptr <- c'wasm_valtype_new k
       pokeElemOff valtypes_ptr ix valtype_ptr
@@ -517,7 +517,7 @@ withKinds kinds f =
     c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr
     f valtype_vec_ptr
   where
-    n = V.length kinds
+    n = VU.length kinds
 
 class Storable a => Kind a where
   kind :: Proxy a -> C'wasm_valkind_t
@@ -537,7 +537,7 @@ instance Kind Word128 where kind _proxy = c'WASMTIME_V128
 -- instance Kind ? where kind _proxy = c'WASMTIME_EXTERNREF
 
 class Results r where
-  resultKinds :: Proxy r -> Vector C'wasm_valkind_t
+  resultKinds :: Proxy r -> VU.Vector C'wasm_valkind_t
   nrOfResults :: Proxy r -> Int
   writeResults :: Ptr C'wasmtime_val_t -> r -> IO ()
   readResults :: Ptr C'wasmtime_val_raw_t -> IO r
@@ -731,7 +731,7 @@ class Funcable f where
   type Result f :: Type
 
   -- | Write the parameter kinds to the given mutable vector starting from the given index.
-  writeParamKinds :: Proxy f -> MVector s C'wasm_valkind_t -> Int -> ST s ()
+  writeParamKinds :: Proxy f -> VUM.MVector s C'wasm_valkind_t -> Int -> ST s ()
 
   -- | The number of parameters.
   nrOfParams :: Proxy f -> Int
@@ -764,7 +764,7 @@ instance (Kind a, Funcable b) => Funcable (a -> b) where
   type Result (a -> b) = Result b
 
   writeParamKinds _proxy mutVec ix = do
-    VM.unsafeWrite mutVec ix $ kind (Proxy @a)
+    VUM.unsafeWrite mutVec ix $ kind (Proxy @a)
     writeParamKinds (Proxy @b) mutVec (ix + 1)
 
   nrOfParams _proxy = 1 + nrOfParams (Proxy @b)
@@ -829,11 +829,11 @@ instance Results r => Funcable (ST s (Either Trap r)) where
     unsafeIOToPrim $
       exportCall args_and_results_fp ix len ctx func
 
-paramKinds :: forall f. Funcable f => Proxy f -> Vector C'wasm_valkind_t
+paramKinds :: forall f. Funcable f => Proxy f -> VU.Vector C'wasm_valkind_t
 paramKinds proxy = runST $ do
-  mutVec <- VM.unsafeNew $ nrOfParams $ Proxy @f
+  mutVec <- VUM.unsafeNew $ nrOfParams $ Proxy @f
   writeParamKinds proxy mutVec 0
-  V.unsafeFreeze mutVec
+  VU.unsafeFreeze mutVec
 
 -- | A 'Func' annotated with its type.
 newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
@@ -866,8 +866,8 @@ toTypedFunc ctx func = unsafeIOToPrim $ do
       (func_results_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_results functype_ptr
       func_params :: C'wasm_valtype_vec_t <- peek func_params_ptr
       func_results :: C'wasm_valtype_vec_t <- peek func_results_ptr
-      (actual_params :: Vector C'wasm_valkind_t) <- kindsOf func_params
-      (actual_results :: Vector C'wasm_valkind_t) <- kindsOf func_results
+      (actual_params :: VU.Vector C'wasm_valkind_t) <- kindsOf func_params
+      (actual_results :: VU.Vector C'wasm_valkind_t) <- kindsOf func_results
       if desired_params == actual_params
         && desired_results == actual_results
         then pure $ Just $ TypedFunc func
@@ -876,8 +876,8 @@ toTypedFunc ctx func = unsafeIOToPrim $ do
     desired_params = paramKinds $ Proxy @f
     desired_results = resultKinds $ Proxy @r
 
-    kindsOf :: C'wasm_valtype_vec_t -> IO (Vector C'wasm_valkind_t)
-    kindsOf valtype_vec = V.generateM s $ \ix -> do
+    kindsOf :: C'wasm_valtype_vec_t -> IO (VU.Vector C'wasm_valkind_t)
+    kindsOf valtype_vec = VU.generateM s $ \ix -> do
       cur_valtype_ptr <- peekElemOff p ix
       c'wasm_valtype_kind cur_valtype_ptr
       where
