@@ -35,7 +35,7 @@ main = do
   func <- newFunc ctx hello
 
   putStrLn "Instantiating module..."
-  inst <- newInstance ctx myModule [toExtern func]
+  inst <- newInstance ctx myModule [toExtern func] >>= handleException
 
   putStrLn "Extracting export..."
   Just ((runTypedFunc :: TypedFunc RealWorld (IO (Either Trap ())))) <-

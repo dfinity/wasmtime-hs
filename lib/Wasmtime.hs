@@ -970,14 +970,24 @@ newtype Instance s = Instance {unInstance :: ForeignPtr C'wasmtime_instance_t}
 -- This function will instantiate a WebAssembly module with the provided
 -- imports, creating a WebAssembly instance. The returned instance can then
 -- afterwards be inspected for exports.
-newInstance :: MonadPrim s m => Context s -> Module -> Vector (Extern s) -> m (Instance s)
+newInstance ::
+  MonadPrim s m =>
+  Context s ->
+  Module ->
+  -- | This function requires that this `imports` vector has the same size as
+  -- the imports of the given 'Module'. Additionally the `imports` must be 1:1
+  -- lined up with the imports of the specified module. This is intended to be
+  -- relatively low level, and 'newInstanceLinked' is provided for a more
+  -- ergonomic name-based resolution API.
+  Vector (Extern s) ->
+  m (Either Trap (Instance s))
 newInstance ctx m externs = unsafeIOToPrim $
   withContext ctx $ \ctx_ptr ->
     withModule m $ \mod_ptr ->
       withExterns externs $ \externs_ptr n -> do
         inst_fp <- mallocForeignPtr
         withForeignPtr inst_fp $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
-          alloca $ \(trap_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+          alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             error_ptr <-
               c'wasmtime_instance_new
                 ctx_ptr
@@ -985,10 +995,12 @@ newInstance ctx m externs = unsafeIOToPrim $
                 externs_ptr
                 n
                 inst_ptr
-                trap_ptr
+                trap_ptr_ptr
             checkWasmtimeError error_ptr
-            -- TODO: handle traps!!!
-            pure $ Instance inst_fp
+            trap_ptr <- peek trap_ptr_ptr
+            if trap_ptr == nullPtr
+              then pure $ Right $ Instance inst_fp
+              else Left <$> newTrapFromPtr trap_ptr
 
 withInstance :: Instance s -> (Ptr C'wasmtime_instance_t -> IO a) -> IO a
 withInstance inst = withForeignPtr (unInstance inst)
