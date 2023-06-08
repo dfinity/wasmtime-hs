@@ -84,6 +84,20 @@ module Wasmtime
     fromTypedFunc,
     callFunc,
 
+    -- * Memory
+    MemoryType,
+    newMemoryType,
+    getMin,
+    getMax,
+    is64Memory,
+    Memory,
+    newMemory,
+    getMemoryType,
+    getMemorySizePages,
+    growMemory,
+    unsafeWithMemory,
+    freezeMemory,
+
     -- * Externs
     Extern,
     Externable,
@@ -95,6 +109,7 @@ module Wasmtime
     newInstance,
     getExport,
     getExportedTypedFunc,
+    getExportedMemory,
 
     -- * Traps
     Trap,
@@ -1003,6 +1018,7 @@ is64Memory :: MemoryType -> Bool
 is64Memory mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
 
 newtype Memory s = Memory {getWasmtimeMemory :: C'wasmtime_memory_t}
+  deriving (Show)
 
 newMemory :: MonadPrim s m => Context s -> MemoryType -> m (Either WasmtimeError (Memory s))
 newMemory ctx memtype = unsafeIOToPrim $
@@ -1025,8 +1041,8 @@ getMemoryType ctx mem = unsafePerformIO $
       MemoryType <$> newForeignPtr p'wasm_memorytype_delete memtype_ptr
 
 -- | Returns the length of the linear memory in WebAssembly pages
-getMemorySizePages :: Context s -> Memory s -> Word64
-getMemorySizePages ctx mem = unsafePerformIO $
+getMemorySizePages :: MonadPrim s m => Context s -> Memory s -> m Word64
+getMemorySizePages ctx mem = unsafeIOToPrim $
   withContext ctx $ \ctx_ptr ->
     withMemory mem $ \mem_ptr ->
       c'wasmtime_memory_size ctx_ptr mem_ptr
@@ -1054,6 +1070,8 @@ freezeMemory ctx mem = unsafeIOToPrim $
   unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
     BI.create mem_size $ \dst_ptr ->
       BI.memcpy dst_ptr mem_data_ptr mem_size
+
+-- TODO: size in bytes
 
 -- have to get the length of the data and the data pointer
 -- unsafeGetMemoryData :: Context s -> Memory s -> IO B.ByteString
