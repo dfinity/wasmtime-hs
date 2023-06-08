@@ -380,7 +380,7 @@ newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
   Store <$> newForeignPtr p'wasmtime_store_delete wasmtime_store_ptr
 
 withStore :: Store s -> (Ptr C'wasmtime_store_t -> IO a) -> IO a
-withStore store = withForeignPtr (unStore store)
+withStore = withForeignPtr . unStore
 
 data Context s = Context
   { -- | Usage of a @wasmtime_context_t@ must not outlive the original @wasmtime_store_t@
@@ -462,7 +462,7 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
           Module <$> newForeignPtr p'wasmtime_module_delete module_ptr
 
 withModule :: Module -> (Ptr C'wasmtime_module_t -> IO a) -> IO a
-withModule m = withForeignPtr (unModule m)
+withModule = withForeignPtr . unModule
 
 --------------------------------------------------------------------------------
 -- Function Types
@@ -471,7 +471,7 @@ withModule m = withForeignPtr (unModule m)
 newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
 
 withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
-withFuncType funcType = withForeignPtr (unFuncType funcType)
+withFuncType = withForeignPtr . unFuncType
 
 newFuncType :: forall f. Funcable f => Proxy f -> IO FuncType
 newFuncType _proxy = do
@@ -933,7 +933,7 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
 -- Memory
 --------------------------------------------------------------------------------
 
-newtype MemoryType = MemoryType {getMemoryType :: ForeignPtr C'wasm_memorytype_t}
+newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
 
 newMemoryType :: Word64 -> Maybe Word64 -> Bool -> MemoryType
 newMemoryType mini mbMax is64 = unsafePerformIO $ mask_ $ do
@@ -945,7 +945,7 @@ newMemoryType mini mbMax is64 = unsafePerformIO $ mask_ $ do
 -- TODO: typeclass for these withXs
 
 withMemoryType :: MemoryType -> (Ptr C'wasm_memorytype_t -> IO a) -> IO a
-withMemoryType mt = withForeignPtr (getMemoryType mt)
+withMemoryType = withForeignPtr . unMemoryType
 
 getMin :: MemoryType -> Word64
 getMin mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_minimum
@@ -964,20 +964,36 @@ is64Memory mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
 
 newtype Memory s = Memory {getMemory :: ForeignPtr C'wasmtime_memory}
 
--- wasmtime_error_t * 	wasmtime_memory_new (wasmtime_context_t *store,
---                                           const wasm_memorytype_t *ty,
---                                           wasmtime_memory_t *ret)
+withMemory :: Memory s -> (Ptr C'wasmtime_memory -> IO a) -> IO a
+withMemory = withForeignPtr . getMemory
 
 newMemory :: MonadPrim s m => Context s -> MemoryType -> m (Either WasmtimeError (Memory s))
 newMemory ctx memtype = unsafeIOToPrim $
   try $
     withContext ctx $ \ctx_ptr ->
       withMemoryType memtype $ \memtype_ptr -> mask_ $ do
-        mem_ptr <- malloc
+        mem_ptr <- malloc -- TODO: mallocforeignptr
         error_ptr <- c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
         checkWasmtimeError error_ptr
         Memory <$> newForeignPtr finalizerFree mem_ptr
 
+getMemoryType :: Context s -> Memory s -> MemoryType
+getMemoryType ctx mem = unsafePerformIO $
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem $ \mem_ptr -> do
+      -- TODO: Question: I did not manage to put these on a single line
+      memtype_ptr <- c'wasmtime_memory_type ctx_ptr mem_ptr
+      MemoryType <$> newForeignPtr p'wasm_memorytype_delete memtype_ptr
+
+-- have to get the length of the data and the data pointer
+unsafeGetMemoryData :: Context s -> Memory s -> IO B.ByteString
+unsafeGetMemoryData ctx mem =
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem $ \mem_ptr -> do
+      mem_size <- c'wasmtime_memory_data_size ctx_ptr mem_ptr
+      mem_data_ptr <- c'wasmtime_memory_data ctx_ptr mem_ptr
+
+      undefined
 
 --------------------------------------------------------------------------------
 -- Instances
@@ -1012,7 +1028,7 @@ newInstance ctx m externs = unsafeIOToPrim $
             pure $ Instance inst_fp
 
 withInstance :: Instance s -> (Ptr C'wasmtime_instance_t -> IO a) -> IO a
-withInstance inst = withForeignPtr (unInstance inst)
+withInstance = withForeignPtr . unInstance
 
 -- | Get an export by name from an instance.
 getExport :: MonadPrim s m => Context s -> Instance s -> String -> m (Maybe (Extern s))
@@ -1088,7 +1104,7 @@ checkWasmtimeError error_ptr = when (error_ptr /= nullPtr) $ do
   throwIO wasmtimeError
 
 withWasmtimeError :: WasmtimeError -> (Ptr C'wasmtime_error_t -> IO a) -> IO a
-withWasmtimeError wasmtimeError = withForeignPtr (unWasmtimeError wasmtimeError)
+withWasmtimeError = withForeignPtr . unWasmtimeError
 
 instance Exception WasmtimeError
 
