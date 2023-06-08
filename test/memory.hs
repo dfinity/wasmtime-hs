@@ -26,14 +26,14 @@ main = do
   putStrLn "Compiling module..."
   myModule <- handleWasmtimeError $ newModule engine wasm
 
-  let mtype = newMemoryType 1 (Just 2) False
-  memory <- newMemory ctx mtype >>= handleException
+  -- let mtype = newMemoryType 1 (Just 2) False
+  -- memory <- newMemory ctx mtype >>= handleException
 
   putStrLn "Instantiating module..."
-  inst <- newInstance ctx myModule [toExtern memory] >>= handleException
+  inst <- newInstance ctx myModule [] >>= handleException
 
   putStrLn "Extracting exports..."
-  -- Just memory <- getExportedMemory ctx inst "memory"
+  Just memory <- getExportedMemory ctx inst "memory"
 
   -- print memory
   Just (storeFun :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
@@ -42,11 +42,12 @@ main = do
   size_before <- getMemorySizePages ctx memory
   print ("size before", size_before)
   print $ B.length frozen
+  size_bytes <- getMemorySizeBytes ctx memory
+  print ("size bytes", size_bytes)
 
   _ <- growMemory ctx memory 1 >>= handleException
   size_after <- getMemorySizePages ctx memory
   print ("size after", size_after)
-
   print $ B.unpack $ B.take 20 frozen
   putStrLn "All finished"
 

@@ -93,6 +93,7 @@ module Wasmtime
     Memory,
     newMemory,
     getMemoryType,
+    getMemorySizeBytes,
     getMemorySizePages,
     growMemory,
     unsafeWithMemory,
@@ -1039,6 +1040,12 @@ getMemoryType ctx mem = unsafePerformIO $
     withMemory mem $ \mem_ptr -> mask_ $ do
       memtype_ptr <- c'wasmtime_memory_type ctx_ptr mem_ptr
       MemoryType <$> newForeignPtr p'wasm_memorytype_delete memtype_ptr
+
+getMemorySizeBytes :: MonadPrim s m => Context s -> Memory s -> m CSize
+getMemorySizeBytes ctx mem = unsafeIOToPrim $
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem $ \mem_ptr ->
+      c'wasmtime_memory_data_size ctx_ptr mem_ptr
 
 -- | Returns the length of the linear memory in WebAssembly pages
 getMemorySizePages :: MonadPrim s m => Context s -> Memory s -> m Word64
