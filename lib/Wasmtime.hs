@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -106,6 +107,7 @@ import Bindings.Wasmtime.Error
 import Bindings.Wasmtime.Extern
 import Bindings.Wasmtime.Func
 import Bindings.Wasmtime.Instance
+import Bindings.Wasmtime.Memory
 import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
 import Bindings.Wasmtime.Val
@@ -132,6 +134,7 @@ import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable, peek, peekElemOff, poke, pokeElemOff)
 import System.IO.Unsafe (unsafePerformIO)
+import Text.ParserCombinators.ReadP (get)
 import Type.Reflection (TypeRep, eqTypeRep, typeRep, (:~~:) (HRefl))
 
 --------------------------------------------------------------------------------
@@ -927,6 +930,56 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
     n = length externs
 
 --------------------------------------------------------------------------------
+-- Memory
+--------------------------------------------------------------------------------
+
+newtype MemoryType = MemoryType {getMemoryType :: ForeignPtr C'wasm_memorytype_t}
+
+newMemoryType :: Word64 -> Maybe Word64 -> Bool -> MemoryType
+newMemoryType mini mbMax is64 = unsafePerformIO $ mask_ $ do
+  mem_type_ptr <- c'wasmtime_memorytype_new mini max_present maxi is64
+  MemoryType <$> newForeignPtr p'wasm_memorytype_delete mem_type_ptr
+  where
+    (max_present, maxi) = maybe (False, 0) (True,) mbMax
+
+-- TODO: typeclass for these withXs
+
+withMemoryType :: MemoryType -> (Ptr C'wasm_memorytype_t -> IO a) -> IO a
+withMemoryType mt = withForeignPtr (getMemoryType mt)
+
+getMin :: MemoryType -> Word64
+getMin mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_minimum
+
+getMax :: MemoryType -> Maybe Word64
+getMax mt = unsafePerformIO $
+  withMemoryType mt $ \mem_type_ptr ->
+    alloca $ \(max_ptr :: Ptr Word64) -> do
+      maxPresent <- c'wasmtime_memorytype_maximum mem_type_ptr max_ptr
+      if not maxPresent
+        then pure Nothing
+        else Just <$> peek max_ptr
+
+is64Memory :: MemoryType -> Bool
+is64Memory mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
+
+newtype Memory s = Memory {getMemory :: ForeignPtr C'wasmtime_memory}
+
+-- wasmtime_error_t * 	wasmtime_memory_new (wasmtime_context_t *store,
+--                                           const wasm_memorytype_t *ty,
+--                                           wasmtime_memory_t *ret)
+
+newMemory :: MonadPrim s m => Context s -> MemoryType -> m (Either WasmtimeError (Memory s))
+newMemory ctx memtype = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withMemoryType memtype $ \memtype_ptr -> mask_ $ do
+        mem_ptr <- malloc
+        error_ptr <- c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
+        checkWasmtimeError error_ptr
+        Memory <$> newForeignPtr finalizerFree mem_ptr
+
+
+--------------------------------------------------------------------------------
 -- Instances
 --------------------------------------------------------------------------------
 
@@ -1049,5 +1102,3 @@ instance Show WasmtimeError where
         data_ptr <- peek $ p'wasm_byte_vec_t'data p
         size <- peek $ p'wasm_byte_vec_t'size p
         peekCStringLen (data_ptr, fromIntegral size)
-
-

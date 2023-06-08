@@ -14,8 +14,6 @@ import Bindings.Wasmtime.Extern
 import Bindings.Wasmtime.Store
 import Data.Word (Word8, Word64)
 
-#opaque_t wasm_memorytype_t 
-
 #ccall wasmtime_memorytype_new ,     Word64 -> Bool -> Word64 -> Bool ->        IO (Ptr <wasm_memorytype_t>)
 #ccall wasmtime_memorytype_minimum , Ptr <wasm_memorytype_t> ->                 IO (Word64)
 #ccall wasmtime_memorytype_maximum , Ptr <wasm_memorytype_t> -> Ptr Word64 -> IO (Bool)

@@ -100,3 +100,10 @@ module Bindings.Wasm where
 #ccall wasm_trap_message , Ptr <wasm_trap_t> -> Ptr <wasm_message_t> -> IO ()
 
 #synonym_t wasm_message_t , <wasm_byte_vec_t>
+
+
+-- Memory
+#opaque_t wasm_memorytype_t
+#ccall wasm_memorytype_delete , Ptr <wasm_memorytype_t> -> IO ()
+
+
