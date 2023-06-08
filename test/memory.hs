@@ -5,6 +5,7 @@
 module Main (main) where
 
 import Control.Exception (Exception, throwIO)
+import Control.Exception.Base (assert)
 import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
@@ -34,6 +35,21 @@ main = do
 
   putStrLn "Extracting exports..."
   Just memory <- getExportedMemory ctx inst "memory"
+  Just (size :: TypedFunc RealWorld (IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "size"
+  Just (load :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "load"
+  Just (store :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
+
+  putStrLn "Checking memory..."
+  size_pages <- getMemorySizePages ctx memory
+  let _ = assert (size_pages == 2) ()
+  size_bytes <- getMemorySizeBytes ctx memory
+  let _ = assert (size_bytes == 131072) ()
+  mem_bs <- freezeMemory ctx memory
+  let _ = assert (B.head mem_bs == 0) ()
+  let _ = assert (B.index mem_bs 4096 == 1) ()
+  let _ = assert (B.index mem_bs 4099 == 4) ()
+
+  putStrLn "====="
 
   -- print memory
   Just (storeFun :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
