@@ -5,8 +5,8 @@ synopsis:           Haskell bindings to the wasmtime WASM engine
 homepage:           https://github.com/dfinity/wasmtime-hs
 license:            BSD-2-Clause
 license-file:       LICENSE
-author:             Bas van Dijk
-maintainer:         bas@dfinity.org
+author:             Testing & Verification team at DFINITY
+maintainer:         dept-testing_&_verification@dfinity.org
 copyright:          DFINITY
 category:           System
 build-type:         Simple
