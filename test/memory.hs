@@ -4,7 +4,7 @@
 -- | Haskell translation of: https://docs.wasmtime.dev/examples-c-memory.html
 module Main (main) where
 
-import Control.Exception (throwIO)
+import Control.Exception (Exception, throwIO)
 import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
@@ -26,12 +26,16 @@ main = do
   putStrLn "Compiling module..."
   myModule <- handleWasmtimeError $ newModule engine wasm
 
+  let mtype = newMemoryType 1 (Just 2) False
+  memory <- newMemory ctx mtype >>= handleException
+
   putStrLn "Instantiating module..."
-  Right inst <- newInstance ctx myModule []
+  inst <- newInstance ctx myModule [toExtern memory] >>= handleException
 
   putStrLn "Extracting exports..."
-  Just memory <- getExportedMemory ctx inst "memory"
-  print memory
+  -- Just memory <- getExportedMemory ctx inst "memory"
+
+  -- print memory
   Just (storeFun :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
   Right () <- callFunc ctx storeFun 5 (-13)
   frozen <- freezeMemory ctx memory
@@ -39,7 +43,7 @@ main = do
   print ("size before", size_before)
   print $ B.length frozen
 
-  Right _ <- growMemory ctx memory 1
+  _ <- growMemory ctx memory 1 >>= handleException
   size_after <- getMemorySizePages ctx memory
   print ("size after", size_after)
 
@@ -48,6 +52,9 @@ main = do
 
 handleWasmtimeError :: Either WasmtimeError a -> IO a
 handleWasmtimeError = either throwIO pure
+
+handleException :: Exception e => Either e r -> IO r
+handleException = either throwIO pure
 
 wasmFromPath :: FilePath -> IO Wasm
 wasmFromPath path = do
