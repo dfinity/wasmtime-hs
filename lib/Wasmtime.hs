@@ -130,10 +130,13 @@ import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
 import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
+import Control.Applicative ((<|>))
 import Control.Exception (Exception, mask_, onException, throwIO, try)
-import Control.Monad (when)
+import Control.Monad (guard, when)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
 import Control.Monad.ST (ST, runST)
+import Control.Monad.Trans.Maybe (MaybeT, runMaybeT)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
 import Data.Functor (($>))
@@ -157,7 +160,6 @@ import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable, peek, peekElemOff, poke, pokeElemOff)
 import System.IO.Unsafe (unsafePerformIO)
-import Text.ParserCombinators.ReadP (get)
 import Type.Reflection (TypeRep, eqTypeRep, typeRep, (:~~:) (HRefl))
 
 --------------------------------------------------------------------------------
@@ -1013,7 +1015,7 @@ newMemory ctx memtype = unsafeIOToPrim $
           Memory <$> peek mem_ptr
 
 withMemory :: Memory s -> (Ptr C'wasmtime_memory_t -> IO a) -> IO a
-withMemory = with . getMemory
+withMemory = with . getWasmtimeMemory
 
 getMemoryType :: Context s -> Memory s -> MemoryType
 getMemoryType ctx mem = unsafePerformIO $
@@ -1124,25 +1126,30 @@ getExport ctx inst name = unsafeIOToPrim $
               name_ptr
               (fromIntegral len)
               extern_ptr
-          if found
-            then do
+          if not found
+            then pure Nothing
+            else do
               let kind_ptr :: Ptr C'wasmtime_extern_kind_t
                   kind_ptr = p'wasmtime_extern'kind extern_ptr
 
                   of_ptr :: Ptr C'wasmtime_extern_union_t
                   of_ptr = p'wasmtime_extern'of extern_ptr
+
               k <- peek kind_ptr
-              if
-                  | k == c'WASMTIME_EXTERN_FUNC -> fromCExtern of_ptr Func
-                  | k == c'WASMTIME_EXTERN_MEMORY -> fromCExtern of_ptr Memory
-                  | otherwise -> pure Nothing
-            else pure Nothing
-  where
-    fromCExtern :: (Externable e) => Ptr C'wasmtime_extern_union_t -> (CType e -> e s) -> IO (Maybe (Extern s))
-    fromCExtern of_ptr constr = do
-      let ex_ptr = castPtr of_ptr
-      ex <- constr <$> peek ex_ptr
-      pure $ Just $ toExtern ex
+
+              let fromCExtern ::
+                    forall e s.
+                    (Externable e) =>
+                    (CType e -> e s) ->
+                    MaybeT IO (Extern s)
+                  fromCExtern constr = do
+                    guard $ k == externKind (Proxy @e)
+                    liftIO $ do
+                      let ex_ptr = castPtr of_ptr
+                      ex <- constr <$> peek ex_ptr
+                      pure $ toExtern ex
+
+              runMaybeT $ fromCExtern Func <|> fromCExtern Memory
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally checks if
