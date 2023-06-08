@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
@@ -94,6 +95,22 @@ module Wasmtime
     getExport,
     getExportedTypedFunc,
 
+    -- * Traps
+    Trap,
+    newTrap,
+    trapCode,
+    TrapCode (..),
+    trapOrigin,
+    trapTrace,
+
+    -- * Frames
+    Frame,
+    frameFuncName,
+    frameModuleName,
+    frameFuncIndex,
+    frameFuncOffset,
+    frameModuleOffset,
+
     -- * Errors
     WasmException (..),
     WasmtimeError,
@@ -110,20 +127,25 @@ import Bindings.Wasmtime.Instance
 import Bindings.Wasmtime.Memory
 import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
+import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
 import Control.Exception (Exception, mask_, onException, throwIO, try)
 import Control.Monad (when)
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
-import Control.Monad.ST (ST)
+import Control.Monad.ST (ST, runST)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
-import Data.Foldable (for_)
+import Data.Functor (($>))
 import Data.Int (Int32, Int64)
 import Data.Kind (Type)
 import Data.Proxy (Proxy (..))
 import Data.Typeable (Typeable)
+import Data.Vector (Vector)
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
+import qualified Data.Vector.Unboxed.Mutable as VUM
 import Data.WideWord.Word128 (Word128)
-import Data.Word (Word64, Word8)
+import Data.Word (Word32, Word64, Word8)
 import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
@@ -473,20 +495,24 @@ newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
 withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
 withFuncType = withForeignPtr . unFuncType
 
-newFuncType :: forall f. Funcable f => Proxy f -> IO FuncType
-newFuncType _proxy = do
-  withKinds ps $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
-    withKinds rs $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
+newFuncType ::
+  forall f m r.
+  ( Funcable f,
+    Result f ~ m (Either Trap r),
+    Results r
+  ) =>
+  Proxy f ->
+  IO FuncType
+newFuncType _proxy = mask_ $ do
+  withKinds (paramKinds $ Proxy @f) $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
+    withKinds (resultKinds $ Proxy @r) $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
       functype_ptr <- c'wasm_functype_new params_ptr result_ptr
       FuncType <$> newForeignPtr p'wasm_functype_delete functype_ptr
-  where
-    ps = params (Proxy @f)
-    rs = result (Proxy @f)
 
-withKinds :: [C'wasm_valkind_t] -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
+withKinds :: VU.Vector C'wasm_valkind_t -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
 withKinds kinds f =
-  allocaArray n $ \(valtypes_ptr :: Ptr (Ptr C'wasm_valtype_t)) -> mask_ $ do
-    for_ (zip [0 ..] kinds) $ \(ix, k) -> do
+  allocaArray n $ \(valtypes_ptr :: Ptr (Ptr C'wasm_valtype_t)) -> do
+    VU.iforM_ kinds $ \ix k -> do
       -- FIXME: is the following a memory leak?
       valtype_ptr <- c'wasm_valtype_new k
       pokeElemOff valtypes_ptr ix valtype_ptr
@@ -494,7 +520,7 @@ withKinds kinds f =
     c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr
     f valtype_vec_ptr
   where
-    n = length kinds
+    n = VU.length kinds
 
 class Storable a => Kind a where
   kind :: Proxy a -> C'wasm_valkind_t
@@ -514,14 +540,14 @@ instance Kind Word128 where kind _proxy = c'WASMTIME_V128
 -- instance Kind ? where kind _proxy = c'WASMTIME_EXTERNREF
 
 class Results r where
-  results :: Proxy r -> [C'wasm_valkind_t]
-  numResults :: Proxy r -> Int
+  resultKinds :: Proxy r -> VU.Vector C'wasm_valkind_t
+  nrOfResults :: Proxy r -> Int
   writeResults :: Ptr C'wasmtime_val_t -> r -> IO ()
   readResults :: Ptr C'wasmtime_val_raw_t -> IO r
 
 instance Results () where
-  results _proxy = []
-  numResults _proxy = 0
+  resultKinds _proxy = []
+  nrOfResults _proxy = 0
   writeResults _result_ptr () = pure ()
   readResults _result_ptr = pure ()
 
@@ -542,32 +568,32 @@ instance Results () where
 -- individual instances for all primitive types:
 
 instance Results Int32 where
-  results proxy = [kind proxy]
-  numResults _proxy = 1
+  resultKinds proxy = [kind proxy]
+  nrOfResults _proxy = 1
   writeResults = pokeVal
   readResults = peekRawVal
 
 instance Results Int64 where
-  results proxy = [kind proxy]
-  numResults _proxy = 1
+  resultKinds proxy = [kind proxy]
+  nrOfResults _proxy = 1
   writeResults = pokeVal
   readResults = peekRawVal
 
 instance Results Float where
-  results proxy = [kind proxy]
-  numResults _proxy = 1
+  resultKinds proxy = [kind proxy]
+  nrOfResults _proxy = 1
   writeResults = pokeVal
   readResults = peekRawVal
 
 instance Results Double where
-  results proxy = [kind proxy]
-  numResults _proxy = 1
+  resultKinds proxy = [kind proxy]
+  nrOfResults _proxy = 1
   writeResults = pokeVal
   readResults = peekRawVal
 
 instance Results Word128 where
-  results proxy = [kind proxy]
-  numResults _proxy = 1
+  resultKinds proxy = [kind proxy]
+  nrOfResults _proxy = 1
   writeResults = pokeVal
   readResults = peekRawVal
 
@@ -582,8 +608,8 @@ peekRawVal :: Storable r => Ptr C'wasmtime_val_raw_t -> IO r
 peekRawVal = peek . castPtr
 
 instance (Kind a, Kind b) => Results (a, b) where
-  results _proxy = [kind (Proxy @a), kind (Proxy @b)]
-  numResults _proxy = 2
+  resultKinds _proxy = [kind (Proxy @a), kind (Proxy @b)]
+  nrOfResults _proxy = 2
   writeResults result_ptr (a, b) = do
     pokeVal result_ptr a
     pokeVal (advancePtr result_ptr 1) b
@@ -593,8 +619,8 @@ instance (Kind a, Kind b) => Results (a, b) where
       <*> peekRawVal (advancePtr result_ptr 1)
 
 instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
-  results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c)]
-  numResults _proxy = 3
+  resultKinds _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c)]
+  nrOfResults _proxy = 3
   writeResults result_ptr (a, b, c) = do
     pokeVal result_ptr a
     pokeVal (advancePtr result_ptr 1) b
@@ -606,8 +632,8 @@ instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
       <*> peekRawVal (advancePtr result_ptr 2)
 
 instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
-  results _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c), kind (Proxy @d)]
-  numResults _proxy = 4
+  resultKinds _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c), kind (Proxy @d)]
+  nrOfResults _proxy = 4
   writeResults result_ptr (a, b, c, d) = do
     pokeVal result_ptr a
     pokeVal (advancePtr result_ptr 1) b
@@ -646,7 +672,7 @@ type FuncCallback =
 newFunc ::
   forall f r s m.
   ( Funcable f,
-    Result f ~ m r,
+    Result f ~ m (Either Trap r),
     Results r,
     MonadPrim s m,
     PrimBase m
@@ -669,36 +695,49 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
     callback _env _caller args_ptr nargs result_ptr nresults = do
       mbResult <- importCall f args_ptr (fromIntegral nargs)
       case mbResult of
-        Nothing -> error "TODO"
-        Just (action :: m r) -> do
-          r <- unsafePrimToIO action
-          let n = fromIntegral nresults
-          if n == expected
-            then writeResults result_ptr r
-            else -- TODO: use throwIO
+        Nothing -> do
+          -- TODO: use throwIO or trap!
+          error "The type of the imported WASM function doesn't match the desired Haskell type!"
+        Just (action :: m (Either Trap r)) -> do
+          e <- unsafePrimToIO action
+          case e of
+            Left trap ->
+              -- As the docs of <wasmtime_func_callback_t> mention:
+              --
+              -- > This callback can optionally return a wasm_trap_t indicating
+              -- > that a trap should be raised in WebAssembly. It's expected
+              -- > that in this case the caller relinquishes ownership of the
+              -- > trap and it is passed back to the engine.
+              --
+              -- Since trap is a ForeignPtr which will be garbage collected
+              -- later we need to copy the trap to safely hand it to the engine.
+              withTrap trap c'wasm_trap_copy
+            Right r -> do
+              let n = fromIntegral nresults
+              if n == expectedNrOfResults
+                then writeResults result_ptr r $> nullPtr
+                else do
+                  -- TODO: use throwIO or trap!
+                  error $
+                    "Expected the number of results to be "
+                      ++ show expectedNrOfResults
+                      ++ " but got "
+                      ++ show n
+                      ++ "!"
 
-              error $
-                "Expected the number of results to be "
-                  ++ show expected
-                  ++ " but got "
-                  ++ show n
-
-      -- TODO
-      pure nullPtr
-
-    expected :: Int
-    expected = numResults $ Proxy @r
+    expectedNrOfResults :: Int
+    expectedNrOfResults = nrOfResults $ Proxy @r
 
 -- | Class of Haskell functions / actions that can be imported into and exported
 -- from WASM modules.
 class Funcable f where
   type Result f :: Type
 
-  params :: Proxy f -> [C'wasm_valkind_t]
-  result :: Proxy f -> [C'wasm_valkind_t]
+  -- | Write the parameter kinds to the given mutable vector starting from the given index.
+  writeParamKinds :: Proxy f -> VUM.MVector s C'wasm_valkind_t -> Int -> ST s ()
 
-  paramsLen :: Proxy f -> Int
-  resultLen :: Proxy f -> Int
+  -- | The number of parameters.
+  nrOfParams :: Proxy f -> Int
 
   -- | Call the given Haskell function / action @f@ on the arguments stored in
   -- the given 'C'wasmtime_val_t' array.
@@ -727,11 +766,11 @@ class Funcable f where
 instance (Kind a, Funcable b) => Funcable (a -> b) where
   type Result (a -> b) = Result b
 
-  params _proxy = kind (Proxy @a) : params (Proxy @b)
-  result _proxy = result (Proxy @b)
+  writeParamKinds _proxy mutVec ix = do
+    VUM.unsafeWrite mutVec ix $ kind (Proxy @a)
+    writeParamKinds (Proxy @b) mutVec (ix + 1)
 
-  paramsLen _proxy = 1 + paramsLen (Proxy @b)
-  resultLen _proxy = resultLen (Proxy @b)
+  nrOfParams _proxy = 1 + nrOfParams (Proxy @b)
 
   importCall _ _ 0 = pure Nothing
   importCall f p n = do
@@ -753,14 +792,11 @@ instance (Kind a, Funcable b) => Funcable (a -> b) where
       poke (castPtr cur_pos) x
       pure $ exportCall args_and_results_fp (ix + 1) len ctx func
 
-instance Results r => Funcable (IO r) where
-  type Result (IO r) = IO r
+instance Results r => Funcable (IO (Either Trap r)) where
+  type Result (IO (Either Trap r)) = IO (Either Trap r)
 
-  params _proxy = []
-  result _proxy = results (Proxy @r)
-
-  paramsLen _proxy = 0
-  resultLen _proxy = numResults (Proxy @r)
+  writeParamKinds _proxy _mutVec _ix = pure ()
+  nrOfParams _proxy = 0
 
   importCall x _ 0 = pure $ Just x
   importCall _ _ _ = pure Nothing
@@ -779,28 +815,15 @@ instance Results r => Funcable (IO r) where
                 trap_ptr_ptr
             checkWasmtimeError error_ptr
             trap_ptr <- peek trap_ptr_ptr
-            -- TODO: handle traps properly!!!
-            when (trap_ptr /= nullPtr) $
-              alloca $ \(message_ptr :: Ptr C'wasm_message_t) -> do
-                c'wasm_trap_message trap_ptr message_ptr
-                message_vec :: C'wasm_message_t <- peek message_ptr
-                message <-
-                  peekCStringLen
-                    ( c'wasm_byte_vec_t'data message_vec,
-                      fromIntegral $ c'wasm_byte_vec_t'size message_vec
-                    )
-                putStrLn $ "TRAP: " ++ message
+            if trap_ptr == nullPtr
+              then Right <$> readResults args_and_results_ptr
+              else Left <$> newTrapFromPtr trap_ptr
 
-            readResults args_and_results_ptr
+instance Results r => Funcable (ST s (Either Trap r)) where
+  type Result (ST s (Either Trap r)) = ST s (Either Trap r)
 
-instance Results r => Funcable (ST s r) where
-  type Result (ST s r) = ST s r
-
-  params _proxy = []
-  result _proxy = results (Proxy @r)
-
-  paramsLen _proxy = 0
-  resultLen _proxy = numResults (Proxy @r)
+  writeParamKinds _proxy _mutVec _ix = pure ()
+  nrOfParams _proxy = 0
 
   importCall x _ 0 = pure $ Just x
   importCall _ _ _ = pure Nothing
@@ -808,6 +831,12 @@ instance Results r => Funcable (ST s r) where
   exportCall args_and_results_fp ix len ctx func =
     unsafeIOToPrim $
       exportCall args_and_results_fp ix len ctx func
+
+paramKinds :: forall f. Funcable f => Proxy f -> VU.Vector C'wasm_valkind_t
+paramKinds proxy = runST $ do
+  mutVec <- VUM.unsafeNew $ nrOfParams $ Proxy @f
+  writeParamKinds proxy mutVec 0
+  VU.unsafeFreeze mutVec
 
 -- | A 'Func' annotated with its type.
 newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
@@ -827,8 +856,8 @@ newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
 --     print r -- prints "3"
 -- @
 toTypedFunc ::
-  forall s m f.
-  (MonadPrim s m, Funcable f) =>
+  forall s m f r.
+  (MonadPrim s m, Funcable f, Result f ~ m (Either Trap r), Results r) =>
   Context s ->
   Func s ->
   m (Maybe (TypedFunc s f))
@@ -840,18 +869,20 @@ toTypedFunc ctx func = unsafeIOToPrim $ do
       (func_results_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_results functype_ptr
       func_params :: C'wasm_valtype_vec_t <- peek func_params_ptr
       func_results :: C'wasm_valtype_vec_t <- peek func_results_ptr
-      (actual_params :: [C'wasm_valkind_t]) <- kindsOf func_params
-      (actual_results :: [C'wasm_valkind_t]) <- kindsOf func_results
+      (actual_params :: VU.Vector C'wasm_valkind_t) <- kindsOf func_params
+      (actual_results :: VU.Vector C'wasm_valkind_t) <- kindsOf func_results
       if desired_params == actual_params
         && desired_results == actual_results
         then pure $ Just $ TypedFunc func
         else pure Nothing
   where
-    desired_params = params $ Proxy @f
-    desired_results = result $ Proxy @f
+    desired_params = paramKinds $ Proxy @f
+    desired_results = resultKinds $ Proxy @r
 
-    kindsOf :: C'wasm_valtype_vec_t -> IO [C'wasm_valkind_t]
-    kindsOf valtype_vec = go s []
+    kindsOf :: C'wasm_valtype_vec_t -> IO (VU.Vector C'wasm_valkind_t)
+    kindsOf valtype_vec = VU.generateM s $ \ix -> do
+      cur_valtype_ptr <- peekElemOff p ix
+      c'wasm_valtype_kind cur_valtype_ptr
       where
         s :: Int
         s = fromIntegral $ c'wasm_valtype_vec_t'size valtype_vec
@@ -859,18 +890,15 @@ toTypedFunc ctx func = unsafeIOToPrim $ do
         p :: Ptr (Ptr C'wasm_valtype_t)
         p = c'wasm_valtype_vec_t'data valtype_vec
 
-        go :: Int -> [C'wasm_valkind_t] -> IO [C'wasm_valkind_t]
-        go 0 acc = pure acc
-        go n acc = do
-          let ix = n - 1
-          cur_valtype_ptr <- peekElemOff p ix
-          valkind <- c'wasm_valtype_kind cur_valtype_ptr
-          go ix (valkind : acc)
-
 -- | Call an exported 'TypedFunc'.
 callFunc ::
   forall f r s m.
-  (Funcable f, Result f ~ m r, MonadPrim s m, PrimBase m) =>
+  ( Funcable f,
+    Result f ~ m (Either Trap r),
+    Results r,
+    MonadPrim s m,
+    PrimBase m
+  ) =>
   Context s ->
   -- | See 'toTypedFunc'.
   TypedFunc s f ->
@@ -880,8 +908,8 @@ callFunc ctx typedFunc = unsafePerformIO $ mask_ $ do
   args_and_results_fp <- newForeignPtr finalizerFree args_and_results_ptr
   pure $ exportCall args_and_results_fp 0 (fromIntegral len) ctx (fromTypedFunc typedFunc)
   where
-    nargs = paramsLen $ Proxy @f
-    nres = resultLen $ Proxy @f
+    nargs = nrOfParams $ Proxy @f
+    nres = nrOfResults $ Proxy @r
     len = max nargs nres
 
 --------------------------------------------------------------------------------
@@ -918,16 +946,20 @@ fromExtern (Extern t v)
   where
     rep = typeRep :: TypeRep e
 
-withExterns :: [Extern s] -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
+withExterns :: Vector (Extern s) -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
 withExterns externs f = allocaArray n $ \externs_ptr0 ->
-  let go _externs_ptr [] = f externs_ptr0 $ fromIntegral n
-      go externs_ptr ((Extern _typeRep (e :: e s)) : es) = do
-        poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
-        poke (castPtr (p'wasmtime_extern'of externs_ptr)) $ getCExtern e
-        go (advancePtr externs_ptr 1) es
-   in go externs_ptr0 externs
+  let pokeExternsFrom ix
+        | ix == n = f externs_ptr0 $ fromIntegral n
+        | otherwise =
+            case V.unsafeIndex externs ix of
+              Extern _typeRep (e :: e s) -> do
+                let externs_ptr = advancePtr externs_ptr0 ix
+                poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
+                poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ getCExtern e
+                pokeExternsFrom (ix + 1)
+   in pokeExternsFrom 0
   where
-    n = length externs
+    n = V.length externs
 
 --------------------------------------------------------------------------------
 -- Memory
@@ -1037,14 +1069,24 @@ newtype Instance s = Instance {unInstance :: ForeignPtr C'wasmtime_instance_t}
 -- This function will instantiate a WebAssembly module with the provided
 -- imports, creating a WebAssembly instance. The returned instance can then
 -- afterwards be inspected for exports.
-newInstance :: MonadPrim s m => Context s -> Module -> [Extern s] -> m (Instance s)
+newInstance ::
+  MonadPrim s m =>
+  Context s ->
+  Module ->
+  -- | This function requires that this `imports` vector has the same size as
+  -- the imports of the given 'Module'. Additionally the `imports` must be 1:1
+  -- lined up with the imports of the specified module. This is intended to be
+  -- relatively low level, and 'newInstanceLinked' is provided for a more
+  -- ergonomic name-based resolution API.
+  Vector (Extern s) ->
+  m (Either Trap (Instance s))
 newInstance ctx m externs = unsafeIOToPrim $
   withContext ctx $ \ctx_ptr ->
     withModule m $ \mod_ptr ->
       withExterns externs $ \externs_ptr n -> do
         inst_fp <- mallocForeignPtr
         withForeignPtr inst_fp $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
-          alloca $ \(trap_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+          alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             error_ptr <-
               c'wasmtime_instance_new
                 ctx_ptr
@@ -1052,10 +1094,12 @@ newInstance ctx m externs = unsafeIOToPrim $
                 externs_ptr
                 n
                 inst_ptr
-                trap_ptr
+                trap_ptr_ptr
             checkWasmtimeError error_ptr
-            -- TODO: handle traps!!!
-            pure $ Instance inst_fp
+            trap_ptr <- peek trap_ptr_ptr
+            if trap_ptr == nullPtr
+              then pure $ Right $ Instance inst_fp
+              else Left <$> newTrapFromPtr trap_ptr
 
 withInstance :: Instance s -> (Ptr C'wasmtime_instance_t -> IO a) -> IO a
 withInstance = withForeignPtr . unInstance
@@ -1095,8 +1139,8 @@ getExport ctx inst name = unsafeIOToPrim $
 -- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally checks if
 -- the type of the function matches the desired type @f@ ('toTypedFunc').
 getExportedTypedFunc ::
-  forall s m f.
-  (MonadPrim s m, Funcable f) =>
+  forall s m f r.
+  (MonadPrim s m, Funcable f, Result f ~ m (Either Trap r), Results r) =>
   Context s ->
   Instance s ->
   String ->
@@ -1106,6 +1150,180 @@ getExportedTypedFunc ctx inst name = do
   case mbExtern >>= fromExtern of
     Nothing -> pure Nothing
     Just (func :: Func s) -> toTypedFunc ctx func
+
+--------------------------------------------------------------------------------
+-- Traps
+--------------------------------------------------------------------------------
+
+-- | Under some conditions, certain WASM instructions may produce a
+-- trap, which immediately aborts execution. Traps cannot be handled
+-- by WebAssembly code, but are reported to the outside environment,
+-- where they will be caught.
+newtype Trap = Trap {unTrap :: ForeignPtr C'wasm_trap_t}
+
+-- | A trap with a given message.
+newTrap :: String -> Trap
+newTrap msg = unsafePerformIO $ withCStringLen msg $ \(p, n) ->
+  mask_ $ c'wasmtime_trap_new p (fromIntegral n) >>= newTrapFromPtr
+
+newTrapFromPtr :: Ptr C'wasm_trap_t -> IO Trap
+newTrapFromPtr = fmap Trap . newForeignPtr p'wasm_trap_delete
+
+withTrap :: Trap -> (Ptr C'wasm_trap_t -> IO a) -> IO a
+withTrap trap = withForeignPtr (unTrap trap)
+
+instance Show Trap where
+  show trap = unsafePerformIO $
+    withTrap trap $ \trap_ptr ->
+      alloca $ \(wasm_msg_ptr :: Ptr C'wasm_message_t) -> do
+        c'wasm_trap_message trap_ptr wasm_msg_ptr
+        let p = castPtr wasm_msg_ptr :: Ptr C'wasm_byte_vec_t
+        peekByteVecAsString p
+
+instance Exception Trap
+
+-- | Attempts to extract the trap code from the given trap.
+--
+-- Returns 'Just' the trap code if the trap is an instruction trap
+-- triggered while executing Wasm. Returns 'Nothing' otherwise,
+-- i.e. when the trap was created using 'newTrap' for example.
+trapCode :: Trap -> Maybe TrapCode
+trapCode trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
+  alloca $ \code_ptr -> do
+    isInstructionTrap <- c'wasmtime_trap_code trap_ptr code_ptr
+    if isInstructionTrap
+      then Just . toTrapCode <$> peek code_ptr
+      else pure Nothing
+
+toTrapCode :: C'wasmtime_trap_code_t -> TrapCode
+toTrapCode code
+  | code == c'WASMTIME_TRAP_CODE_STACK_OVERFLOW = TRAP_CODE_STACK_OVERFLOW
+  | code == c'WASMTIME_TRAP_CODE_MEMORY_OUT_OF_BOUNDS = TRAP_CODE_MEMORY_OUT_OF_BOUNDS
+  | code == c'WASMTIME_TRAP_CODE_HEAP_MISALIGNED = TRAP_CODE_HEAP_MISALIGNED
+  | code == c'WASMTIME_TRAP_CODE_TABLE_OUT_OF_BOUNDS = TRAP_CODE_TABLE_OUT_OF_BOUNDS
+  | code == c'WASMTIME_TRAP_CODE_INDIRECT_CALL_TO_NULL = TRAP_CODE_INDIRECT_CALL_TO_NULL
+  | code == c'WASMTIME_TRAP_CODE_BAD_SIGNATURE = TRAP_CODE_BAD_SIGNATURE
+  | code == c'WASMTIME_TRAP_CODE_INTEGER_OVERFLOW = TRAP_CODE_INTEGER_OVERFLOW
+  | code == c'WASMTIME_TRAP_CODE_INTEGER_DIVISION_BY_ZERO = TRAP_CODE_INTEGER_DIVISION_BY_ZERO
+  | code == c'WASMTIME_TRAP_CODE_BAD_CONVERSION_TO_INTEGER = TRAP_CODE_BAD_CONVERSION_TO_INTEGER
+  | code == c'WASMTIME_TRAP_CODE_UNREACHABLE_CODE_REACHED = TRAP_CODE_UNREACHABLE_CODE_REACHED
+  | code == c'WASMTIME_TRAP_CODE_INTERRUPT = TRAP_CODE_INTERRUPT
+  | code == c'WASMTIME_TRAP_CODE_OUT_OF_FUEL = TRAP_CODE_OUT_OF_FUEL
+  | otherwise = error $ "Unknown trap code " ++ show code
+
+-- | Trap codes for instruction traps.
+data TrapCode
+  = -- | The current stack space was exhausted.
+    TRAP_CODE_STACK_OVERFLOW
+  | -- | An out-of-bounds memory access.
+    TRAP_CODE_MEMORY_OUT_OF_BOUNDS
+  | -- | A wasm atomic operation was presented with a not-naturally-aligned
+    -- linear-memory address.
+    TRAP_CODE_HEAP_MISALIGNED
+  | -- | An out-of-bounds access to a table.
+    TRAP_CODE_TABLE_OUT_OF_BOUNDS
+  | -- | Indirect call to a null table entry.
+    TRAP_CODE_INDIRECT_CALL_TO_NULL
+  | -- | Signature mismatch on indirect call.
+    TRAP_CODE_BAD_SIGNATURE
+  | -- | An integer arithmetic operation caused an overflow.
+    TRAP_CODE_INTEGER_OVERFLOW
+  | -- | An integer division by zero.
+    TRAP_CODE_INTEGER_DIVISION_BY_ZERO
+  | -- | Failed float-to-int conversion.
+    TRAP_CODE_BAD_CONVERSION_TO_INTEGER
+  | -- | Code that was supposed to have been unreachable was reached.
+    TRAP_CODE_UNREACHABLE_CODE_REACHED
+  | -- | Execution has potentially run too long and may be interrupted.
+    TRAP_CODE_INTERRUPT
+  | -- | Execution has run out of the configured fuel amount.
+    TRAP_CODE_OUT_OF_FUEL
+  deriving (Show, Eq)
+
+-- | Returns 'Just' the top frame of the wasm stack responsible for this trap.
+--
+-- This function may return 'Nothing', for example, for traps created when there
+-- wasn't anything on the wasm stack.
+trapOrigin :: Trap -> Maybe Frame
+trapOrigin trap = unsafePerformIO $ withTrap trap $ \trap_ptr -> mask_ $ do
+  frame_ptr <- c'wasm_trap_origin trap_ptr
+  if frame_ptr == nullPtr
+    then pure Nothing
+    else Just <$> newFrameFromPtr frame_ptr
+
+-- | Returns the trace of wasm frames for this trap.
+--
+-- Frames are listed in order of increasing depth, with the most recently called
+-- function at the front of the vector and the base function on the stack at the
+-- end.
+trapTrace :: Trap -> Vector Frame
+trapTrace trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
+  alloca $ \(frame_vec_ptr :: Ptr C'wasm_frame_vec_t) -> mask_ $ do
+    c'wasm_trap_trace trap_ptr frame_vec_ptr
+    frame_vec <- peek frame_vec_ptr
+    let sz = fromIntegral $ c'wasm_frame_vec_t'size frame_vec :: Int
+    let dt = c'wasm_frame_vec_t'data frame_vec :: Ptr (Ptr C'wasm_frame_t)
+    vec <- V.generateM sz $ \ix -> do
+      frame_ptr <- peekElemOff dt ix
+      newFrameFromPtr frame_ptr
+    c'wasm_frame_vec_delete frame_vec_ptr
+    pure vec
+
+--------------------------------------------------------------------------------
+-- Frames
+--------------------------------------------------------------------------------
+
+-- | A frame of a wasm stack trace.
+--
+-- Can be retrieved using 'trapOrigin' or 'trapTrace'.
+newtype Frame = Frame {unFrame :: ForeignPtr C'wasm_frame_t}
+
+newFrameFromPtr :: Ptr C'wasm_frame_t -> IO Frame
+newFrameFromPtr = fmap Frame . newForeignPtr p'wasm_frame_delete
+
+withFrame :: Frame -> (Ptr C'wasm_frame_t -> IO a) -> IO a
+withFrame frame = withForeignPtr (unFrame frame)
+
+-- | Returns 'Just' a human-readable name for this frame's function.
+--
+-- This function will attempt to load a human-readable name for the function
+-- this frame points to. This function may return 'Nothing'.
+frameFuncName :: Frame -> Maybe String
+frameFuncName frame = unsafePerformIO $ withFrame frame $ \frame_ptr -> do
+  name_ptr <- c'wasmtime_frame_func_name frame_ptr
+  if name_ptr == nullPtr
+    then pure Nothing
+    else do
+      let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
+      Just <$> peekByteVecAsString p
+
+-- | Returns 'Just' a human-readable name for this frame's module.
+--
+-- This function will attempt to load a human-readable name for the module this
+-- frame points to. This function may return 'Nothing'.
+frameModuleName :: Frame -> Maybe String
+frameModuleName frame = unsafePerformIO $ withFrame frame $ \frame_ptr -> do
+  name_ptr <- c'wasmtime_frame_module_name frame_ptr
+  if name_ptr == nullPtr
+    then pure Nothing
+    else do
+      let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
+      Just <$> peekByteVecAsString p
+
+-- | Returns the function index in the original wasm module that this
+-- frame corresponds to.
+frameFuncIndex :: Frame -> Word32
+frameFuncIndex frame = unsafePerformIO $ withFrame frame c'wasm_frame_func_index
+
+-- | Returns the byte offset from the beginning of the function in the
+-- original wasm file to the instruction this frame points to.
+frameFuncOffset :: Frame -> Word32
+frameFuncOffset frame = unsafePerformIO $ withFrame frame c'wasm_frame_func_offset
+
+-- | Returns the byte offset from the beginning of the original wasm
+-- file to the instruction this frame points to.
+frameModuleOffset :: Frame -> Word32
+frameModuleOffset frame = unsafePerformIO $ withFrame frame c'wasm_frame_module_offset
 
 --------------------------------------------------------------------------------
 -- Errors
@@ -1143,8 +1361,15 @@ instance Show WasmtimeError where
     withWasmtimeError wasmtimeError $ \error_ptr ->
       alloca $ \(wasm_name_ptr :: Ptr C'wasm_name_t) -> do
         c'wasmtime_error_message error_ptr wasm_name_ptr
-        let p :: Ptr C'wasm_byte_vec_t
-            p = castPtr wasm_name_ptr
-        data_ptr <- peek $ p'wasm_byte_vec_t'data p
-        size <- peek $ p'wasm_byte_vec_t'size p
-        peekCStringLen (data_ptr, fromIntegral size)
+        let p = castPtr wasm_name_ptr :: Ptr C'wasm_byte_vec_t
+        peekByteVecAsString p
+
+--------------------------------------------------------------------------------
+-- Utils
+--------------------------------------------------------------------------------
+
+peekByteVecAsString :: Ptr C'wasm_byte_vec_t -> IO String
+peekByteVecAsString p = do
+  data_ptr <- peek $ p'wasm_byte_vec_t'data p
+  size <- peek $ p'wasm_byte_vec_t'size p
+  peekCStringLen (data_ptr, fromIntegral size)

@@ -1,10 +1,11 @@
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 
 -- | Demo on how to use wasmtime within the ST monad.
 module Main (main) where
 
-import Control.Exception (throwIO)
+import Control.Exception (Exception, throwIO)
 import Control.Monad.ST (ST, runST)
 import qualified Data.ByteString as B
 import Data.STRef
@@ -22,9 +23,9 @@ main = do
   helloWatPath <- getDataFileName "test/hello.wat"
   watBytes <- B.readFile helloWatPath
 
-  wasm :: Wasm <- handleWasmtimeError $ wat2wasm watBytes
+  wasm :: Wasm <- handleException $ wat2wasm watBytes
 
-  myModule :: Module <- handleWasmtimeError $ newModule engine wasm
+  myModule :: Module <- handleException $ newModule engine wasm
 
   let x :: Int
       x = runST (st engine myModule)
@@ -41,17 +42,17 @@ st engine myModule = do
 
   func :: Func s <- newFunc ctx $ inc stRef
 
-  inst :: Instance s <- newInstance ctx myModule [toExtern func]
+  Right (inst :: Instance s) <- newInstance ctx myModule [toExtern func]
 
-  Just (runTypedFunc :: TypedFunc s (ST s ())) <-
+  Just (runTypedFunc :: TypedFunc s (ST s (Either Trap ()))) <-
     getExportedTypedFunc ctx inst "run"
 
-  callFunc ctx runTypedFunc
+  Right () <- callFunc ctx runTypedFunc
 
   readSTRef stRef
 
-inc :: STRef s Int -> ST s ()
-inc stRef = modifySTRef stRef (+ 1)
+inc :: STRef s Int -> ST s (Either Trap ())
+inc stRef = Right <$> modifySTRef stRef (+ 1)
 
-handleWasmtimeError :: Either WasmtimeError a -> IO a
-handleWasmtimeError = either throwIO pure
+handleException :: Exception e => Either e r -> IO r
+handleException = either throwIO pure

@@ -1,10 +1,11 @@
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 
 -- | Haskell translation of: https://docs.wasmtime.dev/examples-c-hello-world.html
 module Main (main) where
 
-import Control.Exception (throwIO)
+import Control.Exception (Exception, throwIO)
 import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Paths_wasmtime (getDataFileName)
@@ -25,30 +26,31 @@ main = do
   helloWatPath <- getDataFileName "test/hello.wat"
   watBytes <- B.readFile helloWatPath
 
-  wasm <- handleWasmtimeError $ wat2wasm watBytes
+  wasm <- handleException $ wat2wasm watBytes
 
   putStrLn "Compiling module..."
-  myModule <- handleWasmtimeError $ newModule engine wasm
+  myModule <- handleException $ newModule engine wasm
 
   putStrLn "Creating callback..."
   func <- newFunc ctx hello
 
   putStrLn "Instantiating module..."
-  inst <- newInstance ctx myModule [toExtern func]
+  inst <- newInstance ctx myModule [toExtern func] >>= handleException
 
   putStrLn "Extracting export..."
-  Just ((runTypedFunc :: TypedFunc RealWorld (IO ()))) <-
+  Just ((runTypedFunc :: TypedFunc RealWorld (IO (Either Trap ())))) <-
     getExportedTypedFunc ctx inst "run"
 
   putStrLn "Calling export..."
-  callFunc ctx runTypedFunc
+  callFunc ctx runTypedFunc >>= handleException
 
   putStrLn "All finished!"
 
-hello :: IO ()
-hello = do
-  putStrLn "Calling back..."
-  putStrLn "> Hello World!"
+hello :: IO (Either Trap ())
+hello =
+  Right <$> do
+    putStrLn "Calling back..."
+    putStrLn "> Hello World!"
 
-handleWasmtimeError :: Either WasmtimeError a -> IO a
-handleWasmtimeError = either throwIO pure
+handleException :: Exception e => Either e r -> IO r
+handleException = either throwIO pure
