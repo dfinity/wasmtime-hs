@@ -1167,6 +1167,15 @@ getExportedTypedFunc ctx inst name = do
     Nothing -> pure Nothing
     Just (func :: Func s) -> toTypedFunc ctx func
 
+getExportedMemory ::
+  forall s m.
+  (MonadPrim s m) =>
+  Context s ->
+  Instance s ->
+  String ->
+  m (Maybe (Memory s))
+getExportedMemory ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
+
 --------------------------------------------------------------------------------
 -- Traps
 --------------------------------------------------------------------------------

@@ -27,7 +27,7 @@ main = do
   inst <- newInstance ctx myModule []
 
   putStrLn "Extracting exports..."
-  -- memory <- getExport ctx inst "memory"
+  memory <- getExport ctx inst "memory"
   putStrLn "All finished"
 
 handleWasmtimeError :: Either WasmtimeError a -> IO a
