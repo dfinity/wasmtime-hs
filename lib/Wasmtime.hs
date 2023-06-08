@@ -962,38 +962,68 @@ getMax mt = unsafePerformIO $
 is64Memory :: MemoryType -> Bool
 is64Memory mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
 
-newtype Memory s = Memory {getMemory :: ForeignPtr C'wasmtime_memory}
-
-withMemory :: Memory s -> (Ptr C'wasmtime_memory -> IO a) -> IO a
-withMemory = withForeignPtr . getMemory
+newtype Memory s = Memory {getMemory :: C'wasmtime_memory_t}
 
 newMemory :: MonadPrim s m => Context s -> MemoryType -> m (Either WasmtimeError (Memory s))
 newMemory ctx memtype = unsafeIOToPrim $
   try $
     withContext ctx $ \ctx_ptr ->
-      withMemoryType memtype $ \memtype_ptr -> mask_ $ do
-        mem_ptr <- malloc -- TODO: mallocforeignptr
-        error_ptr <- c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
-        checkWasmtimeError error_ptr
-        Memory <$> newForeignPtr finalizerFree mem_ptr
+      withMemoryType memtype $ \memtype_ptr ->
+        alloca $ \mem_ptr -> do
+          error_ptr <- c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
+          checkWasmtimeError error_ptr
+          Memory <$> peek mem_ptr
+
+withMemory :: Memory s -> (Ptr C'wasmtime_memory_t -> IO a) -> IO a
+withMemory = with . getMemory
 
 getMemoryType :: Context s -> Memory s -> MemoryType
 getMemoryType ctx mem = unsafePerformIO $
   withContext ctx $ \ctx_ptr ->
-    withMemory mem $ \mem_ptr -> do
-      -- TODO: Question: I did not manage to put these on a single line
+    withMemory mem $ \mem_ptr -> mask_ $ do
       memtype_ptr <- c'wasmtime_memory_type ctx_ptr mem_ptr
       MemoryType <$> newForeignPtr p'wasm_memorytype_delete memtype_ptr
 
--- have to get the length of the data and the data pointer
-unsafeGetMemoryData :: Context s -> Memory s -> IO B.ByteString
-unsafeGetMemoryData ctx mem =
+-- | Returns the length of the linear memory in WebAssembly pages
+getMemorySizePages :: Context s -> Memory s -> Word64
+getMemorySizePages ctx mem = unsafePerformIO $
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem $ \mem_ptr ->
+      c'wasmtime_memory_size ctx_ptr mem_ptr
+
+growMemory :: MonadPrim s m => Context s -> Memory s -> Word64 -> m (Either WasmtimeError Word64)
+growMemory ctx mem delta = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withMemory mem $ \mem_ptr ->
+        alloca $ \before_size_ptr -> do
+          error_ptr <- c'wasmtime_memory_grow ctx_ptr mem_ptr delta before_size_ptr
+          checkWasmtimeError error_ptr
+          peek before_size_ptr
+
+unsafeWithMemory :: Context s -> Memory s -> (Ptr Word8 -> Int -> IO a) -> IO a
+unsafeWithMemory ctx mem f =
   withContext ctx $ \ctx_ptr ->
     withMemory mem $ \mem_ptr -> do
-      mem_size <- c'wasmtime_memory_data_size ctx_ptr mem_ptr
+      mem_size <- fromIntegral <$> c'wasmtime_memory_data_size ctx_ptr mem_ptr
       mem_data_ptr <- c'wasmtime_memory_data ctx_ptr mem_ptr
+      f mem_data_ptr mem_size
 
-      undefined
+freezeMemory :: MonadPrim s m => Context s -> Memory s -> m B.ByteString
+freezeMemory ctx mem = unsafeIOToPrim $
+  unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
+    BI.create mem_size $ \dst_ptr ->
+      BI.memcpy dst_ptr mem_data_ptr mem_size
+
+-- have to get the length of the data and the data pointer
+-- unsafeGetMemoryData :: Context s -> Memory s -> IO B.ByteString
+-- unsafeGetMemoryData ctx mem =
+--   withContext ctx $ \ctx_ptr ->
+--     withMemory mem $ \mem_ptr -> do
+--       mem_size <- c'wasmtime_memory_data_size ctx_ptr mem_ptr
+--       mem_data_ptr <- c'wasmtime_memory_data ctx_ptr mem_ptr
+
+--       undefined
 
 --------------------------------------------------------------------------------
 -- Instances
