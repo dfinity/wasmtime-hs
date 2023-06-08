@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedLists #-}
+
 -- | Haskell translation of: https://docs.wasmtime.dev/examples-c-memory.html
 module Main (main) where
 
@@ -16,7 +18,7 @@ main = do
   engine <- newEngine
   store <- newStore engine
   ctx <- storeContext store
-  wasm <- wasmFromPath "tests/memory.wat"
+  wasm <- wasmFromPath "test/memory.wat"
 
   putStrLn "Compiling module..."
   myModule <- handleWasmtimeError $ newModule engine wasm
