@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
@@ -925,13 +926,18 @@ data Extern s where
 -- | Class of types that can be imported and exported from @'Instance's@.
 class (Storable (CType e), Typeable e) => Externable (e :: Type -> Type) where
   type CType e :: Type
-  getCExtern :: e s -> CType e
+  toCExtern :: e s -> CType e
   externKind :: Proxy e -> C'wasmtime_extern_kind_t
 
 instance Externable Func where
   type CType Func = C'wasmtime_func
-  getCExtern = getWasmtimeFunc
+  toCExtern = getWasmtimeFunc
   externKind _proxy = c'WASMTIME_EXTERN_FUNC
+
+instance Externable Memory where
+  type CType Memory = C'wasmtime_memory_t
+  toCExtern = getWasmtimeMemory
+  externKind _proxy = c'WASMTIME_EXTERN_MEMORY
 
 -- | Turn any externable value (like a 'Func') into the 'Extern' container.
 toExtern :: forall e s. Externable e => e s -> Extern s
@@ -955,7 +961,7 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
               Extern _typeRep (e :: e s) -> do
                 let externs_ptr = advancePtr externs_ptr0 ix
                 poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
-                poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ getCExtern e
+                poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ toCExtern e
                 pokeExternsFrom (ix + 1)
    in pokeExternsFrom 0
   where
@@ -994,7 +1000,7 @@ getMax mt = unsafePerformIO $
 is64Memory :: MemoryType -> Bool
 is64Memory mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
 
-newtype Memory s = Memory {getMemory :: C'wasmtime_memory_t}
+newtype Memory s = Memory {getWasmtimeMemory :: C'wasmtime_memory_t}
 
 newMemory :: MonadPrim s m => Context s -> MemoryType -> m (Either WasmtimeError (Memory s))
 newMemory ctx memtype = unsafeIOToPrim $
@@ -1126,14 +1132,17 @@ getExport ctx inst name = unsafeIOToPrim $
                   of_ptr :: Ptr C'wasmtime_extern_union_t
                   of_ptr = p'wasmtime_extern'of extern_ptr
               k <- peek kind_ptr
-              if k == c'WASMTIME_EXTERN_FUNC
-                then do
-                  let func_ptr :: Ptr C'wasmtime_func_t
-                      func_ptr = castPtr of_ptr
-                  (func :: Func s) <- Func <$> peek func_ptr
-                  pure $ Just $ toExtern func
-                else pure Nothing
+              if
+                  | k == c'WASMTIME_EXTERN_FUNC -> fromCExtern of_ptr Func
+                  | k == c'WASMTIME_EXTERN_MEMORY -> fromCExtern of_ptr Memory
+                  | otherwise -> pure Nothing
             else pure Nothing
+  where
+    fromCExtern :: (Externable e) => Ptr C'wasmtime_extern_union_t -> (CType e -> e s) -> IO (Maybe (Extern s))
+    fromCExtern of_ptr constr = do
+      let ex_ptr = castPtr of_ptr
+      ex <- constr <$> peek ex_ptr
+      pure $ Just $ toExtern ex
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally checks if
