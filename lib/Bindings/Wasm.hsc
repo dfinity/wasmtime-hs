@@ -133,8 +133,6 @@ module Bindings.Wasm where
 
 #ccall wasm_trap_message , Ptr <wasm_trap_t> -> Ptr <wasm_message_t> -> IO ()
 
-#synonym_t wasm_message_t , <wasm_byte_vec_t>
-
 #ccall wasm_trap_origin , Ptr <wasm_trap_t> -> IO (Ptr <wasm_frame_t>)
 
 #ccall wasm_trap_trace , Ptr <wasm_trap_t> -> Ptr <wasm_frame_vec_t> -> IO ()
