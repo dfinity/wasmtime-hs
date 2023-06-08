@@ -31,7 +31,7 @@ main = do
 
   myModule <- handleException $ newModule engine wasm
 
-  inst <- newInstance ctx myModule []
+  inst <- newInstance ctx myModule [] >>= handleException
 
   Just (gcdTypedFunc :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap Int32))) <-
     getExportedTypedFunc ctx inst "gcd"
