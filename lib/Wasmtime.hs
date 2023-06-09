@@ -96,7 +96,7 @@ module Wasmtime
     getMemorySizePages,
     growMemory,
     unsafeWithMemory,
-    freezeMemory,
+    readMemory,
     writeMemory,
     MemoryAccessError (..),
 
@@ -990,8 +990,13 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
 -- Memory
 --------------------------------------------------------------------------------
 
+-- | A descriptor for a WebAssembly memory type.
+--
+-- Memories are described in units of pages (64KB) and represent contiguous chunks of addressable memory.
 newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
 
+-- | Creates a descriptor for a WebAssembly 'Memory' with the specified minimum number of memory pages,
+-- an optional maximum of memory pages, and a 64 bit flag, where false defaults to 32 bit memory.
 newMemoryType :: Word64 -> Maybe Word64 -> Bool -> MemoryType
 newMemoryType mini mbMax is64 = unsafePerformIO $ mask_ $ do
   mem_type_ptr <- c'wasmtime_memorytype_new mini max_present maxi is64
@@ -999,14 +1004,14 @@ newMemoryType mini mbMax is64 = unsafePerformIO $ mask_ $ do
   where
     (max_present, maxi) = maybe (False, 0) (True,) mbMax
 
--- TODO: typeclass for these withXs
-
 withMemoryType :: MemoryType -> (Ptr C'wasm_memorytype_t -> IO a) -> IO a
 withMemoryType = withForeignPtr . unMemoryType
 
+-- | Returns the minimum number of pages of this memory descriptor.
 getMin :: MemoryType -> Word64
 getMin mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_minimum
 
+-- | Returns the maximum number of pages of this memory descriptor, if one was set.
 getMax :: MemoryType -> Maybe Word64
 getMax mt = unsafePerformIO $
   withMemoryType mt $ \mem_type_ptr ->
@@ -1016,12 +1021,24 @@ getMax mt = unsafePerformIO $
         then pure Nothing
         else Just <$> peek max_ptr
 
+-- | Returns false if the memory is 32 bit and true if it is 64 bit.
 is64Memory :: MemoryType -> Bool
 is64Memory mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
 
+-- | A WebAssembly linear memory.
+--
+-- WebAssembly memories represent a contiguous array of bytes that have a size
+-- that is always a multiple of the WebAssembly page size, currently 64 kilobytes.
+--
+-- WebAssembly memory is used for global data (not to be confused with
+-- wasm global items), statics in C/C++/Rust, shadow stack memory, etc.
+-- Accessing wasm memory is generally quite fast.
+--
+-- Memories, like other wasm items, are owned by a 'Store'.
 newtype Memory s = Memory {getWasmtimeMemory :: C'wasmtime_memory_t}
   deriving (Show)
 
+-- | Create new memory with the properties described in the 'MemoryType' argument.
 newMemory :: MonadPrim s m => Context s -> MemoryType -> m (Either WasmtimeError (Memory s))
 newMemory ctx memtype = unsafeIOToPrim $
   try $
@@ -1035,6 +1052,7 @@ newMemory ctx memtype = unsafeIOToPrim $
 withMemory :: Memory s -> (Ptr C'wasmtime_memory_t -> IO a) -> IO a
 withMemory = with . getWasmtimeMemory
 
+-- | Returns the 'MemoryType' descriptor for this memory.
 getMemoryType :: Context s -> Memory s -> MemoryType
 getMemoryType ctx mem = unsafePerformIO $
   withContext ctx $ \ctx_ptr ->
@@ -1042,11 +1060,11 @@ getMemoryType ctx mem = unsafePerformIO $
       memtype_ptr <- c'wasmtime_memory_type ctx_ptr mem_ptr
       MemoryType <$> newForeignPtr p'wasm_memorytype_delete memtype_ptr
 
-getMemorySizeBytes :: MonadPrim s m => Context s -> Memory s -> m CSize
+-- | Returns the linear memory size in bytes. Always a multiple of 64KB (65536).
+getMemorySizeBytes :: MonadPrim s m => Context s -> Memory s -> m Word64
 getMemorySizeBytes ctx mem = unsafeIOToPrim $
   withContext ctx $ \ctx_ptr ->
-    withMemory mem $ \mem_ptr ->
-      c'wasmtime_memory_data_size ctx_ptr mem_ptr
+    withMemory mem (fmap fromIntegral . c'wasmtime_memory_data_size ctx_ptr)
 
 -- | Returns the length of the linear memory in WebAssembly pages
 getMemorySizePages :: MonadPrim s m => Context s -> Memory s -> m Word64
@@ -1055,6 +1073,7 @@ getMemorySizePages ctx mem = unsafeIOToPrim $
     withMemory mem $ \mem_ptr ->
       c'wasmtime_memory_size ctx_ptr mem_ptr
 
+-- | Grow the linar memory by a number of pages.
 growMemory :: MonadPrim s m => Context s -> Memory s -> Word64 -> m (Either WasmtimeError Word64)
 growMemory ctx mem delta = unsafeIOToPrim $
   try $
@@ -1065,6 +1084,11 @@ growMemory ctx mem delta = unsafeIOToPrim $
           checkWasmtimeError error_ptr
           peek before_size_ptr
 
+-- | Takes a continuation which can mutate the linear memory. The continuation is provided with
+-- a pointer to the beginning of the memory and its maximum length. Do not write outside the bounds!
+--
+-- This function is unsafe, because we do not restrict the continuation in any way.
+-- DO NOT call exported wasm functions, grow the memory or do anything similar in the continuation!
 unsafeWithMemory :: Context s -> Memory s -> (Ptr Word8 -> Int -> IO a) -> IO a
 unsafeWithMemory ctx mem f =
   withContext ctx $ \ctx_ptr ->
@@ -1073,11 +1097,26 @@ unsafeWithMemory ctx mem f =
       mem_data_ptr <- c'wasmtime_memory_data ctx_ptr mem_ptr
       f mem_data_ptr mem_size
 
-freezeMemory :: MonadPrim s m => Context s -> Memory s -> m B.ByteString
-freezeMemory ctx mem = unsafeIOToPrim $
+-- | Returns a copy of the whole linear memory as a bytestring.
+readMemory :: MonadPrim s m => Context s -> Memory s -> m B.ByteString
+readMemory ctx mem = unsafeIOToPrim $
   unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
     BI.create mem_size $ \dst_ptr ->
       BI.memcpy dst_ptr mem_data_ptr mem_size
+
+-- | Takes an offset and a length, and returns a copy of the memory starting at offset until offset + length.
+-- Returns @Left MemoryAccessError@ if offset + length exceeds the length of the memory.
+readMemoryAt :: MonadPrim s m => Context s -> Memory s -> Word64 -> Word64 -> m (Either MemoryAccessError B.ByteString)
+readMemoryAt ctx mem offset len = do
+  max_len <- getMemorySizeBytes ctx mem
+  unsafeIOToPrim $ do
+    if offset + len > max_len
+      then pure $ Left MemoryAccessError
+      else do
+        res <- unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
+          BI.create mem_size $ \dst_ptr ->
+            BI.memcpy dst_ptr mem_data_ptr mem_size
+        pure $ Right res
 
 -- | Safely writes a 'ByteString' to this memory at the given offset.
 --
@@ -1103,18 +1142,6 @@ writeMemory ctx mem offset (BI.BS fp n) =
 data MemoryAccessError = MemoryAccessError deriving (Show)
 
 instance Exception MemoryAccessError
-
--- TODO: size in bytes
-
--- have to get the length of the data and the data pointer
--- unsafeGetMemoryData :: Context s -> Memory s -> IO B.ByteString
--- unsafeGetMemoryData ctx mem =
---   withContext ctx $ \ctx_ptr ->
---     withMemory mem $ \mem_ptr -> do
---       mem_size <- c'wasmtime_memory_data_size ctx_ptr mem_ptr
---       mem_data_ptr <- c'wasmtime_memory_data ctx_ptr mem_ptr
-
---       undefined
 
 --------------------------------------------------------------------------------
 -- Instances
