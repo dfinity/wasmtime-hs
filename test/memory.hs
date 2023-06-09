@@ -9,6 +9,9 @@ import Control.Exception.Base (assert)
 import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
+import Data.Primitive.Ptr (advancePtr)
+import Data.Word (Word8)
+import Foreign (poke)
 import Paths_wasmtime (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Wasmtime
@@ -35,36 +38,40 @@ main = do
 
   putStrLn "Extracting exports..."
   Just memory <- getExportedMemory ctx inst "memory"
-  Just (size :: TypedFunc RealWorld (IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "size"
-  Just (load :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "load"
-  Just (store :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
+  Just (sizeFun :: TypedFunc RealWorld (IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "size"
+  Just (loadFun :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "load"
+  Just (storeFun :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
 
   putStrLn "Checking memory..."
   size_pages <- getMemorySizePages ctx memory
   let _ = assert (size_pages == 2) ()
   size_bytes <- getMemorySizeBytes ctx memory
-  let _ = assert (size_bytes == 131072) ()
+  let _ = assert (size_bytes == 0x20000) ()
   mem_bs <- freezeMemory ctx memory
   let _ = assert (B.head mem_bs == 0) ()
-  let _ = assert (B.index mem_bs 4096 == 1) ()
-  let _ = assert (B.index mem_bs 4099 == 4) ()
+  let _ = assert (B.index mem_bs 0x1000 == 1) ()
+  let _ = assert (B.index mem_bs 0x1003 == 4) ()
+  -- check function calls
+  Right 2 <- callFunc ctx sizeFun
+  Right 0 <- callFunc ctx loadFun 0
+  Right 1 <- callFunc ctx loadFun 0x1000
+  Right 4 <- callFunc ctx loadFun 0x1003
+  Right 0 <- callFunc ctx loadFun 0x1ffff
+  Left trap_res <- callFunc ctx loadFun 0x20000
+  let _ = assert (trapCode trap_res == Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS) ()
 
-  putStrLn "====="
+  putStrLn "Mutating memory..."
+  unsafeWriteByte ctx memory 0x1003 5
+  Right () <- callFunc ctx storeFun 0x1002 6
+  Left trap_res <- callFunc ctx storeFun 0x20000 0
+  let _ = assert (trapCode trap_res == Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS) ()
+  mem_bs <- freezeMemory ctx memory
+  let _ = assert (B.index mem_bs 0x1002 == 6) ()
+  let _ = assert (B.index mem_bs 0x1003 == 5) ()
+  Right 6 <- callFunc ctx loadFun 0x1002
+  Right 5 <- callFunc ctx loadFun 0x1003
 
-  -- print memory
-  Just (storeFun :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
-  Right () <- callFunc ctx storeFun 5 (-13)
-  frozen <- freezeMemory ctx memory
-  size_before <- getMemorySizePages ctx memory
-  print ("size before", size_before)
-  print $ B.length frozen
-  size_bytes <- getMemorySizeBytes ctx memory
-  print ("size bytes", size_bytes)
-
-  _ <- growMemory ctx memory 1 >>= handleException
-  size_after <- getMemorySizePages ctx memory
-  print ("size after", size_after)
-  print $ B.unpack $ B.take 20 frozen
+  putStrLn "Growing memory..."
   putStrLn "All finished"
 
 handleWasmtimeError :: Either WasmtimeError a -> IO a
@@ -77,3 +84,11 @@ wasmFromPath :: FilePath -> IO Wasm
 wasmFromPath path = do
   bytes <- getDataFileName path >>= B.readFile
   handleWasmtimeError $ wat2wasm bytes
+
+-- TODO: this is unsafe and does not check if the offset is within the linear memory
+-- replace with writeMemory!
+unsafeWriteByte :: Context s -> Memory s -> Int -> Word8 -> IO ()
+unsafeWriteByte ctx mem offset byte =
+  unsafeWithMemory ctx mem $ \start_ptr _maxlen -> do
+    let pos_ptr = advancePtr start_ptr offset
+    poke pos_ptr byte
