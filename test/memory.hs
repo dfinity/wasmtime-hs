@@ -13,7 +13,7 @@ import Data.Int (Int32)
 import Data.Word (Word8)
 import Paths_wasmtime (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
-import Test.Tasty.HUnit
+import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 
 main :: IO ()
@@ -42,25 +42,25 @@ main = do
   2 <- getMemorySizePages ctx memory
   0x20000 <- getMemorySizeBytes ctx memory
   mem_bs <- readMemory ctx memory
-  assertBool "Failed memory 0" $ B.head mem_bs == 0
-  assertBool "Failed memory 0x1000" $ B.index mem_bs 0x1000 == 1
-  assertBool "Failed memory 0x1003" $ B.index mem_bs 0x1003 == 4
+  B.head mem_bs @?= 0
+  B.index mem_bs 0x1000 @?= 1
+  B.index mem_bs 0x1003 @?= 4
   Right 2 <- callFunc ctx sizeFun
   Right 0 <- callFunc ctx loadFun 0
   Right 1 <- callFunc ctx loadFun 0x1000
   Right 4 <- callFunc ctx loadFun 0x1003
   Right 0 <- callFunc ctx loadFun 0x1ffff
   Left trap_res <- callFunc ctx loadFun 0x20000
-  assertBool "Failed trap code 1" $ trapCode trap_res == Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
+  trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
 
   putStrLn "Mutating memory..."
   Right () <- writeByte ctx memory 0x1003 5
   Right () <- callFunc ctx storeFun 0x1002 6
   Left trap_res <- callFunc ctx storeFun 0x20000 0
-  assertBool "Failed trap code 2" $ trapCode trap_res == Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
+  trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
   mem_bs <- readMemory ctx memory
-  assertBool "Failed memory 0x1002" $ B.index mem_bs 0x1002 == 6
-  assertBool "Failed memory 0x1003 2" $ B.index mem_bs 0x1003 == 5
+  B.index mem_bs 0x1002 @?= 6
+  B.index mem_bs 0x1003 @?= 5
   Right 6 <- callFunc ctx loadFun 0x1002
   Right 5 <- callFunc ctx loadFun 0x1003
 
@@ -71,9 +71,9 @@ main = do
   Right 0 <- callFunc ctx loadFun 0x20000
   Right () <- callFunc ctx storeFun 0x20000 0
   Left trap_res <- callFunc ctx loadFun 0x30000
-  assertBool "Failed trap code 3" $ trapCode trap_res == Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
+  trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
   Left trap_res <- callFunc ctx storeFun 0x30000 0
-  assertBool "Failed trap code 4" $ trapCode trap_res == Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
+  trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
   Left _ <- growMemory ctx memory 1
   Right 3 <- growMemory ctx memory 0
 
@@ -98,6 +98,3 @@ wasmFromPath path = do
 
 writeByte :: MonadPrim s m => Context s -> Memory s -> Int -> Word8 -> m (Either MemoryAccessError ())
 writeByte ctx mem offset byte = writeMemory ctx mem offset $ B.singleton byte
-
--- assertBool :: String -> Bool -> IO ()
--- assertBool msg bool = unless bool $ putStrLn msg
