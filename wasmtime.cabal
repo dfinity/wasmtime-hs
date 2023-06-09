@@ -37,9 +37,6 @@ library
     other-modules:    Bindings.Wasmtime.Table
     other-modules:    Bindings.Wasmtime.Global
     
-    
-    
-
     build-depends:    base >=4.15
     build-depends:    bindings-DSL >= 1.0.25
     build-depends:    bytestring >= 0.11.4
@@ -110,3 +107,5 @@ test-suite memory
     build-depends:    bytestring
     build-depends:    primitive
     build-depends:    wasmtime
+    build-depends:    tasty >= 1.4.3
+    build-depends:    tasty-hunit >= 0.10.0

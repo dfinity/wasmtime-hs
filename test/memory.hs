@@ -7,13 +7,13 @@
 module Main (main) where
 
 import Control.Exception (Exception, throwIO)
-import Control.Monad (unless)
 import Control.Monad.Primitive (MonadPrim, RealWorld)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
 import Data.Word (Word8)
 import Paths_wasmtime (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
+import Test.Tasty.HUnit
 import Wasmtime
 
 main :: IO ()
@@ -39,10 +39,8 @@ main = do
   Just (storeFun :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
 
   putStrLn "Checking memory..."
-  size_pages <- getMemorySizePages ctx memory
-  assertBool "Failed size_pages 1" $ size_pages == 2
-  size_bytes <- getMemorySizeBytes ctx memory
-  assertBool "Failed size_bytes 1" $ size_bytes == 0x20000
+  2 <- getMemorySizePages ctx memory
+  0x20000 <- getMemorySizeBytes ctx memory
   mem_bs <- readMemory ctx memory
   assertBool "Failed memory 0" $ B.head mem_bs == 0
   assertBool "Failed memory 0x1000" $ B.index mem_bs 0x1000 == 1
@@ -101,5 +99,5 @@ wasmFromPath path = do
 writeByte :: MonadPrim s m => Context s -> Memory s -> Int -> Word8 -> m (Either MemoryAccessError ())
 writeByte ctx mem offset byte = writeMemory ctx mem offset $ B.singleton byte
 
-assertBool :: String -> Bool -> IO ()
-assertBool msg bool = unless bool $ putStrLn msg
+-- assertBool :: String -> Bool -> IO ()
+-- assertBool msg bool = unless bool $ putStrLn msg
