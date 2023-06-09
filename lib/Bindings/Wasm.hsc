@@ -144,3 +144,11 @@ module Bindings.Wasm where
 #opaque_t wasm_memorytype_t
 
 #ccall wasm_memorytype_delete , Ptr <wasm_memorytype_t> -> IO ()
+
+
+--------------------------------------------------------------------------------
+-- Tables
+--------------------------------------------------------------------------------
+
+-- #opaque_t wasm_tabletype_t
+

@@ -178,6 +178,7 @@ import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable, peek, peekElemOff, poke, pokeElemOff)
 import System.IO.Unsafe (unsafePerformIO)
 import Type.Reflection (TypeRep, eqTypeRep, typeRep, (:~~:) (HRefl))
+import Bindings.Wasmtime.Table (C'wasm_tabletype_t)
 
 --------------------------------------------------------------------------------
 -- Engine
@@ -1142,6 +1143,13 @@ writeMemory ctx mem offset (BI.BS fp n) =
 data MemoryAccessError = MemoryAccessError deriving (Show)
 
 instance Exception MemoryAccessError
+
+--------------------------------------------------------------------------------
+-- Tables
+--------------------------------------------------------------------------------
+newtype TableType = TableType {unTableType :: ForeignPtr C'wasm_tabletype_t}
+
+
 
 --------------------------------------------------------------------------------
 -- Instances
