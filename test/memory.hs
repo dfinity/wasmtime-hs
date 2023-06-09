@@ -16,12 +16,11 @@ import Paths_wasmtime (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Wasmtime
 
--- either throwIO pure $ wat2wasm . B.readFile <$> getDataFileName path
-
 main :: IO ()
 main = do
   hSetBuffering stdout NoBuffering
 
+  putStrLn "Initializing..."
   engine <- newEngine
   store <- newStore engine
   ctx <- storeContext store
@@ -29,9 +28,6 @@ main = do
 
   putStrLn "Compiling module..."
   myModule <- handleWasmtimeError $ newModule engine wasm
-
-  -- let mtype = newMemoryType 1 (Just 2) False
-  -- memory <- newMemory ctx mtype >>= handleException
 
   putStrLn "Instantiating module..."
   inst <- newInstance ctx myModule [] >>= handleException
@@ -51,7 +47,6 @@ main = do
   assertBool "Failed memory 0" $ B.head mem_bs == 0
   assertBool "Failed memory 0x1000" $ B.index mem_bs 0x1000 == 1
   assertBool "Failed memory 0x1003" $ B.index mem_bs 0x1003 == 4
-  -- check function calls
   Right 2 <- callFunc ctx sizeFun
   Right 0 <- callFunc ctx loadFun 0
   Right 1 <- callFunc ctx loadFun 0x1000
