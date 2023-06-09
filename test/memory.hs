@@ -72,7 +72,25 @@ main = do
   Right 5 <- callFunc ctx loadFun 0x1003
 
   putStrLn "Growing memory..."
-  putStrLn "All finished"
+  Right 2 <- growMemory ctx memory 1
+  3 <- getMemorySizePages ctx memory
+  0x30000 <- getMemorySizeBytes ctx memory
+  Right 0 <- callFunc ctx loadFun 0x20000
+  Right () <- callFunc ctx storeFun 0x20000 0
+  Left trap_res <- callFunc ctx loadFun 0x30000
+  let _ = assert (trapCode trap_res == Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS) ()
+  Left trap_res <- callFunc ctx storeFun 0x30000 0
+  let _ = assert (trapCode trap_res == Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS) ()
+  Left trap_res <- growMemory ctx memory 1
+  Right 3 <- growMemory ctx memory 0
+
+  putStrLn "Creating stand-alone memory..."
+  let mem_type = newMemoryType 5 (Just 5) False
+  Right memory2 <- newMemory ctx mem_type
+  5 <- getMemorySizePages ctx memory2
+
+  putStrLn "Shutting down..."
+  putStrLn "Done."
 
 handleWasmtimeError :: Either WasmtimeError a -> IO a
 handleWasmtimeError = either throwIO pure
