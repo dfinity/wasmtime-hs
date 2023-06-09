@@ -150,5 +150,4 @@ module Bindings.Wasm where
 -- Tables
 --------------------------------------------------------------------------------
 
--- #opaque_t wasm_tabletype_t
 

@@ -145,6 +145,7 @@ import Bindings.Wasmtime.Instance
 import Bindings.Wasmtime.Memory
 import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
+import Bindings.Wasmtime.Table (C'wasm_tabletype_t)
 import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
 import Control.Applicative ((<|>))
@@ -178,7 +179,6 @@ import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable, peek, peekElemOff, poke, pokeElemOff)
 import System.IO.Unsafe (unsafePerformIO)
 import Type.Reflection (TypeRep, eqTypeRep, typeRep, (:~~:) (HRefl))
-import Bindings.Wasmtime.Table (C'wasm_tabletype_t)
 
 --------------------------------------------------------------------------------
 -- Engine
@@ -998,13 +998,13 @@ newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
 
 -- | Creates a descriptor for a WebAssembly 'Memory' with the specified minimum number of memory pages,
 -- an optional maximum of memory pages, and a 64 bit flag, where false defaults to 32 bit memory.
-newMemoryType :: 
+newMemoryType ::
   -- | Minimum number of memory pages.
-  Word64 -> 
+  Word64 ->
   -- | Optional maximum of memory pages.
-  Maybe Word64 -> 
-   -- | 'True' means memory is 64 bit flag and 'False' means 32 bit.
-  Bool -> 
+  Maybe Word64 ->
+  -- | 'True' means memory is 64 bit flag and 'False' means 32 bit.
+  Bool ->
   MemoryType
 newMemoryType mini mbMax is64 = unsafePerformIO $ mask_ $ do
   mem_type_ptr <- c'wasmtime_memorytype_new mini max_present maxi is64
@@ -1156,7 +1156,7 @@ instance Exception MemoryAccessError
 --------------------------------------------------------------------------------
 newtype TableType = TableType {unTableType :: ForeignPtr C'wasm_tabletype_t}
 
-
+-- newTableType = c'wasm_tabletype_new
 
 --------------------------------------------------------------------------------
 -- Instances
