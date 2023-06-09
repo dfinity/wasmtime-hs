@@ -136,3 +136,11 @@ module Bindings.Wasm where
 #ccall wasm_trap_origin , Ptr <wasm_trap_t> -> IO (Ptr <wasm_frame_t>)
 
 #ccall wasm_trap_trace , Ptr <wasm_trap_t> -> Ptr <wasm_frame_vec_t> -> IO ()
+
+--------------------------------------------------------------------------------
+-- Memory
+--------------------------------------------------------------------------------
+
+#opaque_t wasm_memorytype_t
+
+#ccall wasm_memorytype_delete , Ptr <wasm_memorytype_t> -> IO ()

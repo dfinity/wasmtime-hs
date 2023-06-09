@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -82,6 +83,23 @@ module Wasmtime
     fromTypedFunc,
     callFunc,
 
+    -- * Memory
+    MemoryType,
+    newMemoryType,
+    getMin,
+    getMax,
+    is64Memory,
+    Memory,
+    newMemory,
+    getMemoryType,
+    getMemorySizeBytes,
+    getMemorySizePages,
+    growMemory,
+    unsafeWithMemory,
+    readMemory,
+    writeMemory,
+    MemoryAccessError (..),
+
     -- * Externs
     Extern,
     Externable,
@@ -93,6 +111,7 @@ module Wasmtime
     newInstance,
     getExport,
     getExportedTypedFunc,
+    getExportedMemory,
 
     -- * Traps
     Trap,
@@ -123,14 +142,18 @@ import Bindings.Wasmtime.Error
 import Bindings.Wasmtime.Extern
 import Bindings.Wasmtime.Func
 import Bindings.Wasmtime.Instance
+import Bindings.Wasmtime.Memory
 import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
 import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
+import Control.Applicative ((<|>))
 import Control.Exception (Exception, mask_, onException, throwIO, try)
-import Control.Monad (when)
+import Control.Monad (guard, when)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
 import Control.Monad.ST (ST, runST)
+import Control.Monad.Trans.Maybe (MaybeT, runMaybeT)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
 import Data.Functor (($>))
@@ -399,7 +422,7 @@ newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
   Store <$> newForeignPtr p'wasmtime_store_delete wasmtime_store_ptr
 
 withStore :: Store s -> (Ptr C'wasmtime_store_t -> IO a) -> IO a
-withStore store = withForeignPtr (unStore store)
+withStore = withForeignPtr . unStore
 
 data Context s = Context
   { -- | Usage of a @wasmtime_context_t@ must not outlive the original @wasmtime_store_t@
@@ -481,7 +504,7 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
           Module <$> newForeignPtr p'wasmtime_module_delete module_ptr
 
 withModule :: Module -> (Ptr C'wasmtime_module_t -> IO a) -> IO a
-withModule m = withForeignPtr (unModule m)
+withModule = withForeignPtr . unModule
 
 --------------------------------------------------------------------------------
 -- Function Types
@@ -490,7 +513,7 @@ withModule m = withForeignPtr (unModule m)
 newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
 
 withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
-withFuncType funcType = withForeignPtr (unFuncType funcType)
+withFuncType = withForeignPtr . unFuncType
 
 newFuncType ::
   forall f m r.
@@ -922,13 +945,18 @@ data Extern s where
 -- | Class of types that can be imported and exported from @'Instance's@.
 class (Storable (CType e), Typeable e) => Externable (e :: Type -> Type) where
   type CType e :: Type
-  getCExtern :: e s -> CType e
+  toCExtern :: e s -> CType e
   externKind :: Proxy e -> C'wasmtime_extern_kind_t
 
 instance Externable Func where
   type CType Func = C'wasmtime_func
-  getCExtern = getWasmtimeFunc
+  toCExtern = getWasmtimeFunc
   externKind _proxy = c'WASMTIME_EXTERN_FUNC
+
+instance Externable Memory where
+  type CType Memory = C'wasmtime_memory_t
+  toCExtern = getWasmtimeMemory
+  externKind _proxy = c'WASMTIME_EXTERN_MEMORY
 
 -- | Turn any externable value (like a 'Func') into the 'Extern' container.
 toExtern :: forall e s. Externable e => e s -> Extern s
@@ -952,11 +980,175 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
               Extern _typeRep (e :: e s) -> do
                 let externs_ptr = advancePtr externs_ptr0 ix
                 poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
-                poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ getCExtern e
+                poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ toCExtern e
                 pokeExternsFrom (ix + 1)
    in pokeExternsFrom 0
   where
     n = V.length externs
+
+--------------------------------------------------------------------------------
+-- Memory
+--------------------------------------------------------------------------------
+
+-- | A descriptor for a WebAssembly memory type.
+--
+-- Memories are described in units of pages (64KB) and represent contiguous chunks of addressable memory.
+newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
+
+-- | Creates a descriptor for a WebAssembly 'Memory' with the specified minimum number of memory pages,
+-- an optional maximum of memory pages, and a 64 bit flag, where false defaults to 32 bit memory.
+newMemoryType :: 
+  -- | Minimum number of memory pages.
+  Word64 -> 
+  -- | Optional maximum of memory pages.
+  Maybe Word64 -> 
+   -- | 'True' means memory is 64 bit flag and 'False' means 32 bit.
+  Bool -> 
+  MemoryType
+newMemoryType mini mbMax is64 = unsafePerformIO $ mask_ $ do
+  mem_type_ptr <- c'wasmtime_memorytype_new mini max_present maxi is64
+  MemoryType <$> newForeignPtr p'wasm_memorytype_delete mem_type_ptr
+  where
+    (max_present, maxi) = maybe (False, 0) (True,) mbMax
+
+withMemoryType :: MemoryType -> (Ptr C'wasm_memorytype_t -> IO a) -> IO a
+withMemoryType = withForeignPtr . unMemoryType
+
+-- | Returns the minimum number of pages of this memory descriptor.
+getMin :: MemoryType -> Word64
+getMin mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_minimum
+
+-- | Returns the maximum number of pages of this memory descriptor, if one was set.
+getMax :: MemoryType -> Maybe Word64
+getMax mt = unsafePerformIO $
+  withMemoryType mt $ \mem_type_ptr ->
+    alloca $ \(max_ptr :: Ptr Word64) -> do
+      maxPresent <- c'wasmtime_memorytype_maximum mem_type_ptr max_ptr
+      if not maxPresent
+        then pure Nothing
+        else Just <$> peek max_ptr
+
+-- | Returns false if the memory is 32 bit and true if it is 64 bit.
+is64Memory :: MemoryType -> Bool
+is64Memory mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
+
+-- | A WebAssembly linear memory.
+--
+-- WebAssembly memories represent a contiguous array of bytes that have a size
+-- that is always a multiple of the WebAssembly page size, currently 64 kilobytes.
+--
+-- WebAssembly memory is used for global data (not to be confused with
+-- wasm global items), statics in C/C++/Rust, shadow stack memory, etc.
+-- Accessing wasm memory is generally quite fast.
+--
+-- Memories, like other wasm items, are owned by a 'Store'.
+newtype Memory s = Memory {getWasmtimeMemory :: C'wasmtime_memory_t}
+  deriving (Show)
+
+-- | Create new memory with the properties described in the 'MemoryType' argument.
+newMemory :: MonadPrim s m => Context s -> MemoryType -> m (Either WasmtimeError (Memory s))
+newMemory ctx memtype = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withMemoryType memtype $ \memtype_ptr ->
+        alloca $ \mem_ptr -> do
+          error_ptr <- c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
+          checkWasmtimeError error_ptr
+          Memory <$> peek mem_ptr
+
+withMemory :: Memory s -> (Ptr C'wasmtime_memory_t -> IO a) -> IO a
+withMemory = with . getWasmtimeMemory
+
+-- | Returns the 'MemoryType' descriptor for this memory.
+getMemoryType :: Context s -> Memory s -> MemoryType
+getMemoryType ctx mem = unsafePerformIO $
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem $ \mem_ptr -> mask_ $ do
+      memtype_ptr <- c'wasmtime_memory_type ctx_ptr mem_ptr
+      MemoryType <$> newForeignPtr p'wasm_memorytype_delete memtype_ptr
+
+-- | Returns the linear memory size in bytes. Always a multiple of 64KB (65536).
+getMemorySizeBytes :: MonadPrim s m => Context s -> Memory s -> m Word64
+getMemorySizeBytes ctx mem = unsafeIOToPrim $
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem (fmap fromIntegral . c'wasmtime_memory_data_size ctx_ptr)
+
+-- | Returns the length of the linear memory in WebAssembly pages
+getMemorySizePages :: MonadPrim s m => Context s -> Memory s -> m Word64
+getMemorySizePages ctx mem = unsafeIOToPrim $
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem $ \mem_ptr ->
+      c'wasmtime_memory_size ctx_ptr mem_ptr
+
+-- | Grow the linar memory by a number of pages.
+growMemory :: MonadPrim s m => Context s -> Memory s -> Word64 -> m (Either WasmtimeError Word64)
+growMemory ctx mem delta = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withMemory mem $ \mem_ptr ->
+        alloca $ \before_size_ptr -> do
+          error_ptr <- c'wasmtime_memory_grow ctx_ptr mem_ptr delta before_size_ptr
+          checkWasmtimeError error_ptr
+          peek before_size_ptr
+
+-- | Takes a continuation which can mutate the linear memory. The continuation is provided with
+-- a pointer to the beginning of the memory and its maximum length. Do not write outside the bounds!
+--
+-- This function is unsafe, because we do not restrict the continuation in any way.
+-- DO NOT call exported wasm functions, grow the memory or do anything similar in the continuation!
+unsafeWithMemory :: Context s -> Memory s -> (Ptr Word8 -> Int -> IO a) -> IO a
+unsafeWithMemory ctx mem f =
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem $ \mem_ptr -> do
+      mem_size <- fromIntegral <$> c'wasmtime_memory_data_size ctx_ptr mem_ptr
+      mem_data_ptr <- c'wasmtime_memory_data ctx_ptr mem_ptr
+      f mem_data_ptr mem_size
+
+-- | Returns a copy of the whole linear memory as a bytestring.
+readMemory :: MonadPrim s m => Context s -> Memory s -> m B.ByteString
+readMemory ctx mem = unsafeIOToPrim $
+  unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
+    BI.create mem_size $ \dst_ptr ->
+      BI.memcpy dst_ptr mem_data_ptr mem_size
+
+-- | Takes an offset and a length, and returns a copy of the memory starting at offset until offset + length.
+-- Returns @Left MemoryAccessError@ if offset + length exceeds the length of the memory.
+readMemoryAt :: MonadPrim s m => Context s -> Memory s -> Word64 -> Word64 -> m (Either MemoryAccessError B.ByteString)
+readMemoryAt ctx mem offset len = do
+  max_len <- getMemorySizeBytes ctx mem
+  unsafeIOToPrim $ do
+    if offset + len > max_len
+      then pure $ Left MemoryAccessError
+      else do
+        res <- unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
+          BI.create mem_size $ \dst_ptr ->
+            BI.memcpy (advancePtr dst_ptr (fromIntegral offset)) mem_data_ptr mem_size
+        pure $ Right res
+
+-- | Safely writes a 'ByteString' to this memory at the given offset.
+--
+-- If the @offset@ + the length of the @ByteString@ exceeds the
+-- current memory capacity, then none of the @ByteString@ is written
+-- to memory and @'Left' 'MemoryAccessError'@ is returned.
+writeMemory ::
+  MonadPrim s m =>
+  Context s ->
+  Memory s ->
+  -- | Offset
+  Int ->
+  B.ByteString ->
+  m (Either MemoryAccessError ())
+writeMemory ctx mem offset (BI.BS fp n) =
+  unsafeIOToPrim $ unsafeWithMemory ctx mem $ \dst sz ->
+    if offset + n > sz
+      then pure $ Left MemoryAccessError
+      else withForeignPtr fp $ \src ->
+        Right <$> BI.memcpy (advancePtr dst offset) src n
+
+-- | Error for out of bounds 'Memory' access.
+data MemoryAccessError = MemoryAccessError deriving (Show)
+
+instance Exception MemoryAccessError
 
 --------------------------------------------------------------------------------
 -- Instances
@@ -1003,7 +1195,7 @@ newInstance ctx m externs = unsafeIOToPrim $
               else Left <$> newTrapFromPtr trap_ptr
 
 withInstance :: Instance s -> (Ptr C'wasmtime_instance_t -> IO a) -> IO a
-withInstance inst = withForeignPtr (unInstance inst)
+withInstance = withForeignPtr . unInstance
 
 -- | Get an export by name from an instance.
 getExport :: MonadPrim s m => Context s -> Instance s -> String -> m (Maybe (Extern s))
@@ -1019,22 +1211,30 @@ getExport ctx inst name = unsafeIOToPrim $
               name_ptr
               (fromIntegral len)
               extern_ptr
-          if found
-            then do
+          if not found
+            then pure Nothing
+            else do
               let kind_ptr :: Ptr C'wasmtime_extern_kind_t
                   kind_ptr = p'wasmtime_extern'kind extern_ptr
 
                   of_ptr :: Ptr C'wasmtime_extern_union_t
                   of_ptr = p'wasmtime_extern'of extern_ptr
+
               k <- peek kind_ptr
-              if k == c'WASMTIME_EXTERN_FUNC
-                then do
-                  let func_ptr :: Ptr C'wasmtime_func_t
-                      func_ptr = castPtr of_ptr
-                  (func :: Func s) <- Func <$> peek func_ptr
-                  pure $ Just $ toExtern func
-                else pure Nothing
-            else pure Nothing
+
+              let fromCExtern ::
+                    forall e s.
+                    (Externable e) =>
+                    (CType e -> e s) ->
+                    MaybeT IO (Extern s)
+                  fromCExtern constr = do
+                    guard $ k == externKind (Proxy @e)
+                    liftIO $ do
+                      let ex_ptr = castPtr of_ptr
+                      ex <- constr <$> peek ex_ptr
+                      pure $ toExtern ex
+
+              runMaybeT $ fromCExtern Func <|> fromCExtern Memory
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally checks if
@@ -1051,6 +1251,15 @@ getExportedTypedFunc ctx inst name = do
   case mbExtern >>= fromExtern of
     Nothing -> pure Nothing
     Just (func :: Func s) -> toTypedFunc ctx func
+
+getExportedMemory ::
+  forall s m.
+  (MonadPrim s m) =>
+  Context s ->
+  Instance s ->
+  String ->
+  m (Maybe (Memory s))
+getExportedMemory ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
 
 --------------------------------------------------------------------------------
 -- Traps
@@ -1253,7 +1462,7 @@ checkWasmtimeError error_ptr = when (error_ptr /= nullPtr) $ do
   throwIO wasmtimeError
 
 withWasmtimeError :: WasmtimeError -> (Ptr C'wasmtime_error_t -> IO a) -> IO a
-withWasmtimeError wasmtimeError = withForeignPtr (unWasmtimeError wasmtimeError)
+withWasmtimeError = withForeignPtr . unWasmtimeError
 
 instance Exception WasmtimeError
 

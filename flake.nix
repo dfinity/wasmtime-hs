@@ -53,6 +53,7 @@
         #   nix build --print-out-paths --no-link --rebuild -L .#hello-c
         packages.hello-c = check_c_example "hello";
         packages.gcd-c = check_c_example "gcd";
+        packages.memory-c = check_c_example "memory";
 
         # The default development shell brings in all dependencies of
         # wasmtime-hs (like all Haskell dependencies, libwasmtime, GHC).
