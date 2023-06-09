@@ -1093,7 +1093,7 @@ writeMemory ::
   B.ByteString ->
   m (Either MemoryAccessError ())
 writeMemory ctx mem offset (BI.BS fp n) =
-  unsafeIOToPrim $ unsafeWithMemory ctx mem $ \dst sz -> do
+  unsafeIOToPrim $ unsafeWithMemory ctx mem $ \dst sz ->
     if offset + n > sz
       then pure $ Left MemoryAccessError
       else withForeignPtr fp $ \src ->
