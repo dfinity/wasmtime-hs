@@ -11,7 +11,7 @@ import qualified Data.ByteString as B
 import Data.Int (Int32)
 import qualified Data.List.NonEmpty as BI
 import Data.Primitive.Ptr (advancePtr)
-import Data.Word (Word64, Word8)
+import Data.Word (Word8)
 import Foreign (poke)
 import Paths_wasmtime (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
@@ -62,7 +62,7 @@ main = do
   let _ = assert (trapCode trap_res == Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS) ()
 
   putStrLn "Mutating memory..."
-  Right () <- writeByte ctx memory 0x1003 5
+  writeByte ctx memory 0x1003 5
   Right () <- callFunc ctx storeFun 0x1002 6
   Left trap_res <- callFunc ctx storeFun 0x20000 0
   let _ = assert (trapCode trap_res == Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS) ()
@@ -104,5 +104,13 @@ wasmFromPath path = do
   bytes <- getDataFileName path >>= B.readFile
   handleWasmtimeError $ wat2wasm bytes
 
+-- TODO: this is unsafe and does not check if the offset is within the linear memory
+-- replace with writeMemory!
+unsafeWriteByte :: Context s -> Memory s -> Int -> Word8 -> IO ()
+unsafeWriteByte ctx mem offset byte =
+  unsafeWithMemory ctx mem $ \start_ptr _maxlen -> do
+    let pos_ptr = advancePtr start_ptr offset
+    poke pos_ptr byte
+
 writeByte :: MonadPrim s m => Context s -> Memory s -> Int -> Word8 -> m (Either MemoryAccessError ())
-writeByte ctx mem pos byte = writeMemory ctx mem pos $ B.singleton byte
+writeByte ctx mem offset byte = writeMemory ctx mem offset $ B.singleton byte
