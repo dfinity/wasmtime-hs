@@ -1122,7 +1122,7 @@ readMemoryAt ctx mem offset len = do
       else do
         res <- unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
           BI.create mem_size $ \dst_ptr ->
-            BI.memcpy dst_ptr mem_data_ptr mem_size
+            BI.memcpy (advancePtr dst_ptr (fromIntegral offset)) mem_data_ptr mem_size
         pure $ Right res
 
 -- | Safely writes a 'ByteString' to this memory at the given offset.
