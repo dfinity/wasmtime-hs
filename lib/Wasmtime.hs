@@ -97,6 +97,8 @@ module Wasmtime
     growMemory,
     unsafeWithMemory,
     freezeMemory,
+    writeMemory,
+    MemoryAccessError (..),
 
     -- * Externs
     Extern,
@@ -1076,6 +1078,31 @@ freezeMemory ctx mem = unsafeIOToPrim $
   unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
     BI.create mem_size $ \dst_ptr ->
       BI.memcpy dst_ptr mem_data_ptr mem_size
+
+-- | Safely writes a 'ByteString' to this memory at the given offset.
+--
+-- If the @offset@ + the length of the @ByteString@ exceeds the
+-- current memory capacity, then none of the @ByteString@ is written
+-- to memory and @'Left' 'MemoryAccessError'@ is returned.
+writeMemory ::
+  MonadPrim s m =>
+  Context s ->
+  Memory s ->
+  -- | Offset
+  Int ->
+  B.ByteString ->
+  m (Either MemoryAccessError ())
+writeMemory ctx mem offset (BI.BS fp n) =
+  unsafeIOToPrim $ unsafeWithMemory ctx mem $ \dst sz -> do
+    if offset + n > sz
+      then pure $ Left MemoryAccessError
+      else withForeignPtr fp $ \src ->
+        Right <$> BI.memcpy dst src n
+
+-- | Error for out of bounds 'Memory' access.
+data MemoryAccessError = MemoryAccessError deriving (Show)
+
+instance Exception MemoryAccessError
 
 -- TODO: size in bytes
 
