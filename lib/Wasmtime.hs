@@ -1136,7 +1136,7 @@ writeMemory ctx mem offset (BI.BS fp n) =
     if offset + n > sz
       then pure $ Left MemoryAccessError
       else withForeignPtr fp $ \src ->
-        Right <$> BI.memcpy dst src n
+        Right <$> BI.memcpy (advancePtr dst offset) src n
 
 -- | Error for out of bounds 'Memory' access.
 data MemoryAccessError = MemoryAccessError deriving (Show)
