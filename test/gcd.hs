@@ -38,9 +38,13 @@ main = do
 
   let a = 6
       b = 27
-  r <- callFunc ctx gcdTypedFunc a b >>= handleException
-
+      partial = callFunc ctx gcdTypedFunc a :: Int32 -> IO (Either Trap Int32)
+  r <- partial b >>= handleException
   printf "gcd(%d, %d) = %d\n" a b r
+
+  let b2 = 6
+  r2 <- partial b2 >>= handleException
+  printf "gcd(%d, %d) = %d\n" a b2 r2
 
 handleException :: Exception e => Either e r -> IO r
 handleException = either throwIO pure
