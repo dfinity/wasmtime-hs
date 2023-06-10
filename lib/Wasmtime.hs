@@ -997,13 +997,13 @@ newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
 
 -- | Creates a descriptor for a WebAssembly 'Memory' with the specified minimum number of memory pages,
 -- an optional maximum of memory pages, and a 64 bit flag, where false defaults to 32 bit memory.
-newMemoryType :: 
+newMemoryType ::
   -- | Minimum number of memory pages.
-  Word64 -> 
+  Word64 ->
   -- | Optional maximum of memory pages.
-  Maybe Word64 -> 
-   -- | 'True' means memory is 64 bit flag and 'False' means 32 bit.
-  Bool -> 
+  Maybe Word64 ->
+  -- | 'True' means memory is 64 bit flag and 'False' means 32 bit.
+  Bool ->
   MemoryType
 newMemoryType mini mbMax is64 = unsafePerformIO $ mask_ $ do
   mem_type_ptr <- c'wasmtime_memorytype_new mini max_present maxi is64
@@ -1122,7 +1122,7 @@ readMemoryAt ctx mem offset len = do
       else do
         res <- unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
           BI.create mem_size $ \dst_ptr ->
-            BI.memcpy (advancePtr dst_ptr (fromIntegral offset)) mem_data_ptr mem_size
+            BI.memcpy dst_ptr (advancePtr mem_data_ptr (fromIntegral offset)) mem_size
         pure $ Right res
 
 -- | Safely writes a 'ByteString' to this memory at the given offset.
