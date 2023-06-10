@@ -97,6 +97,7 @@ module Wasmtime
     growMemory,
     unsafeWithMemory,
     readMemory,
+    readMemoryAt,
     writeMemory,
     MemoryAccessError (..),
 
