@@ -445,6 +445,20 @@ withContext :: Context s -> (Ptr C'wasmtime_context_t -> IO a) -> IO a
 withContext ctx f = withStore (storeContextStore ctx) $ \_store_ptr ->
   f $ storeContextPtr ctx
 
+addFuel :: Context s -> Word64 -> IO (Either WasmtimeError ())
+addFuel ctx amount = withContext ctx $ \ctx_ptr -> do
+  error_ptr <- c'wasmtime_context_add_fuel ctx_ptr amount
+  checkWasmtimeError error_ptr
+  pure $ Right ()
+
+fuelConsumed :: Context s -> IO (Maybe Word64)
+fuelConsumed ctx = withContext ctx $ \ctx_ptr ->
+  alloca $ \amount_ptr -> do
+    res <- c'wasmtime_context_fuel_consumed ctx_ptr amount_ptr
+    if not res
+      then pure Nothing
+      else Just <$> peek amount_ptr
+
 --------------------------------------------------------------------------------
 -- Conversion
 --------------------------------------------------------------------------------
@@ -997,13 +1011,13 @@ newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
 
 -- | Creates a descriptor for a WebAssembly 'Memory' with the specified minimum number of memory pages,
 -- an optional maximum of memory pages, and a 64 bit flag, where false defaults to 32 bit memory.
-newMemoryType :: 
+newMemoryType ::
   -- | Minimum number of memory pages.
-  Word64 -> 
+  Word64 ->
   -- | Optional maximum of memory pages.
-  Maybe Word64 -> 
-   -- | 'True' means memory is 64 bit flag and 'False' means 32 bit.
-  Bool -> 
+  Maybe Word64 ->
+  -- | 'True' means memory is 64 bit flag and 'False' means 32 bit.
+  Bool ->
   MemoryType
 newMemoryType mini mbMax is64 = unsafePerformIO $ mask_ $ do
   mem_type_ptr <- c'wasmtime_memorytype_new mini max_present maxi is64
