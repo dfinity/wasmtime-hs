@@ -7,13 +7,10 @@
 module Main (main) where
 
 import Control.Exception (Exception, throwIO, try)
-import Control.Monad.Primitive (MonadPrim, RealWorld)
+import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Data.Foldable (for_)
 import Data.Int (Int32)
-import Data.Word (Word64, Word8)
-import GHC.IO.Exception (IOErrorType (IllegalOperation))
-import GHC.RTS.Flags (ConcFlags (ctxtSwitchTicks))
 import Paths_wasmtime (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Test.Tasty.HUnit ((@?=))
@@ -48,7 +45,7 @@ main = do
         Just fuel_after <- fuelConsumed ctx
         let diff = fuel_after - fuel_before
         putStrLn $ "fib " ++ show i ++ " = " ++ show m ++ " consumed " ++ show diff ++ " fuel."
-        addFuel ctx diff
+        Right () <- addFuel ctx diff
         pure ()
   trapCode trap @?= Just TRAP_CODE_OUT_OF_FUEL
 
