@@ -84,12 +84,13 @@ module Wasmtime
     callFunc,
 
     -- * Memory
-    WordLength,
+    WordLength (..),
     MemoryType,
     newMemoryType,
     getMin,
     getMax,
     is64Memory,
+    wordLength,
     Memory,
     newMemory,
     getMemoryType,

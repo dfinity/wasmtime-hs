@@ -78,7 +78,7 @@ main = do
   Right 3 <- growMemory ctx memory 0
 
   putStrLn "Creating stand-alone memory..."
-  let mem_type = newMemoryType 5 (Just 5) False
+  let mem_type = newMemoryType 5 (Just 5) Bit32
   Right memory2 <- newMemory ctx mem_type
   5 <- getMemorySizePages ctx memory2
 
