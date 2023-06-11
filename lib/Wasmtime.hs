@@ -84,11 +84,13 @@ module Wasmtime
     callFunc,
 
     -- * Memory
+    WordLength (..),
     MemoryType,
     newMemoryType,
     getMin,
     getMax,
     is64Memory,
+    wordLength,
     Memory,
     newMemory,
     getMemoryType,
@@ -97,6 +99,7 @@ module Wasmtime
     growMemory,
     unsafeWithMemory,
     readMemory,
+    readMemoryAt,
     writeMemory,
     MemoryAccessError (..),
 
@@ -179,6 +182,17 @@ import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable, peek, peekElemOff, poke, pokeElemOff)
 import System.IO.Unsafe (unsafePerformIO)
 import Type.Reflection (TypeRep, eqTypeRep, typeRep, (:~~:) (HRefl))
+
+--------------------------------------------------------------------------------
+-- Typedefs
+--------------------------------------------------------------------------------
+
+type Offset = Word64
+
+type Size = Word64
+
+data WordLength = Bit32 | Bit64
+  deriving (Show, Eq)
 
 --------------------------------------------------------------------------------
 -- Engine
@@ -1003,14 +1017,15 @@ newMemoryType ::
   Word64 ->
   -- | Optional maximum of memory pages.
   Maybe Word64 ->
-  -- | 'True' means memory is 64 bit flag and 'False' means 32 bit.
-  Bool ->
+  -- | 'WordLength', either Bit32 or Bit64
+  WordLength ->
   MemoryType
-newMemoryType mini mbMax is64 = unsafePerformIO $ mask_ $ do
+newMemoryType mini mbMax wordLen = unsafePerformIO $ mask_ $ do
   mem_type_ptr <- c'wasmtime_memorytype_new mini max_present maxi is64
   MemoryType <$> newForeignPtr p'wasm_memorytype_delete mem_type_ptr
   where
     (max_present, maxi) = maybe (False, 0) (True,) mbMax
+    is64 = wordLen == Bit64
 
 withMemoryType :: MemoryType -> (Ptr C'wasm_memorytype_t -> IO a) -> IO a
 withMemoryType = withForeignPtr . unMemoryType
@@ -1032,6 +1047,10 @@ getMax mt = unsafePerformIO $
 -- | Returns false if the memory is 32 bit and true if it is 64 bit.
 is64Memory :: MemoryType -> Bool
 is64Memory mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
+
+-- | Returns Bit32 or Bit64 :: 'WordLength'
+wordLength :: MemoryType -> WordLength
+wordLength mt = if is64Memory mt then Bit64 else Bit32
 
 -- | A WebAssembly linear memory.
 --
@@ -1097,7 +1116,7 @@ growMemory ctx mem delta = unsafeIOToPrim $
 --
 -- This function is unsafe, because we do not restrict the continuation in any way.
 -- DO NOT call exported wasm functions, grow the memory or do anything similar in the continuation!
-unsafeWithMemory :: Context s -> Memory s -> (Ptr Word8 -> Int -> IO a) -> IO a
+unsafeWithMemory :: Context s -> Memory s -> (Ptr Word8 -> Size -> IO a) -> IO a
 unsafeWithMemory ctx mem f =
   withContext ctx $ \ctx_ptr ->
     withMemory mem $ \mem_ptr -> do
@@ -1109,12 +1128,12 @@ unsafeWithMemory ctx mem f =
 readMemory :: MonadPrim s m => Context s -> Memory s -> m B.ByteString
 readMemory ctx mem = unsafeIOToPrim $
   unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
-    BI.create mem_size $ \dst_ptr ->
-      BI.memcpy dst_ptr mem_data_ptr mem_size
+    BI.create (fromIntegral mem_size) $ \dst_ptr ->
+      BI.memcpy dst_ptr mem_data_ptr (fromIntegral mem_size)
 
 -- | Takes an offset and a length, and returns a copy of the memory starting at offset until offset + length.
 -- Returns @Left MemoryAccessError@ if offset + length exceeds the length of the memory.
-readMemoryAt :: MonadPrim s m => Context s -> Memory s -> Word64 -> Word64 -> m (Either MemoryAccessError B.ByteString)
+readMemoryAt :: MonadPrim s m => Context s -> Memory s -> Offset -> Size -> m (Either MemoryAccessError B.ByteString)
 readMemoryAt ctx mem offset len = do
   max_len <- getMemorySizeBytes ctx mem
   unsafeIOToPrim $ do
@@ -1122,8 +1141,8 @@ readMemoryAt ctx mem offset len = do
       then pure $ Left MemoryAccessError
       else do
         res <- unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
-          BI.create mem_size $ \dst_ptr ->
-            BI.memcpy (advancePtr dst_ptr (fromIntegral offset)) mem_data_ptr mem_size
+          BI.create (fromIntegral mem_size) $ \dst_ptr ->
+            BI.memcpy dst_ptr (advancePtr mem_data_ptr (fromIntegral offset)) (fromIntegral mem_size)
         pure $ Right res
 
 -- | Safely writes a 'ByteString' to this memory at the given offset.
@@ -1141,7 +1160,7 @@ writeMemory ::
   m (Either MemoryAccessError ())
 writeMemory ctx mem offset (BI.BS fp n) =
   unsafeIOToPrim $ unsafeWithMemory ctx mem $ \dst sz ->
-    if offset + n > sz
+    if offset + n > fromIntegral sz
       then pure $ Left MemoryAccessError
       else withForeignPtr fp $ \src ->
         Right <$> BI.memcpy (advancePtr dst offset) src n
