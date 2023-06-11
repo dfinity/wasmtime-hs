@@ -187,7 +187,7 @@ import Type.Reflection (TypeRep, eqTypeRep, typeRep, (:~~:) (HRefl))
 
 type Offset = Word64
 
-type Length = Word64
+type Size = Word64
 
 data WordLength = Bit32 | Bit64
   deriving (Show, Eq)
@@ -1043,11 +1043,12 @@ getMax mt = unsafePerformIO $
         else Just <$> peek max_ptr
 
 -- | Returns false if the memory is 32 bit and true if it is 64 bit.
-is64Memory' :: MemoryType -> Bool
-is64Memory' mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
+is64Memory :: MemoryType -> Bool
+is64Memory mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
 
-is64Memory :: MemoryType -> WordLength
-is64Memory mt = if is64Memory' mt then Bit64 else Bit32
+-- | Returns Bit32 or Bit64 :: 'WordLength'
+wordLength :: MemoryType -> WordLength
+wordLength mt = if is64Memory mt then Bit64 else Bit32
 
 -- | A WebAssembly linear memory.
 --
@@ -1113,7 +1114,7 @@ growMemory ctx mem delta = unsafeIOToPrim $
 --
 -- This function is unsafe, because we do not restrict the continuation in any way.
 -- DO NOT call exported wasm functions, grow the memory or do anything similar in the continuation!
-unsafeWithMemory :: Context s -> Memory s -> (Ptr Word8 -> Length -> IO a) -> IO a
+unsafeWithMemory :: Context s -> Memory s -> (Ptr Word8 -> Size -> IO a) -> IO a
 unsafeWithMemory ctx mem f =
   withContext ctx $ \ctx_ptr ->
     withMemory mem $ \mem_ptr -> do
@@ -1130,7 +1131,7 @@ readMemory ctx mem = unsafeIOToPrim $
 
 -- | Takes an offset and a length, and returns a copy of the memory starting at offset until offset + length.
 -- Returns @Left MemoryAccessError@ if offset + length exceeds the length of the memory.
-readMemoryAt :: MonadPrim s m => Context s -> Memory s -> Offset -> Length -> m (Either MemoryAccessError B.ByteString)
+readMemoryAt :: MonadPrim s m => Context s -> Memory s -> Offset -> Size -> m (Either MemoryAccessError B.ByteString)
 readMemoryAt ctx mem offset len = do
   max_len <- getMemorySizeBytes ctx mem
   unsafeIOToPrim $ do
