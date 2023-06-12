@@ -462,26 +462,25 @@ withContext :: Context s -> (Ptr C'wasmtime_context_t -> IO a) -> IO a
 withContext ctx f = withStore (storeContextStore ctx) $ \_store_ptr ->
   f $ storeContextPtr ctx
 
-addFuel :: Context s -> Word64 -> IO (Either WasmtimeError ())
-addFuel ctx amount = withContext ctx $ \ctx_ptr -> do
+addFuel :: MonadPrim s m => Context s -> Word64 -> m (Either WasmtimeError ())
+addFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> try $ do
   error_ptr <- c'wasmtime_context_add_fuel ctx_ptr amount
   checkWasmtimeError error_ptr
-  pure $ Right ()
 
-fuelConsumed :: Context s -> IO (Maybe Word64)
-fuelConsumed ctx = withContext ctx $ \ctx_ptr ->
+fuelConsumed :: MonadPrim s m => Context s -> m (Maybe Word64)
+fuelConsumed ctx = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
   alloca $ \amount_ptr -> do
     res <- c'wasmtime_context_fuel_consumed ctx_ptr amount_ptr
     if not res
       then pure Nothing
       else Just <$> peek amount_ptr
 
-consumeFuel :: Context s -> Word64 -> IO (Either WasmtimeError Word64)
-consumeFuel ctx amount = withContext ctx $ \ctx_ptr ->
-  alloca $ \remaining_ptr -> do
+consumeFuel :: MonadPrim s m => Context s -> Word64 -> m (Either WasmtimeError Word64)
+consumeFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
+  alloca $ \remaining_ptr -> try $ do
     error_ptr <- c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
     checkWasmtimeError error_ptr
-    Right <$> peek remaining_ptr
+    peek remaining_ptr
 
 --------------------------------------------------------------------------------
 -- Conversion

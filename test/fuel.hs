@@ -29,7 +29,7 @@ main = do
   wasm <- wasmFromPath "test/fuel.wat"
 
   putStrLn "Compiling module..."
-  myModule <- handleWasmtimeError $ newModule engine wasm
+  myModule <- handleException $ newModule engine wasm
 
   putStrLn "Instantiating module..."
   inst <- newInstance ctx myModule [] >>= handleException
@@ -52,13 +52,10 @@ main = do
   putStrLn "Shutting down..."
   putStrLn "Done."
 
-handleWasmtimeError :: Either WasmtimeError a -> IO a
-handleWasmtimeError = either throwIO pure
-
 handleException :: Exception e => Either e r -> IO r
 handleException = either throwIO pure
 
 wasmFromPath :: FilePath -> IO Wasm
 wasmFromPath path = do
   bytes <- getDataFileName path >>= B.readFile
-  handleWasmtimeError $ wat2wasm bytes
+  handleException $ wat2wasm bytes
