@@ -3,7 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
--- | Haskell translation of: https://github.com/bytecodealliance/wasmtime/blob/main/examples/fuel.c
+-- | Haskell translation of: https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/examples/fuel.c
 module Main (main) where
 
 import Control.Exception (Exception, throwIO, try)
