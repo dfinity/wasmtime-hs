@@ -148,7 +148,7 @@ import Bindings.Wasmtime.Instance
 import Bindings.Wasmtime.Memory
 import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
-import Bindings.Wasmtime.Table (C'wasm_tabletype_t)
+import Bindings.Wasmtime.Table
 import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
 import Control.Applicative ((<|>))
@@ -1175,7 +1175,19 @@ instance Exception MemoryAccessError
 --------------------------------------------------------------------------------
 newtype TableType = TableType {unTableType :: ForeignPtr C'wasm_tabletype_t}
 
--- newTableType = c'wasm_tabletype_new
+data TableRefType = FuncRef | ExternRef
+  deriving (Show, Eq)
+
+newTableType :: TableRefType -> C'wasm_limits_t -> IO TableType
+newTableType valtype limits =
+  alloca $ \valtype_ptr ->
+    alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> do
+      poke valtype_ptr valtype
+      poke limits_ptr limits
+      tabletype_ptr <- c'wasm_tabletype_new valtype_ptr limits_ptr
+      TableType <$> newForeignPtr p'wasm_tabletype_delete tabletype_ptr
+
+type A = C'wasm_limits_t
 
 --------------------------------------------------------------------------------
 -- Instances

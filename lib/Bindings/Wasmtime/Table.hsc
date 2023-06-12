@@ -21,6 +21,7 @@ import Data.Word (Word32, Word64)
 #ccall wasm_tabletype_new , Ptr <wasm_valtype_t> -> Ptr <wasm_limits_t> -> IO (Ptr <wasm_tabletype_t>)
 #ccall wasm_tabletype_element , Ptr <wasm_tabletype_t> ->                  IO (Ptr <wasm_valtype_t>)
 #ccall wasm_tabletype_limits ,  Ptr <wasm_tabletype_t> ->                  IO (Ptr <wasm_limits_t>)
+#ccall wasm_tabletype_delete ,  Ptr <wasm_tabletype_t> ->                  IO ()
 
 #ccall wasmtime_table_new ,  Ptr <wasmtime_context_t> -> Ptr <wasm_tabletype_t> -> Ptr <wasmtime_val_t> -> Ptr <wasmtime_table_t> -> IO (Ptr <wasmtime_error_t>)
 #ccall wasmtime_table_type , Ptr <wasmtime_context_t> -> Ptr <wasmtime_table_t> ->                                                   IO (Ptr <wasm_tabletype_t>)
