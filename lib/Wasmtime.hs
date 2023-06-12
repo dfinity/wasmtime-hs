@@ -1198,19 +1198,36 @@ instance Exception MemoryAccessError
 --------------------------------------------------------------------------------
 newtype TableType = TableType {unTableType :: ForeignPtr C'wasm_tabletype_t}
 
+withTableType = withForeignPtr . unTableType
+
 data TableRefType = FuncRef | ExternRef
   deriving (Show, Eq)
 
 newTableType :: TableRefType -> C'wasm_limits_t -> IO TableType
-newTableType valtype limits =
-  alloca $ \valtype_ptr ->
-    alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> do
-      poke valtype_ptr valtype
-      poke limits_ptr limits
-      tabletype_ptr <- c'wasm_tabletype_new valtype_ptr limits_ptr
-      TableType <$> newForeignPtr p'wasm_tabletype_delete tabletype_ptr
+newTableType tableRefType limits =
+  alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> do
+    let (valkind :: C'wasm_valkind_t) = case tableRefType of
+          FuncRef -> c'WASMTIME_FUNCREF
+          ExternRef -> c'WASMTIME_EXTERNREF
+    valtype_ptr <- c'wasm_valtype_new valkind
+    poke limits_ptr limits
+    tabletype_ptr <- c'wasm_tabletype_new valtype_ptr limits_ptr
+    TableType <$> newForeignPtr p'wasm_tabletype_delete tabletype_ptr
 
-type A = C'wasm_limits_t
+tableTypeElement :: TableType -> TableRefType
+tableTypeElement tt = unsafePerformIO $
+  withTableType tt $ \tt_ptr -> do
+    valtype_ptr <- c'wasm_tabletype_element tt_ptr
+    valkind <- c'wasm_valtype_kind valtype_ptr
+    case valkind of
+      -- TODO: not an exhaustive pattern
+      c'WASMTIME_FUNCREF -> pure FuncRef
+      c'WASMTIME_EXTERNREF -> pure ExternRef
+
+tableTypeLimits :: TableType -> C'wasm_limits_t
+tableTypeLimits tt = unsafePerformIO $
+  withTableType tt $ \tt_ptr ->
+    undefined -- TODO
 
 --------------------------------------------------------------------------------
 -- Instances
