@@ -515,7 +515,7 @@ wat2wasm (BI.BS inp_fp inp_size) =
       let word_ptr :: Ptr Word8
           word_ptr = castPtr data_ptr
       out_fp <-
-        Foreign.Concurrent.newForeignPtr word_ptr $
+        Foreign.Concurrent.newForeignPtr word_ptr $ -- TODO: why Foreign.Concurrent?
           c'wasm_byte_vec_delete wasm_byte_vec_ptr
       pure $ Wasm $ BI.fromForeignPtr0 out_fp $ fromIntegral size
 
@@ -1203,8 +1203,11 @@ withTableType = withForeignPtr . unTableType
 data TableRefType = FuncRef | ExternRef
   deriving (Show, Eq)
 
-newTableType :: TableRefType -> C'wasm_limits_t -> IO TableType
-newTableType tableRefType limits =
+data TableLimits = TableLimits {tableMin :: Int32, tableMax :: Int32}
+
+-- TODO: haskell record -> C'wasm_limits_t
+newTableType :: TableRefType -> C'wasm_limits_t -> TableType
+newTableType tableRefType limits = unsafePerformIO $
   alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> do
     let (valkind :: C'wasm_valkind_t) = case tableRefType of
           FuncRef -> c'WASMTIME_FUNCREF
@@ -1220,14 +1223,29 @@ tableTypeElement tt = unsafePerformIO $
     valtype_ptr <- c'wasm_tabletype_element tt_ptr
     valkind <- c'wasm_valtype_kind valtype_ptr
     case valkind of
-      -- TODO: not an exhaustive pattern
       c'WASMTIME_FUNCREF -> pure FuncRef
       c'WASMTIME_EXTERNREF -> pure ExternRef
+      _ -> error "impossible..." -- TODO
 
 tableTypeLimits :: TableType -> C'wasm_limits_t
 tableTypeLimits tt = unsafePerformIO $
-  withTableType tt $ \tt_ptr ->
-    undefined -- TODO
+  withTableType tt $ \tt_ptr -> do
+    limits_ptr <- c'wasm_tabletype_limits tt_ptr
+    peek limits_ptr
+
+newtype Table s = Table {unTable :: C'wasmtime_table_t}
+
+data TableValue = forall s. FuncRefValue (Maybe (Func s)) | ExternRefValue C'wasmtime_val_t
+
+newTable :: MonadPrim s m => Context s -> TableType -> TableValue -> m (Either WasmtimeError (Table s))
+newTable ctx tt val = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withTableType tt $ \tt_ptr ->
+        alloca $ \table_ptr -> do
+          error_ptr <- c'wasmtime_table_new ctx_ptr tt_ptr undefined table_ptr
+          checkWasmtimeError error_ptr
+          Table <$> peek table_ptr
 
 --------------------------------------------------------------------------------
 -- Instances
