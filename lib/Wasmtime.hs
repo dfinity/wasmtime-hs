@@ -1123,7 +1123,7 @@ getMemorySizePages ctx mem = unsafeIOToPrim $
     withMemory mem $ \mem_ptr ->
       c'wasmtime_memory_size ctx_ptr mem_ptr
 
--- | Grow the linar memory by a number of pages.
+-- | Grow the linar memory by a number of pages. Return the size before.
 growMemory :: MonadPrim s m => Context s -> Memory s -> Word64 -> m (Either WasmtimeError Word64)
 growMemory ctx mem delta = unsafeIOToPrim $
   try $
@@ -1244,7 +1244,13 @@ tableTypeLimits tt = unsafePerformIO $
 
 newtype Table s = Table {unTable :: C'wasmtime_table_t}
 
+withTable :: Table s -> (Ptr C'wasmtime_table_t -> IO a) -> IO a
+withTable = with . unTable
+
 data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue C'wasmtime_externref_t
+
+withTableValue :: TableValue -> (Ptr C'wasmtime_val_t -> IO a) -> IO a
+withTableValue = undefined -- TODO
 
 newTable :: MonadPrim s m => Context s -> TableType -> Maybe TableValue -> m (Either WasmtimeError (Table s))
 newTable ctx tt mbVal = unsafeIOToPrim $
@@ -1266,6 +1272,25 @@ newTable ctx tt mbVal = unsafeIOToPrim $
           error_ptr <- create_io
           checkWasmtimeError error_ptr
           Table <$> peek table_ptr
+
+-- TODO: structure is duplicating.. can this be avoided?
+growTable :: Context s -> Table s -> Word32 -> Maybe TableValue -> m (Either WasmtimeError Word32)
+growTable ctx table delta mbVal = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withTable table $ \table_ptr ->
+        case mbVal of
+          Nothing ->
+            alloca $ \prev_size_ptr -> do
+              error_ptr <- c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) nullPtr prev_size_ptr
+              checkWasmtimeError error_ptr
+              peek prev_size_ptr
+          (Just val) ->
+            withTableValue val $ \val_ptr ->
+              alloca $ \prev_size_ptr -> do
+                error_ptr <- c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) val_ptr prev_size_ptr
+                checkWasmtimeError error_ptr
+                peek prev_size_ptr
 
 --------------------------------------------------------------------------------
 -- Instances
