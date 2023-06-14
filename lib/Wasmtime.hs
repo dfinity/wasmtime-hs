@@ -1205,15 +1205,19 @@ data TableRefType = FuncRef | ExternRef
 
 data TableLimits = TableLimits {tableMin :: Int32, tableMax :: Int32}
 
--- TODO: haskell record -> C'wasm_limits_t
-newTableType :: TableRefType -> C'wasm_limits_t -> TableType
+newTableType :: TableRefType -> TableLimits -> TableType
 newTableType tableRefType limits = unsafePerformIO $
   alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> do
     let (valkind :: C'wasm_valkind_t) = case tableRefType of
           FuncRef -> c'WASMTIME_FUNCREF
           ExternRef -> c'WASMTIME_EXTERNREF
+        limits' =
+          C'wasm_limits_t
+            { c'wasm_limits_t'min = fromIntegral (tableMin limits),
+              c'wasm_limits_t'max = fromIntegral (tableMax limits)
+            }
     valtype_ptr <- c'wasm_valtype_new valkind
-    poke limits_ptr limits
+    poke limits_ptr limits'
     tabletype_ptr <- c'wasm_tabletype_new valtype_ptr limits_ptr
     TableType <$> newForeignPtr p'wasm_tabletype_delete tabletype_ptr
 
@@ -1225,27 +1229,60 @@ tableTypeElement tt = unsafePerformIO $
     case valkind of
       c'WASMTIME_FUNCREF -> pure FuncRef
       c'WASMTIME_EXTERNREF -> pure ExternRef
-      _ -> error "impossible..." -- TODO
+      _ -> error "Got invalid valkind from c'wasm_valtype_kind."
 
-tableTypeLimits :: TableType -> C'wasm_limits_t
+tableTypeLimits :: TableType -> TableLimits
 tableTypeLimits tt = unsafePerformIO $
   withTableType tt $ \tt_ptr -> do
     limits_ptr <- c'wasm_tabletype_limits tt_ptr
-    peek limits_ptr
+    limits' <- peek limits_ptr
+    pure
+      TableLimits
+        { tableMin = fromIntegral (c'wasm_limits_t'min limits'),
+          tableMax = fromIntegral (c'wasm_limits_t'max limits')
+        }
 
 newtype Table s = Table {unTable :: C'wasmtime_table_t}
 
-data TableValue = forall s. FuncRefValue (Maybe (Func s)) | ExternRefValue C'wasmtime_val_t
+data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue (C'wasmtime_externref_t)
 
-newTable :: MonadPrim s m => Context s -> TableType -> TableValue -> m (Either WasmtimeError (Table s))
-newTable ctx tt val = unsafeIOToPrim $
+newTable :: MonadPrim s m => Context s -> TableType -> Maybe TableValue -> m (Either WasmtimeError (Table s))
+newTable ctx tt mbVal = unsafeIOToPrim $
   try $
     withContext ctx $ \ctx_ptr ->
       withTableType tt $ \tt_ptr ->
         alloca $ \table_ptr -> do
-          error_ptr <- c'wasmtime_table_new ctx_ptr tt_ptr undefined table_ptr
+          let create_io = case mbVal of
+                Nothing -> do
+                  c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
+                (Just (FuncRefValue (Func func_t))) -> do
+                  let valkind = c'WASMTIME_FUNCREF
+                  let val = C'wasmtime_val {c'wasmtime_val'kind = valkind, c'wasmtime_val'of = unFunc func}
+                  undefined
+                (Just (ExternRefValue _todo)) -> do
+                  undefined -- TODO
+          error_ptr <- create_io
           checkWasmtimeError error_ptr
           Table <$> peek table_ptr
+
+-- let (val_ptr_io :: IO (Ptr C'wasmtime_val_t)) = case mbVal of
+--       Nothing -> pure nullPtr
+--       -- slkjsfkj
+
+--       Just (FuncRefValue func) ->
+--         alloca $ \(valunion_ptr) -> do
+--           let valkind = c'WASMTIME_FUNCREF
+--           -- valunion = castPtr (unFunc func)
+--           let val = C'wasmtime_val {c'wasmtime_val'kind = valkind, c'wasmtime_val'of = castPtr (unFunc func)}
+--           poke valunion_ptr val
+
+--       -- sdfjlsdf
+
+--       Just (ExternRefValue exval) -> undefined -- TODO
+-- val_ptr <- val_ptr_io
+-- error_ptr <- c'wasmtime_table_new ctx_ptr tt_ptr val_ptr table_ptr
+-- checkWasmtimeError error_ptr
+-- Table <$> peek table_ptr
 
 --------------------------------------------------------------------------------
 -- Instances
