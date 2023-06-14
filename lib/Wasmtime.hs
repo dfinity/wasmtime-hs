@@ -1244,7 +1244,7 @@ tableTypeLimits tt = unsafePerformIO $
 
 newtype Table s = Table {unTable :: C'wasmtime_table_t}
 
-data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue (C'wasmtime_externref_t)
+data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue C'wasmtime_externref_t
 
 newTable :: MonadPrim s m => Context s -> TableType -> Maybe TableValue -> m (Either WasmtimeError (Table s))
 newTable ctx tt mbVal = unsafeIOToPrim $
@@ -1257,32 +1257,15 @@ newTable ctx tt mbVal = unsafeIOToPrim $
                   c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
                 (Just (FuncRefValue (Func func_t))) -> do
                   let valkind = c'WASMTIME_FUNCREF
-                  let val = C'wasmtime_val {c'wasmtime_val'kind = valkind, c'wasmtime_val'of = unFunc func}
-                  undefined
+                  let val = C'wasmtime_val {c'wasmtime_val'kind = valkind, c'wasmtime_val'of = func_t} -- TODO: create a valunion
+                  alloca $ \val_ptr -> do
+                    poke val_ptr val
+                    c'wasmtime_table_new ctx_ptr tt_ptr val_ptr table_ptr
                 (Just (ExternRefValue _todo)) -> do
                   undefined -- TODO
           error_ptr <- create_io
           checkWasmtimeError error_ptr
           Table <$> peek table_ptr
-
--- let (val_ptr_io :: IO (Ptr C'wasmtime_val_t)) = case mbVal of
---       Nothing -> pure nullPtr
---       -- slkjsfkj
-
---       Just (FuncRefValue func) ->
---         alloca $ \(valunion_ptr) -> do
---           let valkind = c'WASMTIME_FUNCREF
---           -- valunion = castPtr (unFunc func)
---           let val = C'wasmtime_val {c'wasmtime_val'kind = valkind, c'wasmtime_val'of = castPtr (unFunc func)}
---           poke valunion_ptr val
-
---       -- sdfjlsdf
-
---       Just (ExternRefValue exval) -> undefined -- TODO
--- val_ptr <- val_ptr_io
--- error_ptr <- c'wasmtime_table_new ctx_ptr tt_ptr val_ptr table_ptr
--- checkWasmtimeError error_ptr
--- Table <$> peek table_ptr
 
 --------------------------------------------------------------------------------
 -- Instances
