@@ -604,30 +604,33 @@ newFuncType _proxy = mask_ $ do
       where
         n = VU.length kinds
 
--- | Type of values that WASM functions can take as parameters or return as results.
+-- | Type (kind) of values that:
+--
+-- * WASM @'Func'tions@ can take as parameters or return as results.
+-- * can be retrieved from and set to @'Global's@.
 data Kind
-  = I32
-  | I64
-  | F32
-  | F64
-  | V128
-  | FuncRef
-  | ExternRef
+  = KindI32
+  | KindI64
+  | KindF32
+  | KindF64
+  | KindV128
+  | KindFuncRef
+  | KindExternRef
   deriving (Show, Eq)
 
 fromWasmKind :: C'wasm_valkind_t -> Kind
 fromWasmKind k
-  | k == c'WASMTIME_I32 = I32
-  | k == c'WASMTIME_I64 = I64
-  | k == c'WASMTIME_F32 = F32
-  | k == c'WASMTIME_F64 = F64
-  | k == c'WASMTIME_V128 = V128
-  | k == c'WASMTIME_FUNCREF = FuncRef
-  | k == c'WASMTIME_EXTERNREF = ExternRef
+  | k == c'WASMTIME_I32 = KindI32
+  | k == c'WASMTIME_I64 = KindI64
+  | k == c'WASMTIME_F32 = KindF32
+  | k == c'WASMTIME_F64 = KindF64
+  | k == c'WASMTIME_V128 = KindV128
+  | k == c'WASMTIME_FUNCREF = KindFuncRef
+  | k == c'WASMTIME_EXTERNREF = KindExternRef
   | otherwise = error $ "Unknown wasm_valkind_t " ++ show k ++ "!"
 
--- | Class of Haskell types that WASM functions can take as parameters or return
--- as results.
+-- | Class of Haskell types that WASM @'Func'tions@ can take as parameters or
+-- return as results or which can be retrieved from and set to @'Global's@.
 class Storable a => HasKind a where
   kind :: Proxy a -> C'wasm_valkind_t
 
