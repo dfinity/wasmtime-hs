@@ -574,8 +574,8 @@ newFuncType ::
     Results r
   ) =>
   Proxy f ->
-  IO FuncType
-newFuncType _proxy = mask_ $ do
+  FuncType
+newFuncType _proxy = unsafePerformIO $ mask_ $ do
   withKinds (paramKinds $ Proxy @f) $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
     withKinds (resultKinds $ Proxy @r) $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
       functype_ptr <- c'wasm_functype_new params_ptr result_ptr
@@ -796,8 +796,7 @@ newFunc ::
   -- | 'Funcable' Haskell function.
   f ->
   m (Func s)
-newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
-  funcType :: FuncType <- newFuncType (Proxy @f)
+newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
   withFuncType funcType $ \functype_ptr -> do
     -- TODO: We probably need to extend the Store with a mutable set of FunPtrs
     -- that need to be freed using freeHaskellFunPtr when the Store is collected!!!
@@ -806,6 +805,9 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> do
       c'wasmtime_func_new ctx_ptr functype_ptr callback_funptr nullPtr nullFunPtr func_ptr
       Func <$> peek func_ptr
   where
+    funcType :: FuncType
+    funcType = newFuncType $ Proxy @f
+
     callback :: FuncCallback
     callback _env _caller args_ptr nargs result_ptr nresults = do
       mbResult <- importCall f args_ptr (fromIntegral nargs)
@@ -1262,8 +1264,8 @@ withGlobalType = withForeignPtr . unGlobalType
 
 -- | Returns a new 'GlobalType' with the kind of the given Haskell type and the
 -- specified 'Mutability'.
-newGlobalType :: HasKind a => Proxy a -> Mutability -> IO GlobalType
-newGlobalType proxy mutability = do
+newGlobalType :: HasKind a => Proxy a -> Mutability -> GlobalType
+newGlobalType proxy mutability = unsafePerformIO $ do
   globaltype_ptr <- newGlobalTypePtr proxy mutability
   GlobalType <$> newForeignPtr p'wasm_globaltype_delete globaltype_ptr
 
