@@ -565,19 +565,29 @@ newFuncType _proxy = mask_ $ do
     withKinds (resultKinds $ Proxy @r) $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
       functype_ptr <- c'wasm_functype_new params_ptr result_ptr
       FuncType <$> newForeignPtr p'wasm_functype_delete functype_ptr
-
-withKinds :: VU.Vector C'wasm_valkind_t -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
-withKinds kinds f =
-  allocaArray n $ \(valtypes_ptr :: Ptr (Ptr C'wasm_valtype_t)) -> do
-    VU.iforM_ kinds $ \ix k -> do
-      -- FIXME: is the following a memory leak?
-      valtype_ptr <- c'wasm_valtype_new k
-      pokeElemOff valtypes_ptr ix valtype_ptr
-    (valtype_vec_ptr :: Ptr C'wasm_valtype_vec_t) <- malloc
-    c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr
-    f valtype_vec_ptr
   where
-    n = VU.length kinds
+    withKinds :: VU.Vector C'wasm_valkind_t -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
+    withKinds kinds f =
+      allocaArray n $ \(valtypes_ptr_ptr :: Ptr (Ptr C'wasm_valtype_t)) -> do
+        VU.iforM_ kinds $ \ix k -> do
+          -- The C'wasm_valtype_t will be deleted later via del_valtypes.
+          valtype_ptr <- c'wasm_valtype_new k
+          pokeElemOff valtypes_ptr_ptr ix valtype_ptr
+        -- c'wasm_functype_new takes ownership of the C'wasm_valtype_vec_t so we
+        -- just malloc here without freeing explicitly later.
+        (valtype_vec_ptr :: Ptr C'wasm_valtype_vec_t) <- malloc
+        c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr_ptr
+        x <- f valtype_vec_ptr
+        let del_valtypes ix
+              | ix == n = pure ()
+              | otherwise = do
+                  valtype_ptr <- peekElemOff valtypes_ptr_ptr ix
+                  c'wasm_valtype_delete valtype_ptr
+                  del_valtypes (ix + 1)
+        del_valtypes 0
+        pure x
+      where
+        n = VU.length kinds
 
 class Storable a => Kind a where
   kind :: Proxy a -> C'wasm_valkind_t
