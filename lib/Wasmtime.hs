@@ -1198,6 +1198,7 @@ instance Exception MemoryAccessError
 --------------------------------------------------------------------------------
 newtype TableType = TableType {unTableType :: ForeignPtr C'wasm_tabletype_t}
 
+withTableType :: TableType -> (Ptr C'wasm_tabletype_t -> IO a) -> IO a
 withTableType = withForeignPtr . unTableType
 
 data TableRefType = FuncRef | ExternRef
@@ -1273,24 +1274,56 @@ newTable ctx tt mbVal = unsafeIOToPrim $
           checkWasmtimeError error_ptr
           Table <$> peek table_ptr
 
--- TODO: structure is duplicating.. can this be avoided?
+-- TODO: structure is duplicated.. can this be avoided?
 growTable :: Context s -> Table s -> Word32 -> Maybe TableValue -> m (Either WasmtimeError Word32)
 growTable ctx table delta mbVal = unsafeIOToPrim $
   try $
     withContext ctx $ \ctx_ptr ->
       withTable table $ \table_ptr ->
-        case mbVal of
-          Nothing ->
-            alloca $ \prev_size_ptr -> do
+        alloca $ \prev_size_ptr ->
+          case mbVal of
+            Nothing -> do
               error_ptr <- c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) nullPtr prev_size_ptr
               checkWasmtimeError error_ptr
               peek prev_size_ptr
-          (Just val) ->
-            withTableValue val $ \val_ptr ->
-              alloca $ \prev_size_ptr -> do
+            (Just val) ->
+              withTableValue val $ \val_ptr -> do
                 error_ptr <- c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) val_ptr prev_size_ptr
                 checkWasmtimeError error_ptr
                 peek prev_size_ptr
+
+-- | Get value at index from table. If index > length table, Nothing is returned.
+getFromTable :: Context s -> Table s -> Word32 -> Maybe TableValue
+getFromTable ctx table ix = unsafePerformIO $
+  withContext ctx $ \ctx_ptr ->
+    withTable table $ \table_ptr ->
+      alloca $ \val_ptr -> do
+        success <- c'wasmtime_table_get ctx_ptr table_ptr ix val_ptr
+        if not success
+          then pure Nothing
+          else pure . Just $ peek val_ptr -- TODO: need to convert wasmtime_val_t to a specific value given by the table type
+
+setTable :: Context s -> Table s -> Word32 -> TableValue -> m (Either WasmtimeError ())
+setTable ctx table ix val = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withTable table $ \table_ptr ->
+        withTableValue val $ \val_ptr -> do
+          error_ptr <- c'wasmtime_table_set ctx_ptr table_ptr ix val_ptr
+          checkWasmtimeError error_ptr
+          pure ()
+
+getTableType :: Context s -> Table s -> TableType
+getTableType ctx table = unsafePerformIO $
+  withContext ctx $ \ctx_ptr ->
+    withTable table $ \table_ptr -> do
+      tt_ptr <- c'wasmtime_table_type ctx_ptr table_ptr
+      TableType <$> newForeignPtr p'wasm_tabletype_delete tt_ptr
+
+-- TODOs:
+-- withValue
+-- create valunion from haskell val
+-- create haskell val from wasmtime_val_t
 
 --------------------------------------------------------------------------------
 -- Instances
