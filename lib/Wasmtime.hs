@@ -1,6 +1,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
@@ -593,9 +595,11 @@ instance Kind Double where kind _proxy = c'WASMTIME_F64
 
 instance Kind Word128 where kind _proxy = c'WASMTIME_V128
 
--- TODO:
--- instance Kind ? where kind _proxy = c'WASMTIME_FUNCREF
--- instance Kind ? where kind _proxy = c'WASMTIME_EXTERNREF
+instance Kind C'wasmtime_func_t where
+  kind :: Proxy C'wasmtime_func_t -> C'wasm_valkind_t
+  kind _proxy = c'WASMTIME_FUNCREF
+
+instance Kind C'wasmtime_externref_t where kind _proxy = c'WASMTIME_FUNCREF
 
 class Results r where
   resultKinds :: Proxy r -> VU.Vector C'wasm_valkind_t
@@ -1243,6 +1247,7 @@ tableTypeLimits tt = unsafePerformIO $
           tableMax = fromIntegral (c'wasm_limits_t'max limits')
         }
 
+-- TODO: typed tables
 newtype Table s = Table {unTable :: C'wasmtime_table_t}
 
 withTable :: Table s -> (Ptr C'wasmtime_table_t -> IO a) -> IO a
@@ -1250,8 +1255,12 @@ withTable = with . unTable
 
 data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue C'wasmtime_externref_t
 
-withTableValue :: TableValue -> (Ptr C'wasmtime_val_t -> IO a) -> IO a
-withTableValue = undefined -- TODO
+withTableValue :: TableValue -> (Ptr C'wasmtime_val_t -> IO a) -> IO a -- need a Ptr C'wasmtime_val_t
+withTableValue (FuncRefValue (Func (func_t :: C'wasmtime_func_t))) ctn = unsafePerformIO $
+  alloca $ \val_ptr -> do
+    pokeVal val_ptr func_t
+    pure $ ctn val_ptr
+withTableValue (ExternRefValue _) ctn = error "not implemented: ExternRefValue Tables"
 
 newTable :: MonadPrim s m => Context s -> TableType -> Maybe TableValue -> m (Either WasmtimeError (Table s))
 newTable ctx tt mbVal = unsafeIOToPrim $
@@ -1259,18 +1268,15 @@ newTable ctx tt mbVal = unsafeIOToPrim $
     withContext ctx $ \ctx_ptr ->
       withTableType tt $ \tt_ptr ->
         alloca $ \table_ptr -> do
-          let create_io = case mbVal of
-                Nothing -> do
-                  c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
-                (Just (FuncRefValue (Func func_t))) -> do
-                  let valkind = c'WASMTIME_FUNCREF
-                  let val = C'wasmtime_val {c'wasmtime_val'kind = valkind, c'wasmtime_val'of = func_t} -- TODO: create a valunion
-                  alloca $ \val_ptr -> do
-                    poke val_ptr val
-                    c'wasmtime_table_new ctx_ptr tt_ptr val_ptr table_ptr
-                (Just (ExternRefValue _todo)) -> do
-                  undefined -- TODO
-          error_ptr <- create_io
+          error_ptr <- case mbVal of
+            Nothing -> do
+              c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
+            (Just (FuncRefValue (Func func_t))) -> do
+              alloca $ \val_ptr -> do
+                pokeVal val_ptr func_t
+                c'wasmtime_table_new ctx_ptr tt_ptr val_ptr table_ptr
+            (Just (ExternRefValue _todo)) -> do
+              error "not implemented: ExternRefValue Tables"
           checkWasmtimeError error_ptr
           Table <$> peek table_ptr
 
@@ -1319,11 +1325,6 @@ getTableType ctx table = unsafePerformIO $
     withTable table $ \table_ptr -> do
       tt_ptr <- c'wasmtime_table_type ctx_ptr table_ptr
       TableType <$> newForeignPtr p'wasm_tabletype_delete tt_ptr
-
--- TODOs:
--- withValue
--- create valunion from haskell val
--- create haskell val from wasmtime_val_t
 
 --------------------------------------------------------------------------------
 -- Instances
