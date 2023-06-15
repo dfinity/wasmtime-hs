@@ -74,11 +74,14 @@ module Wasmtime
     Module,
     newModule,
 
+    -- * Kinds
+    Kind (..),
+    HasKind,
+
     -- * Functions
     Func,
     newFunc,
     Funcable,
-    Kind,
     Result,
     Results,
     TypedFunc,
@@ -105,6 +108,17 @@ module Wasmtime
     readMemoryAt,
     writeMemory,
     MemoryAccessError (..),
+
+    -- * Globals
+    GlobalType,
+    newGlobalType,
+    Mutability (..),
+    globalTypeKind,
+    globalTypeMutability,
+    Global,
+    newGlobal,
+    globalGet,
+    globalSet,
 
     -- * Externs
     Extern,
@@ -147,6 +161,7 @@ import Bindings.Wasmtime.Config
 import Bindings.Wasmtime.Error
 import Bindings.Wasmtime.Extern
 import Bindings.Wasmtime.Func
+import Bindings.Wasmtime.Global
 import Bindings.Wasmtime.Instance
 import Bindings.Wasmtime.Memory
 import Bindings.Wasmtime.Module
@@ -154,7 +169,7 @@ import Bindings.Wasmtime.Store
 import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
 import Control.Applicative ((<|>))
-import Control.Exception (Exception, mask_, onException, throwIO, try)
+import Control.Exception (Exception, bracket, mask_, onException, throwIO, try)
 import Control.Monad (guard, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
@@ -210,7 +225,7 @@ newEngine = mask_ $ do
   Engine <$> newForeignPtr p'wasm_engine_delete engine_ptr
 
 withEngine :: Engine -> (Ptr C'wasm_engine_t -> IO a) -> IO a
-withEngine engine = withForeignPtr (unEngine engine)
+withEngine = withForeignPtr . unEngine
 
 -- | Create an 'Engine' by modifying the default 'Config'.
 newEngineWithConfig :: Config -> IO Engine
@@ -589,22 +604,46 @@ newFuncType _proxy = mask_ $ do
       where
         n = VU.length kinds
 
-class Storable a => Kind a where
+-- | Type of values that WASM functions can take as parameters or return as results.
+data Kind
+  = I32
+  | I64
+  | F32
+  | F64
+  | V128
+  | FuncRef
+  | ExternRef
+  deriving (Show, Eq)
+
+fromWasmKind :: C'wasm_valkind_t -> Kind
+fromWasmKind k
+  | k == c'WASMTIME_I32 = I32
+  | k == c'WASMTIME_I64 = I64
+  | k == c'WASMTIME_F32 = F32
+  | k == c'WASMTIME_F64 = F64
+  | k == c'WASMTIME_V128 = V128
+  | k == c'WASMTIME_FUNCREF = FuncRef
+  | k == c'WASMTIME_EXTERNREF = ExternRef
+  | otherwise = error $ "Unknown wasm_valkind_t " ++ show k ++ "!"
+
+-- | Class of Haskell types that WASM functions can take as parameters or return
+-- as results.
+class Storable a => HasKind a where
   kind :: Proxy a -> C'wasm_valkind_t
 
-instance Kind Int32 where kind _proxy = c'WASMTIME_I32
+instance HasKind Int32 where kind _proxy = c'WASMTIME_I32
 
-instance Kind Int64 where kind _proxy = c'WASMTIME_I64
+instance HasKind Int64 where kind _proxy = c'WASMTIME_I64
 
-instance Kind Float where kind _proxy = c'WASMTIME_F32
+instance HasKind Float where kind _proxy = c'WASMTIME_F32
 
-instance Kind Double where kind _proxy = c'WASMTIME_F64
+instance HasKind Double where kind _proxy = c'WASMTIME_F64
 
-instance Kind Word128 where kind _proxy = c'WASMTIME_V128
+instance HasKind Word128 where kind _proxy = c'WASMTIME_V128
 
 -- TODO:
--- instance Kind ? where kind _proxy = c'WASMTIME_FUNCREF
--- instance Kind ? where kind _proxy = c'WASMTIME_EXTERNREF
+-- instance HasKind ? where kind _proxy = c'WASMTIME_FUNCREF
+-- instance HasKind ? where kind _proxy = c'WASMTIME_EXTERNREF
 
 class Results r where
   resultKinds :: Proxy r -> VU.Vector C'wasm_valkind_t
@@ -620,7 +659,7 @@ instance Results () where
 
 -- The instance:
 --
--- instance {-# OVERLAPPABLE #-} Kind a => Results a where
+-- instance {-# OVERLAPPABLE #-} HasKind a => Results a where
 --   results proxy = [kind proxy]
 --
 -- leads to:
@@ -664,17 +703,23 @@ instance Results Word128 where
   writeResults = pokeVal
   readResults = peekRawVal
 
-pokeVal :: forall r. (Kind r) => Ptr C'wasmtime_val_t -> r -> IO ()
+pokeVal :: forall r. (HasKind r) => Ptr C'wasmtime_val_t -> r -> IO ()
 pokeVal result_ptr r = do
   poke (p'wasmtime_val'kind result_ptr) $ kind $ Proxy @r
   let p :: Ptr C'wasmtime_valunion_t
       p = p'wasmtime_val'of result_ptr
   poke (castPtr p) r
 
+uncheckedPeekVal :: forall r. (HasKind r) => Ptr C'wasmtime_val_t -> IO r
+uncheckedPeekVal val_ptr = peek (castPtr of_ptr :: Ptr r)
+  where
+    of_ptr :: Ptr C'wasmtime_valunion_t
+    of_ptr = p'wasmtime_val'of val_ptr
+
 peekRawVal :: Storable r => Ptr C'wasmtime_val_raw_t -> IO r
 peekRawVal = peek . castPtr
 
-instance (Kind a, Kind b) => Results (a, b) where
+instance (HasKind a, HasKind b) => Results (a, b) where
   resultKinds _proxy = [kind (Proxy @a), kind (Proxy @b)]
   nrOfResults _proxy = 2
   writeResults result_ptr (a, b) = do
@@ -685,7 +730,7 @@ instance (Kind a, Kind b) => Results (a, b) where
       <$> peekRawVal result_ptr
       <*> peekRawVal (advancePtr result_ptr 1)
 
-instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
+instance (HasKind a, HasKind b, HasKind c) => Results (a, b, c) where
   resultKinds _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c)]
   nrOfResults _proxy = 3
   writeResults result_ptr (a, b, c) = do
@@ -698,7 +743,7 @@ instance (Kind a, Kind b, Kind c) => Results (a, b, c) where
       <*> peekRawVal (advancePtr result_ptr 1)
       <*> peekRawVal (advancePtr result_ptr 2)
 
-instance (Kind a, Kind b, Kind c, Kind d) => Results (a, b, c, d) where
+instance (HasKind a, HasKind b, HasKind c, HasKind d) => Results (a, b, c, d) where
   resultKinds _proxy = [kind (Proxy @a), kind (Proxy @b), kind (Proxy @c), kind (Proxy @d)]
   nrOfResults _proxy = 4
   writeResults result_ptr (a, b, c, d) = do
@@ -830,7 +875,7 @@ class Funcable f where
     Func s ->
     f
 
-instance (Kind a, Funcable b) => Funcable (a -> b) where
+instance (HasKind a, Funcable b) => Funcable (a -> b) where
   type Result (a -> b) = Result b
 
   writeParamKinds _proxy mutVec ix = do
@@ -1201,6 +1246,142 @@ writeMemory ctx mem offset (BI.BS fp n) =
 data MemoryAccessError = MemoryAccessError deriving (Show)
 
 instance Exception MemoryAccessError
+
+--------------------------------------------------------------------------------
+-- Globals
+--------------------------------------------------------------------------------
+
+-- | The type of a global.
+newtype GlobalType = GlobalType {unGlobalType :: ForeignPtr C'wasm_globaltype_t}
+
+withGlobalType :: GlobalType -> (Ptr C'wasm_globaltype_t -> IO a) -> IO a
+withGlobalType = withForeignPtr . unGlobalType
+
+-- | Returns a new 'GlobalType' with the kind of the given Haskell type and the
+-- specified 'Mutability'.
+newGlobalType :: HasKind a => Proxy a -> Mutability -> IO GlobalType
+newGlobalType proxy mutability = do
+  globaltype_ptr <- newGlobalTypePtr proxy mutability
+  GlobalType <$> newForeignPtr p'wasm_globaltype_delete globaltype_ptr
+
+newGlobalTypePtr :: HasKind a => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
+newGlobalTypePtr proxy mutability = do
+  valtype_ptr <- c'wasm_valtype_new $ kind proxy
+  c'wasm_globaltype_new valtype_ptr $ toWasmMutability mutability
+
+-- TODO: think about whether we should reflect Mutability on the type-level
+-- such that we can only use `globalSet` on mutable globals.
+
+-- | Specifies wether a global can be mutated or not.
+data Mutability
+  = -- | The global can not be mutated.
+    Immutable
+  | -- | The global can be mutated via 'globalSet'.
+    Mutable
+  deriving (Show, Eq)
+
+toWasmMutability :: Mutability -> C'wasm_mutability_t
+toWasmMutability Immutable = 0
+toWasmMutability Mutable = 1
+
+fromWasmMutability :: C'wasm_mutability_t -> Mutability
+fromWasmMutability 0 = Immutable
+fromWasmMutability 1 = Mutable
+fromWasmMutability m = error $ "Unknown wasm_mutability_t " ++ show m ++ "!"
+
+-- | Returns the 'Kind' of the given 'GlobalType'.
+globalTypeKind :: GlobalType -> Kind
+globalTypeKind globalType = unsafePerformIO $
+  withGlobalType globalType $ \globalType_ptr -> do
+    valtype_ptr <- c'wasm_globaltype_content globalType_ptr
+    fromWasmKind <$> c'wasm_valtype_kind valtype_ptr
+
+-- | Returns the 'Mutability' of the given 'GlobalType'.
+globalTypeMutability :: GlobalType -> Mutability
+globalTypeMutability globalType = unsafePerformIO $
+  withGlobalType globalType $ \globalType_ptr ->
+    fromWasmMutability <$> c'wasm_globaltype_mutability globalType_ptr
+
+-- | A WebAssembly global value which can be read and written to.
+--
+-- A global in WebAssembly is sort of like a global variable within an
+-- 'Instance'. The 'globalGet' and 'globalSet' instructions will modify and read
+-- global values in a wasm module. Globals can either be imported or exported
+-- from wasm modules.
+--
+-- A Global “belongs” to the store that it was originally created within (either
+-- via 'newGlobal' or via instantiating a 'Module'). Operations on a Global only
+-- work with the store it belongs to, and if another store is passed in by
+-- accident then methods will panic.
+newtype Global s a = Global {getWasmtimeGlobal :: C'wasmtime_global_t}
+  deriving (Show)
+
+withGlobal :: Global s a -> (Ptr C'wasmtime_global_t -> IO b) -> IO b
+withGlobal = with . getWasmtimeGlobal
+
+-- | Creates a new WebAssembly global value with the 'GlobalType' corresponding
+-- to the type of the given Haskell value and the specified 'Mutability'. The
+-- global will be initialised with the given Haskell value.
+--
+-- The 'Context' argument will be the owner of the 'Global' returned. Using the
+-- returned Global other items in the store may access this global. For example
+-- this could be provided as an argument to 'newInstance'.
+--
+-- Returns an error if the value comes from a different store than the specified
+-- store ('Context').
+newGlobal ::
+  forall s m a.
+  (MonadPrim s m, HasKind a) =>
+  Context s ->
+  -- | Specifies whether the global can be mutated or not.
+  Mutability ->
+  -- | Initialise the global with this Haskell value.
+  a ->
+  m (Either WasmtimeError (Global s a))
+newGlobal ctx mutability x =
+  unsafeIOToPrim $
+    try $
+      withContext ctx $ \ctx_ptr ->
+        withNewGlobalTypePtr $ \(globaltype_ptr :: Ptr C'wasm_globaltype_t) ->
+          alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
+            pokeVal val_ptr x
+            alloca $ \(global_ptr :: Ptr C'wasmtime_global_t) -> do
+              error_ptr <- c'wasmtime_global_new ctx_ptr globaltype_ptr val_ptr global_ptr
+              checkWasmtimeError error_ptr
+              Global <$> peek global_ptr
+  where
+    withNewGlobalTypePtr =
+      bracket (newGlobalTypePtr (Proxy @a) mutability) c'wasm_globaltype_delete
+
+-- | Returns the current value of the given global.
+globalGet :: (MonadPrim s m, HasKind a) => Context s -> Global s a -> m a
+globalGet ctx global =
+  unsafeIOToPrim $
+    withContext ctx $ \ctx_ptr ->
+      withGlobal global $ \global_ptr ->
+        alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
+          c'wasmtime_global_get ctx_ptr global_ptr val_ptr
+          uncheckedPeekVal val_ptr
+
+-- | Attempts to set the current value of this global.
+--
+-- Returns an error if it’s not a mutable global, or if value comes from a
+-- different store than the one provided.
+globalSet ::
+  (MonadPrim s m, HasKind a) =>
+  Context s ->
+  Global s a ->
+  a ->
+  m (Either WasmtimeError ())
+globalSet ctx global x =
+  unsafeIOToPrim $
+    try $
+      withContext ctx $ \ctx_ptr ->
+        withGlobal global $ \global_ptr ->
+          alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
+            pokeVal val_ptr x
+            error_ptr <- c'wasmtime_global_set ctx_ptr global_ptr val_ptr
+            checkWasmtimeError error_ptr
 
 --------------------------------------------------------------------------------
 -- Instances
