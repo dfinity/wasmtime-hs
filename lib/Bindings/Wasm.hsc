@@ -71,20 +71,6 @@ module Bindings.Wasm where
 
 #opaque_t wasm_externtype_t
 
-#starttype struct wasm_importtype_vec_t
-#field size , CSize
-#field data , Ptr (Ptr <wasm_importtype_t>)
-#stoptype
-
-#opaque_t wasm_importtype_t
-
-#starttype struct wasm_exporttype_vec_t
-#field size , CSize
-#field data , Ptr (Ptr <wasm_exporttype_t>)
-#stoptype
-
-#opaque_t wasm_exporttype_t
-
 #opaque_t wasm_config_t
 
 #ccall wasm_config_new , IO (Ptr <wasm_config_t>)
@@ -96,6 +82,40 @@ module Bindings.Wasm where
 #ccall wasm_valtype_kind , Ptr <wasm_valtype_t> -> IO (<wasm_valkind_t>)
 
 #synonym_t wasm_message_t , <wasm_byte_vec_t>
+
+--------------------------------------------------------------------------------
+-- Import Types
+--------------------------------------------------------------------------------
+
+#opaque_t wasm_importtype_t
+
+#starttype struct wasm_importtype_vec_t
+#field size , CSize
+#field data , Ptr (Ptr <wasm_importtype_t>)
+#stoptype
+
+#ccall wasm_importtype_delete , Ptr <wasm_importtype_t> -> IO ()
+
+#ccall wasm_importtype_vec_delete , Ptr <wasm_importtype_vec_t> -> IO ()
+
+#ccall wasm_importtype_module , Ptr <wasm_importtype_t> -> IO (Ptr <wasm_name_t>)
+
+#ccall wasm_importtype_name , Ptr <wasm_importtype_t> -> IO (Ptr <wasm_name_t>)
+
+--------------------------------------------------------------------------------
+-- Export Types
+--------------------------------------------------------------------------------
+
+#opaque_t wasm_exporttype_t
+
+#starttype struct wasm_exporttype_vec_t
+#field size , CSize
+#field data , Ptr (Ptr <wasm_exporttype_t>)
+#stoptype
+
+#ccall wasm_exporttype_delete , Ptr <wasm_exporttype_t> -> IO ()
+
+#ccall wasm_exporttype_vec_delete , Ptr <wasm_exporttype_vec_t> -> IO ()
 
 --------------------------------------------------------------------------------
 -- Frames

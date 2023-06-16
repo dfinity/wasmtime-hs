@@ -77,6 +77,12 @@ module Wasmtime
     -- * Module
     Module,
     newModule,
+    ImportType,
+    moduleImports,
+    importTypeModule,
+    importTypeName,
+    ExportType,
+    moduleExports,
 
     -- * Kinds
     Kind (..),
@@ -596,6 +602,71 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
 
 withModule :: Module -> (Ptr C'wasmtime_module_t -> IO a) -> IO a
 withModule = withForeignPtr . unModule
+
+-- | Type of an import.
+newtype ImportType = ImportType {unImportType :: ForeignPtr C'wasm_importtype_t}
+
+withImportType :: ImportType -> (Ptr C'wasm_importtype_t -> IO a) -> IO a
+withImportType = withForeignPtr . unImportType
+
+newImportTypeFromPtr :: Ptr C'wasm_importtype_t -> IO ImportType
+newImportTypeFromPtr = fmap ImportType . newForeignPtr p'wasm_importtype_delete
+
+-- | Returns a vector of imports that this module expects.
+moduleImports :: Module -> Vector ImportType
+moduleImports m =
+  unsafePerformIO $
+    withModule m $ \mod_ptr ->
+      alloca $ \(importtype_vec_ptr :: Ptr C'wasm_importtype_vec_t) -> mask_ $ do
+        c'wasmtime_module_imports mod_ptr importtype_vec_ptr
+        sz :: CSize <- peek $ p'wasm_importtype_vec_t'size importtype_vec_ptr
+        dt :: Ptr (Ptr C'wasm_importtype_t) <-
+          peek $ p'wasm_importtype_vec_t'data importtype_vec_ptr
+        vec <- V.generateM (fromIntegral sz) $ \ix -> do
+          importtype_ptr :: Ptr C'wasm_importtype_t <- peekElemOff dt ix
+          newImportTypeFromPtr importtype_ptr
+        -- c'wasm_importtype_vec_delete importtype_vec_ptr
+        pure vec
+
+importTypeModule :: ImportType -> String
+importTypeModule importType =
+  unsafePerformIO $
+    withImportType importType $ \importtype_ptr -> do
+      name_ptr <- c'wasm_importtype_module importtype_ptr
+      let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
+      peekByteVecAsString p
+
+importTypeName :: ImportType -> Maybe String
+importTypeName importType =
+  unsafePerformIO $
+    withImportType importType $ \importtype_ptr -> do
+      name_ptr <- c'wasm_importtype_name importtype_ptr
+      if name_ptr == nullPtr
+        then pure Nothing
+        else do
+          let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
+          Just <$> peekByteVecAsString p
+
+-- | Type of an export.
+newtype ExportType = ExportType {unExportType :: ForeignPtr C'wasm_exporttype_t}
+
+newExportTypeFromPtr :: Ptr C'wasm_exporttype_t -> IO ExportType
+newExportTypeFromPtr = fmap ExportType . newForeignPtr p'wasm_exporttype_delete
+
+-- | Returns the list of exports that this module provides.
+moduleExports :: Module -> Vector ExportType
+moduleExports m =
+  unsafePerformIO $
+    withModule m $ \mod_ptr ->
+      alloca $ \(exporttype_vec_ptr :: Ptr C'wasm_exporttype_vec_t) -> mask_ $ do
+        c'wasmtime_module_exports mod_ptr exporttype_vec_ptr
+        sz <- peek $ p'wasm_exporttype_vec_t'size exporttype_vec_ptr
+        dt <- peek $ p'wasm_exporttype_vec_t'data exporttype_vec_ptr
+        vec <- V.generateM (fromIntegral sz) $ \ix -> do
+          exporttype_ptr <- peekElemOff dt ix
+          newExportTypeFromPtr exporttype_ptr
+        c'wasm_exporttype_vec_delete exporttype_vec_ptr
+        pure vec
 
 --------------------------------------------------------------------------------
 -- Function Types
