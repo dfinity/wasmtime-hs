@@ -23,6 +23,8 @@ module Bindings.Wasm where
 #field max , CSize
 #stoptype
 
+#num wasm_limits_max_default
+
 #integral_t wasm_byte_t
 
 #starttype struct wasm_byte_vec_t

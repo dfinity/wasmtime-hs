@@ -2,9 +2,8 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE InstanceSigs #-}
-{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
@@ -158,6 +157,7 @@ module Wasmtime
     getExport,
     getExportedTypedFunc,
     getExportedMemory,
+    getExportedTable,
     getExportedTypedGlobal,
     getExportAtIndex,
 
@@ -568,7 +568,7 @@ wat2wasm (BI.BS inp_fp inp_size) =
       let word_ptr :: Ptr Word8
           word_ptr = castPtr data_ptr
       out_fp <-
-        Foreign.Concurrent.newForeignPtr word_ptr $ -- TODO: why Foreign.Concurrent?
+        Foreign.Concurrent.newForeignPtr word_ptr $
           c'wasm_byte_vec_delete wasm_byte_vec_ptr
       pure $ Wasm $ BI.fromForeignPtr0 out_fp $ fromIntegral size
 
@@ -614,7 +614,7 @@ newFuncType ::
   ) =>
   Proxy f ->
   FuncType
-newFuncType _proxy = unsafePerformIO $ mask_ $ do 
+newFuncType _proxy = unsafePerformIO $ mask_ $ do
   withKinds (paramKinds $ Proxy @f) $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
     withKinds (resultKinds $ Proxy @r) $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
       functype_ptr <- c'wasm_functype_new params_ptr result_ptr
@@ -762,8 +762,8 @@ pokeVal result_ptr r = do
       p = p'wasmtime_val'of result_ptr
   poke (castPtr p) r
 
-peekVal :: Ptr C'wasmtime_val_t -> IO TableValue
-peekVal val_ptr = do
+peekTableVal :: Ptr C'wasmtime_val_t -> IO TableValue
+peekTableVal val_ptr = do
   k <- peek kind_ptr
   if
       | k == c'WASMTIME_FUNCREF -> FuncRefValue . Func <$> peek (castPtr of_ptr :: Ptr C'wasmtime_func_t)
@@ -1115,6 +1115,11 @@ instance Externable Memory where
   toCExtern = getWasmtimeMemory
   externKind _proxy = c'WASMTIME_EXTERN_MEMORY
 
+instance Externable Table where
+  type CType Table = C'wasmtime_table_t
+  toCExtern = getWasmtimeTable
+  externKind _proxy = c'WASMTIME_EXTERN_TABLE
+
 instance Externable Global where
   type CType Global = C'wasmtime_global_t
   toCExtern = getWasmtimeGlobal
@@ -1339,11 +1344,12 @@ instance Exception MemoryAccessError
 --
 -- Tables are contiguous chunks of a specific element, typically a funcref or an externref.
 -- The most common use for tables is a function table through which call_indirect can invoke other functions.
-newtype TableType = TableType {unTableType :: ForeignPtr C'wasm_tabletype_t}
+newtype TableType = TableType {getWasmtimeTableType :: ForeignPtr C'wasm_tabletype_t}
 
 withTableType :: TableType -> (Ptr C'wasm_tabletype_t -> IO a) -> IO a
-withTableType = withForeignPtr . unTableType
+withTableType = withForeignPtr . getWasmtimeTableType
 
+-- | The type of a table.
 data TableRefType = FuncRef | ExternRef
   deriving (Show, Eq)
 
@@ -1364,8 +1370,8 @@ newTableType tableRefType limits = unsafePerformIO $
           ExternRef -> c'WASMTIME_EXTERNREF
         limits' =
           C'wasm_limits_t
-            { c'wasm_limits_t'min = fromIntegral (tableMin limits),
-              c'wasm_limits_t'max = fromIntegral (tableMax limits)
+            { c'wasm_limits_t'min = fromIntegral $ tableMin limits,
+              c'wasm_limits_t'max = fromIntegral $ tableMax limits
             }
     valtype_ptr <- c'wasm_valtype_new valkind
     poke limits_ptr limits'
@@ -1400,20 +1406,21 @@ tableTypeLimits tt = unsafePerformIO $
 -- | A WebAssembly table, or an array of values.
 --
 -- For more information, see <https://docs.rs/wasmtime/latest/wasmtime/struct.Table.html>.
-newtype Table s = Table {unTable :: C'wasmtime_table_t}
+newtype Table s = Table {getWasmtimeTable :: C'wasmtime_table_t}
+  deriving (Show, Typeable)
 
 withTable :: Table s -> (Ptr C'wasmtime_table_t -> IO a) -> IO a
-withTable = with . unTable
+withTable = with . getWasmtimeTable
 
 -- | Tables can contain function references or extern references
 data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue (Ptr C'wasmtime_externref_t)
 
 withTableValue :: TableValue -> (Ptr C'wasmtime_val_t -> IO a) -> IO a
-withTableValue (FuncRefValue (Func (func_t :: C'wasmtime_func_t))) ctn =
+withTableValue (FuncRefValue (Func (func_t :: C'wasmtime_func_t))) f =
   alloca $ \val_ptr -> do
     pokeVal val_ptr func_t
-    ctn val_ptr
-withTableValue (ExternRefValue _) _ctn = error "not implemented: ExternRefValue Tables"
+    f val_ptr
+withTableValue (ExternRefValue _) _f = error "not implemented: ExternRefValue Tables"
 
 -- | Create a new table
 newTable ::
@@ -1479,7 +1486,7 @@ tableGet ctx table ix = unsafeIOToPrim $
         success <- c'wasmtime_table_get ctx_ptr table_ptr ix val_ptr
         if not success
           then pure Nothing
-          else Just <$> peekVal val_ptr
+          else Just <$> peekTableVal val_ptr
 
 -- | Set an element at the given index. This function will return an error if the index is too large.
 tableSet ::
@@ -1503,7 +1510,7 @@ tableSet ctx table ix val = unsafeIOToPrim $
 getTableType :: Context s -> Table s -> TableType
 getTableType ctx table = unsafePerformIO $
   withContext ctx $ \ctx_ptr ->
-    withTable table $ \table_ptr -> do
+    withTable table $ \table_ptr -> mask_ $ do
       tt_ptr <- c'wasmtime_table_type ctx_ptr table_ptr
       TableType <$> newForeignPtr p'wasm_tabletype_delete tt_ptr
 
@@ -1562,9 +1569,10 @@ globalTypeKind globalType = unsafePerformIO $
 
 -- | Returns the 'Mutability' of the given 'GlobalType'.
 globalTypeMutability :: GlobalType -> Mutability
-globalTypeMutability globalType = unsafePerformIO $
-  withGlobalType globalType $ \globalType_ptr ->
-    fromWasmMutability <$> c'wasm_globaltype_mutability globalType_ptr
+globalTypeMutability globalType =
+  unsafePerformIO $
+    withGlobalType globalType $
+      fmap fromWasmMutability . c'wasm_globaltype_mutability
 
 -- | A WebAssembly global value which can be read and written to.
 --
@@ -1766,6 +1774,7 @@ fromExternPtr extern_ptr = do
     runMaybeT $
       fromCExtern Func
         <|> fromCExtern Memory
+        <|> fromCExtern Table
         <|> fromCExtern Global
   where
     kind_ptr :: Ptr C'wasmtime_extern_kind_t
@@ -1799,6 +1808,17 @@ getExportedMemory ::
   String ->
   m (Maybe (Memory s))
 getExportedMemory ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
+
+-- | Convenience function which gets the named export from the store
+-- ('getExport') and checks if it's a 'Table' ('fromExtern').
+getExportedTable ::
+  forall s m.
+  (MonadPrim s m) =>
+  Context s ->
+  Instance s ->
+  String ->
+  m (Maybe (Table s))
+getExportedTable ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport'), checks if it's a 'Global' ('fromExtern') and finally checks if
