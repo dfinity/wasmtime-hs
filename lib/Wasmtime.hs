@@ -702,15 +702,7 @@ newFuncType _proxy = unsafePerformIO $ mask_ $ do
         -- just malloc here without freeing explicitly later.
         (valtype_vec_ptr :: Ptr C'wasm_valtype_vec_t) <- malloc
         c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr_ptr
-        x <- f valtype_vec_ptr
-        let del_valtypes ix
-              | ix == n = pure ()
-              | otherwise = do
-                  valtype_ptr <- peekElemOff valtypes_ptr_ptr ix
-                  c'wasm_valtype_delete valtype_ptr
-                  del_valtypes (ix + 1)
-        del_valtypes 0
-        pure x
+        f valtype_vec_ptr
       where
         n = VU.length kinds
 
@@ -2053,7 +2045,7 @@ trapTrace trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
     let dt = c'wasm_frame_vec_t'data frame_vec :: Ptr (Ptr C'wasm_frame_t)
     vec <- V.generateM sz $ \ix -> do
       frame_ptr <- peekElemOff dt ix
-      newFrameFromPtr frame_ptr
+      c'wasm_frame_copy frame_ptr >>= newFrameFromPtr
     c'wasm_frame_vec_delete frame_vec_ptr
     pure vec
 
