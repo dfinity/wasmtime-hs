@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
@@ -107,6 +108,21 @@ module Wasmtime
     readMemoryAt,
     writeMemory,
     MemoryAccessError (..),
+
+    -- * Tables
+    TableType,
+    TableRefType (..),
+    TableLimits (..),
+    newTableType,
+    tableTypeElement,
+    tableTypeLimits,
+    Table,
+    TableValue (..),
+    newTable,
+    growTable,
+    tableGet,
+    tableSet,
+    getTableType,
 
     -- * Externs
     Extern,
@@ -595,11 +611,9 @@ instance Kind Double where kind _proxy = c'WASMTIME_F64
 
 instance Kind Word128 where kind _proxy = c'WASMTIME_V128
 
-instance Kind C'wasmtime_func_t where
-  kind :: Proxy C'wasmtime_func_t -> C'wasm_valkind_t
-  kind _proxy = c'WASMTIME_FUNCREF
+instance Kind C'wasmtime_func_t where kind _proxy = c'WASMTIME_FUNCREF
 
-instance Kind C'wasmtime_externref_t where kind _proxy = c'WASMTIME_FUNCREF
+instance Kind (Ptr C'wasmtime_externref_t) where kind _proxy = c'WASMTIME_EXTERNREF
 
 class Results r where
   resultKinds :: Proxy r -> VU.Vector C'wasm_valkind_t
@@ -665,6 +679,17 @@ pokeVal result_ptr r = do
   let p :: Ptr C'wasmtime_valunion_t
       p = p'wasmtime_val'of result_ptr
   poke (castPtr p) r
+
+peekVal :: Ptr C'wasmtime_val_t -> IO TableValue
+peekVal val_ptr = do
+  k <- peek kind_ptr
+  if
+      | k == c'WASMTIME_FUNCREF -> FuncRefValue . Func <$> peek (castPtr of_ptr :: Ptr C'wasmtime_func_t)
+      | k == c'WASMTIME_EXTERNREF -> ExternRefValue <$> peek (castPtr of_ptr :: Ptr (Ptr C'wasmtime_externref_t))
+      | otherwise -> error $ "unsupported valkind " ++ show k
+  where
+    kind_ptr = p'wasmtime_val'kind val_ptr
+    of_ptr = p'wasmtime_val'of val_ptr
 
 peekRawVal :: Storable r => Ptr C'wasmtime_val_raw_t -> IO r
 peekRawVal = peek . castPtr
@@ -1127,8 +1152,14 @@ getMemorySizePages ctx mem = unsafeIOToPrim $
     withMemory mem $ \mem_ptr ->
       c'wasmtime_memory_size ctx_ptr mem_ptr
 
--- | Grow the linar memory by a number of pages. Return the size before.
-growMemory :: MonadPrim s m => Context s -> Memory s -> Word64 -> m (Either WasmtimeError Word64)
+-- | Grow the linar memory by delta number of pages. Return the size before.
+growMemory ::
+  MonadPrim s m =>
+  Context s ->
+  Memory s ->
+  -- | Delta
+  Word64 ->
+  m (Either WasmtimeError Word64)
 growMemory ctx mem delta = unsafeIOToPrim $
   try $
     withContext ctx $ \ctx_ptr ->
@@ -1160,7 +1191,15 @@ readMemory ctx mem = unsafeIOToPrim $
 
 -- | Takes an offset and a length, and returns a copy of the memory starting at offset until offset + length.
 -- Returns @Left MemoryAccessError@ if offset + length exceeds the length of the memory.
-readMemoryAt :: MonadPrim s m => Context s -> Memory s -> Offset -> Size -> m (Either MemoryAccessError B.ByteString)
+readMemoryAt ::
+  MonadPrim s m =>
+  Context s ->
+  Memory s ->
+  -- | Offset
+  Offset ->
+  -- | Number of bytes to read
+  Size ->
+  m (Either MemoryAccessError B.ByteString)
 readMemoryAt ctx mem offset len = do
   max_len <- getMemorySizeBytes ctx mem
   unsafeIOToPrim $ do
@@ -1200,6 +1239,11 @@ instance Exception MemoryAccessError
 --------------------------------------------------------------------------------
 -- Tables
 --------------------------------------------------------------------------------
+
+-- | A descriptor for a table in a WebAssembly module.
+--
+-- Tables are contiguous chunks of a specific element, typically a funcref or an externref.
+-- The most common use for tables is a function table through which call_indirect can invoke other functions.
 newtype TableType = TableType {unTableType :: ForeignPtr C'wasm_tabletype_t}
 
 withTableType :: TableType -> (Ptr C'wasm_tabletype_t -> IO a) -> IO a
@@ -1208,9 +1252,16 @@ withTableType = withForeignPtr . unTableType
 data TableRefType = FuncRef | ExternRef
   deriving (Show, Eq)
 
+-- TODO: make table limit maximum optional
+
+-- | Specifies a minimum and maximum size for a 'Table'
 data TableLimits = TableLimits {tableMin :: Int32, tableMax :: Int32}
 
-newTableType :: TableRefType -> TableLimits -> TableType
+-- | Creates a new 'Table' descriptor which will contain the specified element type and have the limits applied to its length.
+newTableType ::
+  TableRefType ->
+  TableLimits ->
+  TableType
 newTableType tableRefType limits = unsafePerformIO $
   alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> do
     let (valkind :: C'wasm_valkind_t) = case tableRefType of
@@ -1226,16 +1277,18 @@ newTableType tableRefType limits = unsafePerformIO $
     tabletype_ptr <- c'wasm_tabletype_new valtype_ptr limits_ptr
     TableType <$> newForeignPtr p'wasm_tabletype_delete tabletype_ptr
 
+-- | Returns the element type of this table
 tableTypeElement :: TableType -> TableRefType
 tableTypeElement tt = unsafePerformIO $
   withTableType tt $ \tt_ptr -> do
     valtype_ptr <- c'wasm_tabletype_element tt_ptr
     valkind <- c'wasm_valtype_kind valtype_ptr
-    case valkind of
-      c'WASMTIME_FUNCREF -> pure FuncRef
-      c'WASMTIME_EXTERNREF -> pure ExternRef
-      _ -> error "Got invalid valkind from c'wasm_valtype_kind."
+    if
+        | valkind == c'WASMTIME_FUNCREF -> pure FuncRef
+        | valkind == c'WASMTIME_EXTERNREF -> pure ExternRef
+        | otherwise -> error $ "Got invalid valkind " ++ show valkind ++ " from c'wasm_valtype_kind."
 
+-- | Returns the minimum and maximum size of this tabletype
 tableTypeLimits :: TableType -> TableLimits
 tableTypeLimits tt = unsafePerformIO $
   withTableType tt $ \tt_ptr -> do
@@ -1248,21 +1301,33 @@ tableTypeLimits tt = unsafePerformIO $
         }
 
 -- TODO: typed tables
+
+-- | A WebAssembly table, or an array of values.
+--
+-- For more information, see <https://docs.rs/wasmtime/latest/wasmtime/struct.Table.html>.
 newtype Table s = Table {unTable :: C'wasmtime_table_t}
 
 withTable :: Table s -> (Ptr C'wasmtime_table_t -> IO a) -> IO a
 withTable = with . unTable
 
-data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue C'wasmtime_externref_t
+-- | Tables can contain function references or extern references
+data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue (Ptr C'wasmtime_externref_t)
 
-withTableValue :: TableValue -> (Ptr C'wasmtime_val_t -> IO a) -> IO a -- need a Ptr C'wasmtime_val_t
-withTableValue (FuncRefValue (Func (func_t :: C'wasmtime_func_t))) ctn = unsafePerformIO $
+withTableValue :: TableValue -> (Ptr C'wasmtime_val_t -> IO a) -> IO a
+withTableValue (FuncRefValue (Func (func_t :: C'wasmtime_func_t))) ctn =
   alloca $ \val_ptr -> do
     pokeVal val_ptr func_t
-    pure $ ctn val_ptr
-withTableValue (ExternRefValue _) ctn = error "not implemented: ExternRefValue Tables"
+    ctn val_ptr
+withTableValue (ExternRefValue _) _ctn = error "not implemented: ExternRefValue Tables"
 
-newTable :: MonadPrim s m => Context s -> TableType -> Maybe TableValue -> m (Either WasmtimeError (Table s))
+-- | Create a new table
+newTable ::
+  MonadPrim s m =>
+  Context s ->
+  TableType ->
+  -- | An optional initial value which will be used to fill in the table, if its initial size is > 0.
+  Maybe TableValue ->
+  m (Either WasmtimeError (Table s))
 newTable ctx tt mbVal = unsafeIOToPrim $
   try $
     withContext ctx $ \ctx_ptr ->
@@ -1280,45 +1345,66 @@ newTable ctx tt mbVal = unsafeIOToPrim $
           checkWasmtimeError error_ptr
           Table <$> peek table_ptr
 
--- TODO: structure is duplicated.. can this be avoided?
-growTable :: Context s -> Table s -> Word32 -> Maybe TableValue -> m (Either WasmtimeError Word32)
+-- | Grow the table by delta elements.
+growTable ::
+  MonadPrim s m =>
+  Context s ->
+  Table s ->
+  -- | Delta
+  Word32 ->
+  -- | Optional element to fill in the new space.
+  Maybe TableValue ->
+  m (Either WasmtimeError Word32)
 growTable ctx table delta mbVal = unsafeIOToPrim $
   try $
     withContext ctx $ \ctx_ptr ->
       withTable table $ \table_ptr ->
-        alloca $ \prev_size_ptr ->
-          case mbVal of
+        alloca $ \prev_size_ptr -> do
+          error_ptr <- case mbVal of
             Nothing -> do
-              error_ptr <- c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) nullPtr prev_size_ptr
-              checkWasmtimeError error_ptr
-              peek prev_size_ptr
+              c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) nullPtr prev_size_ptr
             (Just val) ->
               withTableValue val $ \val_ptr -> do
-                error_ptr <- c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) val_ptr prev_size_ptr
-                checkWasmtimeError error_ptr
-                peek prev_size_ptr
+                c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) val_ptr prev_size_ptr
+          checkWasmtimeError error_ptr
+          peek prev_size_ptr
 
 -- | Get value at index from table. If index > length table, Nothing is returned.
-getFromTable :: Context s -> Table s -> Word32 -> Maybe TableValue
-getFromTable ctx table ix = unsafePerformIO $
+tableGet ::
+  MonadPrim s m =>
+  Context s ->
+  Table s ->
+  -- | Index into table
+  Word32 ->
+  m (Maybe TableValue)
+tableGet ctx table ix = unsafeIOToPrim $
   withContext ctx $ \ctx_ptr ->
     withTable table $ \table_ptr ->
       alloca $ \val_ptr -> do
         success <- c'wasmtime_table_get ctx_ptr table_ptr ix val_ptr
         if not success
           then pure Nothing
-          else pure . Just $ peek val_ptr -- TODO: need to convert wasmtime_val_t to a specific value given by the table type
+          else Just <$> peekVal val_ptr
 
-setTable :: Context s -> Table s -> Word32 -> TableValue -> m (Either WasmtimeError ())
-setTable ctx table ix val = unsafeIOToPrim $
+-- | Set an element at the given index. This function will return an error if the index is too large.
+tableSet ::
+  MonadPrim s m =>
+  Context s ->
+  Table s ->
+  -- | Index
+  Word32 ->
+  -- | The new value
+  TableValue ->
+  m (Either WasmtimeError ())
+tableSet ctx table ix val = unsafeIOToPrim $
   try $
     withContext ctx $ \ctx_ptr ->
       withTable table $ \table_ptr ->
         withTableValue val $ \val_ptr -> do
           error_ptr <- c'wasmtime_table_set ctx_ptr table_ptr ix val_ptr
           checkWasmtimeError error_ptr
-          pure ()
 
+-- | Return the 'TableType' with which this table was created.
 getTableType :: Context s -> Table s -> TableType
 getTableType ctx table = unsafePerformIO $
   withContext ctx $ \ctx_ptr ->
