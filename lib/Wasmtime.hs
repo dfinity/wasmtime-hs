@@ -4,6 +4,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
@@ -18,6 +19,7 @@ module Wasmtime
     Engine,
     newEngine,
     newEngineWithConfig,
+    incrementEngineEpoch,
 
     -- * Config
     Config,
@@ -106,6 +108,8 @@ module Wasmtime
     getMemorySizeBytes,
     getMemorySizePages,
     growMemory,
+    Size,
+    Offset,
     unsafeWithMemory,
     readMemory,
     readMemoryAt,
@@ -134,9 +138,13 @@ module Wasmtime
     globalTypeKind,
     globalTypeMutability,
     Global,
-    newGlobal,
-    globalGet,
-    globalSet,
+    getGlobalType,
+    TypedGlobal,
+    toTypedGlobal,
+    unTypedGlobal,
+    newTypedGlobal,
+    typedGlobalGet,
+    typedGlobalSet,
 
     -- * Externs
     Extern,
@@ -150,6 +158,8 @@ module Wasmtime
     getExport,
     getExportedTypedFunc,
     getExportedMemory,
+    getExportedTypedGlobal,
+    getExportAtIndex,
 
     -- * Traps
     Trap,
@@ -176,6 +186,7 @@ where
 import Bindings.Wasm
 import Bindings.Wasmtime
 import Bindings.Wasmtime.Config
+import Bindings.Wasmtime.Engine
 import Bindings.Wasmtime.Error
 import Bindings.Wasmtime.Extern
 import Bindings.Wasmtime.Func
@@ -193,12 +204,13 @@ import Control.Monad (guard, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
 import Control.Monad.ST (ST, runST)
-import Control.Monad.Trans.Maybe (MaybeT, runMaybeT)
+import Control.Monad.Trans.Maybe (MaybeT (MaybeT), runMaybeT)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
 import Data.Functor (($>))
 import Data.Int (Int32, Int64)
 import Data.Kind (Type)
+import Data.Maybe (fromMaybe)
 import Data.Proxy (Proxy (..))
 import Data.Typeable (Typeable)
 import Data.Vector (Vector)
@@ -255,6 +267,14 @@ newEngineWithConfig cfg = mask_ $ do
   engine_ptr <- c'wasm_engine_new_with_config cfg_ptr
   checkAllocation engine_ptr `onException` c'wasm_config_delete cfg_ptr
   Engine <$> newForeignPtr p'wasm_engine_delete engine_ptr
+
+-- | Increments the engine-local epoch variable.
+--
+-- This function will increment the engine's current epoch which can be used to
+-- force WebAssembly code to trap if the current epoch goes beyond the 'Store'
+-- configured epoch deadline.
+incrementEngineEpoch :: Engine -> IO ()
+incrementEngineEpoch engine = withEngine engine c'wasmtime_engine_increment_epoch
 
 --------------------------------------------------------------------------------
 -- Config
@@ -594,7 +614,7 @@ newFuncType ::
   ) =>
   Proxy f ->
   FuncType
-newFuncType _proxy = unsafePerformIO $ mask_ $ do
+newFuncType _proxy = unsafePerformIO $ mask_ $ do 
   withKinds (paramKinds $ Proxy @f) $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
     withKinds (resultKinds $ Proxy @r) $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
       functype_ptr <- c'wasm_functype_new params_ptr result_ptr
@@ -647,6 +667,16 @@ fromWasmKind k
   | k == c'WASMTIME_FUNCREF = KindFuncRef
   | k == c'WASMTIME_EXTERNREF = KindExternRef
   | otherwise = error $ "Unknown wasm_valkind_t " ++ show k ++ "!"
+
+toWasmKind :: Kind -> C'wasm_valkind_t
+toWasmKind = \case
+  KindI32 -> c'WASMTIME_I32
+  KindI64 -> c'WASMTIME_I64
+  KindF32 -> c'WASMTIME_F32
+  KindF64 -> c'WASMTIME_F64
+  KindV128 -> c'WASMTIME_V128
+  KindFuncRef -> c'WASMTIME_FUNCREF
+  KindExternRef -> c'WASMTIME_EXTERNREF
 
 -- | Class of Haskell types that WASM @'Func'tions@ can take as parameters or
 -- return as results or which can be retrieved from and set to @'Global's@.
@@ -1085,6 +1115,11 @@ instance Externable Memory where
   toCExtern = getWasmtimeMemory
   externKind _proxy = c'WASMTIME_EXTERN_MEMORY
 
+instance Externable Global where
+  type CType Global = C'wasmtime_global_t
+  toCExtern = getWasmtimeGlobal
+  externKind _proxy = c'WASMTIME_EXTERN_GLOBAL
+
 -- | Turn any externable value (like a 'Func') into the 'Extern' container.
 toExtern :: forall e s. Externable e => e s -> Extern s
 toExtern = Extern (typeRep :: TypeRep e)
@@ -1487,6 +1522,10 @@ withGlobalType = withForeignPtr . unGlobalType
 newGlobalType :: HasKind a => Proxy a -> Mutability -> GlobalType
 newGlobalType proxy mutability = unsafePerformIO $ do
   globaltype_ptr <- newGlobalTypePtr proxy mutability
+  newGlobalTypeFromPtr globaltype_ptr
+
+newGlobalTypeFromPtr :: Ptr C'wasm_globaltype_t -> IO GlobalType
+newGlobalTypeFromPtr globaltype_ptr =
   GlobalType <$> newForeignPtr p'wasm_globaltype_delete globaltype_ptr
 
 newGlobalTypePtr :: HasKind a => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
@@ -1538,11 +1577,45 @@ globalTypeMutability globalType = unsafePerformIO $
 -- via 'newGlobal' or via instantiating a 'Module'). Operations on a Global only
 -- work with the store it belongs to, and if another store is passed in by
 -- accident then methods will panic.
-newtype Global s a = Global {getWasmtimeGlobal :: C'wasmtime_global_t}
-  deriving (Show)
+newtype Global s = Global {getWasmtimeGlobal :: C'wasmtime_global_t}
+  deriving (Show, Typeable)
 
-withGlobal :: Global s a -> (Ptr C'wasmtime_global_t -> IO b) -> IO b
+withGlobal :: Global s -> (Ptr C'wasmtime_global_t -> IO a) -> IO a
 withGlobal = with . getWasmtimeGlobal
+
+-- | Returns the wasm type of the specified global.
+getGlobalType :: (MonadPrim s m) => Context s -> Global s -> m GlobalType
+getGlobalType ctx global =
+  unsafeIOToPrim $
+    withContext ctx $ \ctx_ptr ->
+      withGlobal global $ \global_ptr -> mask_ $ do
+        globaltype_ptr <- c'wasmtime_global_type ctx_ptr global_ptr
+        newGlobalTypeFromPtr globaltype_ptr
+
+-- | Retrieves the type of the given 'Global' from the 'Store' and checks if it
+-- matches the desired type @a@ of the returned 'TypedGlobal'.
+toTypedGlobal ::
+  forall s m a.
+  (MonadPrim s m, HasKind a) =>
+  Context s ->
+  Global s ->
+  m (Maybe (TypedGlobal s a))
+toTypedGlobal ctx global = do
+  globalType <- getGlobalType ctx global
+  let actualKind = toWasmKind $ globalTypeKind globalType
+      expectedKind = kind $ Proxy @a
+  if actualKind == expectedKind
+    then pure $ Just $ TypedGlobal global
+    else pure Nothing
+
+-- | A 'Global' with a phantom type of the value in the global.
+newtype TypedGlobal s a = TypedGlobal
+  { -- | Get the 'Global' out of a 'TypedGlobal'.
+    unTypedGlobal :: Global s
+  }
+
+withTypedGlobal :: TypedGlobal s a -> (Ptr C'wasmtime_global_t -> IO b) -> IO b
+withTypedGlobal = with . getWasmtimeGlobal . unTypedGlobal
 
 -- | Creates a new WebAssembly global value with the 'GlobalType' corresponding
 -- to the type of the given Haskell value and the specified 'Mutability'. The
@@ -1554,7 +1627,7 @@ withGlobal = with . getWasmtimeGlobal
 --
 -- Returns an error if the value comes from a different store than the specified
 -- store ('Context').
-newGlobal ::
+newTypedGlobal ::
   forall s m a.
   (MonadPrim s m, HasKind a) =>
   Context s ->
@@ -1562,8 +1635,8 @@ newGlobal ::
   Mutability ->
   -- | Initialise the global with this Haskell value.
   a ->
-  m (Either WasmtimeError (Global s a))
-newGlobal ctx mutability x =
+  m (Either WasmtimeError (TypedGlobal s a))
+newTypedGlobal ctx mutability x =
   unsafeIOToPrim $
     try $
       withContext ctx $ \ctx_ptr ->
@@ -1573,36 +1646,36 @@ newGlobal ctx mutability x =
             alloca $ \(global_ptr :: Ptr C'wasmtime_global_t) -> do
               error_ptr <- c'wasmtime_global_new ctx_ptr globaltype_ptr val_ptr global_ptr
               checkWasmtimeError error_ptr
-              Global <$> peek global_ptr
+              TypedGlobal . Global <$> peek global_ptr
   where
     withNewGlobalTypePtr =
       bracket (newGlobalTypePtr (Proxy @a) mutability) c'wasm_globaltype_delete
 
--- | Returns the current value of the given global.
-globalGet :: (MonadPrim s m, HasKind a) => Context s -> Global s a -> m a
-globalGet ctx global =
+-- | Returns the current value of the given typed global.
+typedGlobalGet :: (MonadPrim s m, HasKind a) => Context s -> TypedGlobal s a -> m a
+typedGlobalGet ctx typedGlobal =
   unsafeIOToPrim $
     withContext ctx $ \ctx_ptr ->
-      withGlobal global $ \global_ptr ->
+      withTypedGlobal typedGlobal $ \global_ptr ->
         alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
           c'wasmtime_global_get ctx_ptr global_ptr val_ptr
           uncheckedPeekVal val_ptr
 
--- | Attempts to set the current value of this global.
+-- | Attempts to set the current value of this typed global.
 --
 -- Returns an error if it’s not a mutable global, or if value comes from a
 -- different store than the one provided.
-globalSet ::
+typedGlobalSet ::
   (MonadPrim s m, HasKind a) =>
   Context s ->
-  Global s a ->
+  TypedGlobal s a ->
   a ->
   m (Either WasmtimeError ())
-globalSet ctx global x =
+typedGlobalSet ctx typedGlobal x =
   unsafeIOToPrim $
     try $
       withContext ctx $ \ctx_ptr ->
-        withGlobal global $ \global_ptr ->
+        withTypedGlobal typedGlobal $ \global_ptr ->
           alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
             pokeVal val_ptr x
             error_ptr <- c'wasmtime_global_set ctx_ptr global_ptr val_ptr
@@ -1671,28 +1744,35 @@ getExport ctx inst name = unsafeIOToPrim $
               extern_ptr
           if not found
             then pure Nothing
-            else do
-              let kind_ptr :: Ptr C'wasmtime_extern_kind_t
-                  kind_ptr = p'wasmtime_extern'kind extern_ptr
+            else Just <$> fromExternPtr extern_ptr
 
-                  of_ptr :: Ptr C'wasmtime_extern_union_t
-                  of_ptr = p'wasmtime_extern'of extern_ptr
+fromExternPtr :: Ptr C'wasmtime_extern -> IO (Extern s)
+fromExternPtr extern_ptr = do
+  k <- peek kind_ptr
 
-              k <- peek kind_ptr
+  let fromCExtern ::
+        forall e s.
+        (Externable e) =>
+        (CType e -> e s) ->
+        MaybeT IO (Extern s)
+      fromCExtern constr = do
+        guard $ k == externKind (Proxy @e)
+        liftIO $ do
+          let ex_ptr = castPtr of_ptr
+          ex <- constr <$> peek ex_ptr
+          pure $ toExtern ex
 
-              let fromCExtern ::
-                    forall e s.
-                    (Externable e) =>
-                    (CType e -> e s) ->
-                    MaybeT IO (Extern s)
-                  fromCExtern constr = do
-                    guard $ k == externKind (Proxy @e)
-                    liftIO $ do
-                      let ex_ptr = castPtr of_ptr
-                      ex <- constr <$> peek ex_ptr
-                      pure $ toExtern ex
+  fmap (fromMaybe $ error "Unknown extern!") $
+    runMaybeT $
+      fromCExtern Func
+        <|> fromCExtern Memory
+        <|> fromCExtern Global
+  where
+    kind_ptr :: Ptr C'wasmtime_extern_kind_t
+    kind_ptr = p'wasmtime_extern'kind extern_ptr
 
-              runMaybeT $ fromCExtern Func <|> fromCExtern Memory
+    of_ptr :: Ptr C'wasmtime_extern_union_t
+    of_ptr = p'wasmtime_extern'of extern_ptr
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally checks if
@@ -1704,12 +1784,13 @@ getExportedTypedFunc ::
   Instance s ->
   String ->
   m (Maybe (TypedFunc s f))
-getExportedTypedFunc ctx inst name = do
-  mbExtern <- getExport ctx inst name
-  case mbExtern >>= fromExtern of
-    Nothing -> pure Nothing
-    Just (func :: Func s) -> toTypedFunc ctx func
+getExportedTypedFunc ctx inst name = runMaybeT $ do
+  extern <- MaybeT $ getExport ctx inst name
+  (func :: Func s) <- MaybeT $ pure $ fromExtern extern
+  MaybeT $ toTypedFunc ctx func
 
+-- | Convenience function which gets the named export from the store
+-- ('getExport') and checks if it's a 'Memory' ('fromExtern').
 getExportedMemory ::
   forall s m.
   (MonadPrim s m) =>
@@ -1718,6 +1799,54 @@ getExportedMemory ::
   String ->
   m (Maybe (Memory s))
 getExportedMemory ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
+
+-- | Convenience function which gets the named export from the store
+-- ('getExport'), checks if it's a 'Global' ('fromExtern') and finally checks if
+-- the type of the global matches the desired type @a@ ('toTypedGlobal').
+getExportedTypedGlobal ::
+  forall s m a.
+  (MonadPrim s m, HasKind a) =>
+  Context s ->
+  Instance s ->
+  String ->
+  m (Maybe (TypedGlobal s a))
+getExportedTypedGlobal ctx inst name = runMaybeT $ do
+  extern <- MaybeT $ getExport ctx inst name
+  (global :: Global s) <- MaybeT $ pure $ fromExtern extern
+  MaybeT $ toTypedGlobal ctx global
+
+-- | Get an export by index from an instance.
+getExportAtIndex ::
+  MonadPrim s m =>
+  Context s ->
+  Instance s ->
+  Word64 ->
+  m (Maybe (String, Extern s))
+getExportAtIndex ctx inst ix =
+  unsafeIOToPrim $
+    withContext ctx $ \ctx_ptr ->
+      withInstance inst $ \inst_ptr ->
+        alloca $ \(name_ptr_ptr :: Ptr (Ptr CChar)) ->
+          alloca $ \(name_len_ptr :: Ptr CSize) ->
+            alloca $ \(extern_ptr :: Ptr C'wasmtime_extern) -> do
+              found <-
+                c'wasmtime_instance_export_nth
+                  ctx_ptr
+                  inst_ptr
+                  (fromIntegral ix)
+                  name_ptr_ptr
+                  name_len_ptr
+                  extern_ptr
+              if not found
+                then pure Nothing
+                else do
+                  extern <- fromExternPtr extern_ptr
+
+                  name_ptr <- peek name_ptr_ptr
+                  name_len <- peek name_len_ptr
+                  name <- peekCStringLen (name_ptr, fromIntegral name_len)
+
+                  pure $ Just (name, extern)
 
 --------------------------------------------------------------------------------
 -- Traps
