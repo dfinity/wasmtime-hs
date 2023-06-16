@@ -150,9 +150,35 @@ module Bindings.Wasm where
 
 #ccall wasm_memorytype_delete , Ptr <wasm_memorytype_t> -> IO ()
 
-
 --------------------------------------------------------------------------------
--- Tables
+-- Global Types
 --------------------------------------------------------------------------------
 
+#opaque_t wasm_globaltype_t
 
+#starttype struct wasm_globaltype_vec_t
+#field size , CSize
+#field data , Ptr (Ptr <wasm_globaltype_t >)
+#stoptype
+
+#ccall wasm_globaltype_delete , Ptr <wasm_globaltype_t> -> IO ()
+
+#ccall wasm_globaltype_vec_new_empty , Ptr <wasm_globaltype_vec_t> -> IO ()
+
+#ccall wasm_globaltype_vec_new_uninitialized , Ptr <wasm_globaltype_vec_t> -> CSize -> IO ()
+
+#ccall wasm_globaltype_vec_new , Ptr <wasm_globaltype_vec_t> -> CSize -> Ptr <wasm_globaltype_t> -> IO ()
+
+#ccall wasm_globaltype_vec_copy , Ptr <wasm_globaltype_vec_t> -> Ptr <wasm_globaltype_vec_t> -> IO ()
+
+#ccall wasm_globaltype_vec_delete , Ptr <wasm_globaltype_vec_t> -> IO ()
+
+#ccall wasm_globaltype_copy , Ptr <wasm_globaltype_t> -> IO (Ptr <wasm_globaltype_t>)
+
+#ccall wasm_globaltype_new , Ptr <wasm_valtype_t> -> <wasm_mutability_t> -> IO (Ptr <wasm_globaltype_t>)
+
+#ccall wasm_globaltype_content , Ptr <wasm_globaltype_t> -> IO (Ptr <wasm_valtype_t>)
+
+#ccall wasm_globaltype_mutability , Ptr <const wasm_globaltype_t> -> IO <wasm_mutability_t>
+
+#synonym_t wasm_mutability_t , Word8
