@@ -102,6 +102,8 @@ module Bindings.Wasm where
 
 #ccall wasm_importtype_name , Ptr <wasm_importtype_t> -> IO (Ptr <wasm_name_t>)
 
+#ccall wasm_importtype_copy , Ptr <wasm_importtype_t> -> IO (Ptr <wasm_importtype_t>)
+
 --------------------------------------------------------------------------------
 -- Export Types
 --------------------------------------------------------------------------------
@@ -116,6 +118,8 @@ module Bindings.Wasm where
 #ccall wasm_exporttype_delete , Ptr <wasm_exporttype_t> -> IO ()
 
 #ccall wasm_exporttype_vec_delete , Ptr <wasm_exporttype_vec_t> -> IO ()
+
+#ccall wasm_exporttype_copy , Ptr <wasm_exporttype_t> -> IO (Ptr <wasm_exporttype_t>)
 
 --------------------------------------------------------------------------------
 -- Frames

@@ -624,8 +624,8 @@ moduleImports m =
           peek $ p'wasm_importtype_vec_t'data importtype_vec_ptr
         vec <- V.generateM (fromIntegral sz) $ \ix -> do
           importtype_ptr :: Ptr C'wasm_importtype_t <- peekElemOff dt ix
-          newImportTypeFromPtr importtype_ptr
-        -- c'wasm_importtype_vec_delete importtype_vec_ptr
+          c'wasm_importtype_copy importtype_ptr >>= newImportTypeFromPtr
+        c'wasm_importtype_vec_delete importtype_vec_ptr
         pure vec
 
 importTypeModule :: ImportType -> String
@@ -664,7 +664,7 @@ moduleExports m =
         dt <- peek $ p'wasm_exporttype_vec_t'data exporttype_vec_ptr
         vec <- V.generateM (fromIntegral sz) $ \ix -> do
           exporttype_ptr <- peekElemOff dt ix
-          newExportTypeFromPtr exporttype_ptr
+          c'wasm_exporttype_copy exporttype_ptr >>= newExportTypeFromPtr
         c'wasm_exporttype_vec_delete exporttype_vec_ptr
         pure vec
 
