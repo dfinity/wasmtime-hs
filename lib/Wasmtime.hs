@@ -141,6 +141,7 @@ module Wasmtime
     getExportedTypedFunc,
     getExportedMemory,
     getExportedTypedGlobal,
+    getExportAtIndex,
 
     -- * Traps
     Trap,
@@ -254,7 +255,7 @@ newEngineWithConfig cfg = mask_ $ do
 -- force WebAssembly code to trap if the current epoch goes beyond the 'Store'
 -- configured epoch deadline.
 incrementEngineEpoch :: Engine -> IO ()
-incrementEngineEpoch engine = withEngine engine $ c'wasmtime_engine_increment_epoch
+incrementEngineEpoch engine = withEngine engine c'wasmtime_engine_increment_epoch
 
 --------------------------------------------------------------------------------
 -- Config
@@ -1594,6 +1595,7 @@ getExportedTypedGlobal ctx inst name = runMaybeT $ do
   (global :: Global s) <- MaybeT $ pure $ fromExtern extern
   MaybeT $ toTypedGlobal ctx global
 
+-- | Get an export by index from an instance.
 getExportAtIndex ::
   MonadPrim s m =>
   Context s ->
