@@ -25,6 +25,7 @@ library
     other-modules:    Bindings.Wasm
     other-modules:    Bindings.Wasmtime
     other-modules:    Bindings.Wasmtime.Config
+    other-modules:    Bindings.Wasmtime.Engine
     other-modules:    Bindings.Wasmtime.Error
     other-modules:    Bindings.Wasmtime.Extern
     other-modules:    Bindings.Wasmtime.Func
@@ -36,7 +37,7 @@ library
     other-modules:    Bindings.Wasmtime.Memory
     other-modules:    Bindings.Wasmtime.Table
     other-modules:    Bindings.Wasmtime.Global
-    
+
     build-depends:    base >=4.15
     build-depends:    bindings-DSL >= 1.0.25
     build-depends:    bytestring >= 0.11.4
