@@ -36,10 +36,21 @@ main = do
   let imports = moduleImports myModule
   forM_ imports $ \imp -> do
     putStrLn $
-      "module: "
+      "kind: "
+        ++ show (externTypeKind $ importTypeType imp)
+        ++ " module: "
         ++ show (importTypeModule imp)
         ++ " name: "
         ++ show (importTypeName imp)
+
+  putStrLn "Exports:"
+  let exports = moduleExports myModule
+  forM_ exports $ \export -> do
+    putStrLn $
+      "kind: "
+        ++ show (externTypeKind $ exportTypeType export)
+        ++ " name: "
+        ++ show (exportTypeName export)
 
   putStrLn "Creating callback..."
   func <- newFunc ctx hello

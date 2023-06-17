@@ -71,18 +71,30 @@ module Wasmtime
     -- * Conversion
     Wasm,
     wasmToBytes,
-    unsafeFromByteString,
+    wasmFromBytes,
+    unsafeWasmFromBytes,
     wat2wasm,
 
     -- * Module
     Module,
     newModule,
-    ImportType,
+
+    -- ** Imports
     moduleImports,
+    ImportType,
     importTypeModule,
     importTypeName,
-    ExportType,
+    importTypeType,
+
+    -- ** Exports
     moduleExports,
+    ExportType,
+    exportTypeName,
+    exportTypeType,
+
+    -- ** Extern Types
+    ExternType,
+    externTypeKind,
 
     -- * Kinds
     Kind (..),
@@ -156,6 +168,7 @@ module Wasmtime
     Externable,
     toExtern,
     fromExtern,
+    ExternKind (..),
 
     -- * Instances
     Instance,
@@ -546,13 +559,31 @@ consumeFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
 -- Conversion
 --------------------------------------------------------------------------------
 
--- | WASM code.
-newtype Wasm = Wasm {wasmToBytes :: B.ByteString}
+-- | WebAssembly binary code.
+newtype Wasm = Wasm
+  { -- | Return the WebAssembly binary as bytes.
+    wasmToBytes :: B.ByteString
+  }
 
--- | Convert bytes into WASM. This function doesn't check if the bytes
--- are actual WASM code hence it's unsafe.
-unsafeFromByteString :: B.ByteString -> Wasm
-unsafeFromByteString = Wasm
+-- | Unsafely convert bytes into WASM.
+--
+-- This function doesn't check if the bytes are actual WASM code hence it's
+-- unsafe. Use 'wasmFromBytes' instead if you're not sure the bytes are actual
+-- WASM.
+unsafeWasmFromBytes :: B.ByteString -> Wasm
+unsafeWasmFromBytes = Wasm
+
+-- | This function will validate the provided 'B.ByteString' to determine if it
+-- is a valid WebAssembly binary within the context of the 'Engine' provided.
+wasmFromBytes :: Engine -> B.ByteString -> Either WasmtimeError Wasm
+wasmFromBytes engine inp@(BI.BS inp_fp inp_size) =
+  unsafePerformIO $
+    withEngine engine $ \engine_ptr ->
+      withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
+        try $ do
+          error_ptr <- c'wasmtime_module_validate engine_ptr inp_ptr $ fromIntegral inp_size
+          checkWasmtimeError error_ptr
+          pure $ Wasm inp
 
 -- | Converts from the text format of WebAssembly to the binary format.
 --
@@ -582,8 +613,13 @@ wat2wasm (BI.BS inp_fp inp_size) =
 -- Module
 --------------------------------------------------------------------------------
 
+-- | A compiled Wasmtime module.
+--
+-- This type represents a compiled WebAssembly module. The compiled module is
+-- ready to be instantiated and can be inspected for imports/exports.
 newtype Module = Module {unModule :: ForeignPtr C'wasmtime_module_t}
 
+-- | Compiles a WebAssembly binary into a 'Module'.
 newModule :: Engine -> Wasm -> Either WasmtimeError Module
 newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
   try $
@@ -602,6 +638,10 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
 
 withModule :: Module -> (Ptr C'wasmtime_module_t -> IO a) -> IO a
 withModule = withForeignPtr . unModule
+
+--------------------------------------------------------------------------------
+-- Module Imports
+--------------------------------------------------------------------------------
 
 -- | Type of an import.
 newtype ImportType = ImportType {unImportType :: ForeignPtr C'wasm_importtype_t}
@@ -628,6 +668,7 @@ moduleImports m =
         c'wasm_importtype_vec_delete importtype_vec_ptr
         pure vec
 
+-- | Returns the module this import is importing from.
 importTypeModule :: ImportType -> String
 importTypeModule importType =
   unsafePerformIO $
@@ -636,6 +677,7 @@ importTypeModule importType =
       let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
       peekByteVecAsString p
 
+-- | Returns the name this import is importing from.
 importTypeName :: ImportType -> Maybe String
 importTypeName importType =
   unsafePerformIO $
@@ -647,8 +689,23 @@ importTypeName importType =
           let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
           Just <$> peekByteVecAsString p
 
+-- | Returns the type of item this import is importing.
+importTypeType :: ImportType -> ExternType
+importTypeType importType =
+  unsafePerformIO $
+    withImportType importType $ \importtype_ptr -> do
+      externtype_ptr <- c'wasm_importtype_type importtype_ptr
+      mask_ $ c'wasm_externtype_copy externtype_ptr >>= newExternTypeFromPtr
+
+--------------------------------------------------------------------------------
+-- Module Exports
+--------------------------------------------------------------------------------
+
 -- | Type of an export.
 newtype ExportType = ExportType {unExportType :: ForeignPtr C'wasm_exporttype_t}
+
+withExportType :: ExportType -> (Ptr C'wasm_exporttype_t -> IO a) -> IO a
+withExportType = withForeignPtr . unExportType
 
 newExportTypeFromPtr :: Ptr C'wasm_exporttype_t -> IO ExportType
 newExportTypeFromPtr = fmap ExportType . newForeignPtr p'wasm_exporttype_delete
@@ -667,6 +724,45 @@ moduleExports m =
           c'wasm_exporttype_copy exporttype_ptr >>= newExportTypeFromPtr
         c'wasm_exporttype_vec_delete exporttype_vec_ptr
         pure vec
+
+-- | Returns the name of this export.
+exportTypeName :: ExportType -> String
+exportTypeName exportType =
+  unsafePerformIO $
+    withExportType exportType $ \exporttype_ptr -> do
+      name_ptr <- c'wasm_exporttype_name exporttype_ptr
+      let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
+      peekByteVecAsString p
+
+-- | Returns the type of this export.
+exportTypeType :: ExportType -> ExternType
+exportTypeType exportType =
+  unsafePerformIO $
+    withExportType exportType $ \exporttype_ptr -> do
+      externtype_ptr <- c'wasm_exporttype_type exporttype_ptr
+      mask_ $ c'wasm_externtype_copy externtype_ptr >>= newExternTypeFromPtr
+
+--------------------------------------------------------------------------------
+-- Extern Types
+--------------------------------------------------------------------------------
+
+-- | Type of an external value.
+--
+-- Returned from 'importTypeType' or 'exportTypeType'.
+newtype ExternType = ExternType {unExternType :: ForeignPtr C'wasm_externtype_t}
+
+newExternTypeFromPtr :: Ptr C'wasm_externtype_t -> IO ExternType
+newExternTypeFromPtr = fmap ExternType . newForeignPtr p'wasm_externtype_delete
+
+withExternType :: ExternType -> (Ptr C'wasm_externtype_t -> IO a) -> IO a
+withExternType = withForeignPtr . unExternType
+
+-- | Returns the kind of external item this type represents.
+externTypeKind :: ExternType -> ExternKind
+externTypeKind externType =
+  unsafePerformIO $
+    withExternType externType $ \externtype_ptr ->
+      toExternKind <$> c'wasm_externtype_kind externtype_ptr
 
 --------------------------------------------------------------------------------
 -- Function Types
@@ -1215,6 +1311,24 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
    in pokeExternsFrom 0
   where
     n = V.length externs
+
+-- | The kind of extern.
+--
+-- Returned from 'externTypeKind'.
+data ExternKind
+  = ExternFunc
+  | ExternGlobal
+  | ExternTable
+  | ExternMemory
+  deriving (Show, Eq)
+
+toExternKind :: C'wasm_externkind_t -> ExternKind
+toExternKind k
+  | k == c'WASM_EXTERN_FUNC = ExternFunc
+  | k == c'WASM_EXTERN_GLOBAL = ExternGlobal
+  | k == c'WASM_EXTERN_TABLE = ExternTable
+  | k == c'WASM_EXTERN_MEMORY = ExternMemory
+  | otherwise = error $ "Unknown wasm_externkind_t " ++ show k ++ "!"
 
 --------------------------------------------------------------------------------
 -- Memory
