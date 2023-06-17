@@ -90,15 +90,15 @@ module Bindings.Wasm where
 #num WASM_EXTERN_TABLE
 #num WASM_EXTERN_MEMORY
 
-#ccall wasm_functype_as_externtype         , Ptr <wasm_functype_t>   -> IO (Ptr <wasm_externtype_t>)
-#ccall wasm_tabletype_as_externtype        , Ptr <wasm_tabletype_t>  -> IO (Ptr <wasm_externtype_t>)
-#ccall wasm_globaltype_as_externtype       , Ptr <wasm_globaltype_t> -> IO (Ptr <wasm_externtype_t>)
-#ccall wasm_memorytype_as_externtype       , Ptr <wasm_memorytype_t> -> IO (Ptr <wasm_externtype_t>)
+#ccall wasm_functype_as_externtype   , Ptr <wasm_functype_t>   -> IO (Ptr <wasm_externtype_t>)
+#ccall wasm_tabletype_as_externtype  , Ptr <wasm_tabletype_t>  -> IO (Ptr <wasm_externtype_t>)
+#ccall wasm_globaltype_as_externtype , Ptr <wasm_globaltype_t> -> IO (Ptr <wasm_externtype_t>)
+#ccall wasm_memorytype_as_externtype , Ptr <wasm_memorytype_t> -> IO (Ptr <wasm_externtype_t>)
 
-#ccall wasm_externtype_as_functype         , Ptr <wasm_externtype_t> -> IO (Ptr <wasm_functype_t>)
-#ccall wasm_externtype_as_tabletype        , Ptr <wasm_externtype_t> -> IO (Ptr <wasm_tabletype_t>)
-#ccall wasm_externtype_as_memorytype       , Ptr <wasm_externtype_t> -> IO (Ptr <wasm_memorytype_t>)
-#ccall wasm_externtype_as_globaltype       , Ptr <wasm_externtype_t> -> IO (Ptr <wasm_globaltype_t>)
+#ccall wasm_externtype_as_functype   , Ptr <wasm_externtype_t> -> IO (Ptr <wasm_functype_t>)
+#ccall wasm_externtype_as_tabletype  , Ptr <wasm_externtype_t> -> IO (Ptr <wasm_tabletype_t>)
+#ccall wasm_externtype_as_memorytype , Ptr <wasm_externtype_t> -> IO (Ptr <wasm_memorytype_t>)
+#ccall wasm_externtype_as_globaltype , Ptr <wasm_externtype_t> -> IO (Ptr <wasm_globaltype_t>)
 
 --------------------------------------------------------------------------------
 -- Import Types
