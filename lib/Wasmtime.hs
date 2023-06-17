@@ -693,9 +693,8 @@ importTypeName importType =
 importTypeType :: ImportType -> ExternType
 importTypeType importType =
   unsafePerformIO $
-    withImportType importType $ \importtype_ptr -> do
-      externtype_ptr <- c'wasm_importtype_type importtype_ptr
-      mask_ $ c'wasm_externtype_copy externtype_ptr >>= newExternTypeFromPtr
+    withImportType importType $
+      c'wasm_importtype_type >=> newExternTypeFromPtr
 
 --------------------------------------------------------------------------------
 -- Module Exports
