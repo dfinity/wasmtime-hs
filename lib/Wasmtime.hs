@@ -93,13 +93,7 @@ module Wasmtime
     exportTypeType,
 
     -- ** Extern Types
-    ExternType,
-    externTypeKind,
-    ExternKind (..),
-    externTypeAsFuncType,
-    externTypeAsTableType,
-    externTypeAsGlobalType,
-    externTypeAsMemoryType,
+    ExternType (..),
 
     -- * Kinds
     Kind (..),
@@ -225,7 +219,7 @@ import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
 import Control.Applicative ((<|>))
 import Control.Exception (Exception, bracket, mask_, onException, throwIO, try)
-import Control.Monad (guard, when)
+import Control.Monad (guard, when, (>=>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
 import Control.Monad.ST (ST, runST)
@@ -744,101 +738,60 @@ exportTypeName exportType =
 exportTypeType :: ExportType -> ExternType
 exportTypeType exportType =
   unsafePerformIO $
-    withExportType exportType $ \exporttype_ptr -> do
-      externtype_ptr <- c'wasm_exporttype_type exporttype_ptr
-      mask_ $ c'wasm_externtype_copy externtype_ptr >>= newExternTypeFromPtr
+    withExportType exportType $
+      c'wasm_exporttype_type >=> newExternTypeFromPtr
 
 --------------------------------------------------------------------------------
 -- Extern Types
 --------------------------------------------------------------------------------
 
--- | Type of an external value.
+-- | Possible types which can be externally referenced from a WebAssembly module.
 --
--- Returned from 'importTypeType' or 'exportTypeType'.
-newtype ExternType = ExternType {unExternType :: ForeignPtr C'wasm_externtype_t}
+-- These can be retrieved from 'importTypeType' or 'exportTypeType'.
+data ExternType
+  = ExternFuncType FuncType
+  | ExternGlobalType GlobalType
+  | ExternTableType TableType
+  | ExternMemoryType MemoryType
+  deriving (Show)
 
 newExternTypeFromPtr :: Ptr C'wasm_externtype_t -> IO ExternType
-newExternTypeFromPtr = fmap ExternType . newForeignPtr p'wasm_externtype_delete
-
-withExternType :: ExternType -> (Ptr C'wasm_externtype_t -> IO a) -> IO a
-withExternType = withForeignPtr . unExternType
-
--- | Returns the kind of external item this type represents.
-externTypeKind :: ExternType -> ExternKind
-externTypeKind externType =
-  unsafePerformIO $
-    withExternType externType $ \externtype_ptr ->
-      toExternKind <$> c'wasm_externtype_kind externtype_ptr
-
--- | The kind of extern.
---
--- Returned from 'externTypeKind'.
-data ExternKind
-  = ExternFunc
-  | ExternGlobal
-  | ExternTable
-  | ExternMemory
-  deriving (Show, Eq)
-
-toExternKind :: C'wasm_externkind_t -> ExternKind
-toExternKind k
-  | k == c'WASM_EXTERN_FUNC = ExternFunc
-  | k == c'WASM_EXTERN_GLOBAL = ExternGlobal
-  | k == c'WASM_EXTERN_TABLE = ExternTable
-  | k == c'WASM_EXTERN_MEMORY = ExternMemory
-  | otherwise = error $ "Unknown wasm_externkind_t " ++ show k ++ "!"
-
--- | Attempts to convert a 'ExternType' to a 'FuncType'.
-externTypeAsFuncType :: ExternType -> Maybe FuncType
-externTypeAsFuncType externType =
-  unsafePerformIO $
-    withExternType externType $ \externtype_ptr -> do
-      functype_ptr <- c'wasm_externtype_as_functype externtype_ptr
-      if functype_ptr == nullPtr
-        then pure Nothing
-        else
-          fmap Just $
-            mask_ $
-              c'wasm_functype_copy functype_ptr >>= newFuncTypeFromPtr
-
--- | Attempts to convert a 'ExternType' to a 'TableType'.
-externTypeAsTableType :: ExternType -> Maybe TableType
-externTypeAsTableType externType =
-  unsafePerformIO $
-    withExternType externType $ \externtype_ptr -> do
-      tabletype_ptr <- c'wasm_externtype_as_tabletype externtype_ptr
-      if tabletype_ptr == nullPtr
-        then pure Nothing
-        else
-          fmap Just $
-            mask_ $
-              c'wasm_tabletype_copy tabletype_ptr >>= newTableTypeFromPtr
-
--- | Attempts to convert a 'ExternType' to a 'GlobalType'.
-externTypeAsGlobalType :: ExternType -> Maybe GlobalType
-externTypeAsGlobalType externType =
-  unsafePerformIO $
-    withExternType externType $ \externtype_ptr -> do
-      globaltype_ptr <- c'wasm_externtype_as_globaltype externtype_ptr
-      if globaltype_ptr == nullPtr
-        then pure Nothing
-        else
-          fmap Just $
-            mask_ $
-              c'wasm_globaltype_copy globaltype_ptr >>= newGlobalTypeFromPtr
-
--- | Attempts to convert a 'ExternType' to a 'MemoryType'.
-externTypeAsMemoryType :: ExternType -> Maybe MemoryType
-externTypeAsMemoryType externType =
-  unsafePerformIO $
-    withExternType externType $ \externtype_ptr -> do
-      memorytype_ptr <- c'wasm_externtype_as_memorytype externtype_ptr
-      if memorytype_ptr == nullPtr
-        then pure Nothing
-        else
-          fmap Just $
-            mask_ $
-              c'wasm_memorytype_copy memorytype_ptr >>= newMemoryTypeFromPtr
+newExternTypeFromPtr externtype_ptr = do
+  k <- c'wasm_externtype_kind externtype_ptr
+  if
+      | k == c'WASM_EXTERN_FUNC ->
+          ExternFuncType
+            <$> asSubType
+              c'wasm_externtype_as_functype
+              c'wasm_functype_copy
+              newFuncTypeFromPtr
+      | k == c'WASM_EXTERN_GLOBAL ->
+          ExternGlobalType
+            <$> asSubType
+              c'wasm_externtype_as_globaltype
+              c'wasm_globaltype_copy
+              newGlobalTypeFromPtr
+      | k == c'WASM_EXTERN_TABLE ->
+          ExternTableType
+            <$> asSubType
+              c'wasm_externtype_as_tabletype
+              c'wasm_tabletype_copy
+              newTableTypeFromPtr
+      | k == c'WASM_EXTERN_MEMORY ->
+          ExternMemoryType
+            <$> asSubType
+              c'wasm_externtype_as_memorytype
+              c'wasm_memorytype_copy
+              newMemoryTypeFromPtr
+      | otherwise -> error $ "Unknown wasm_externkind_t " ++ show k ++ "!"
+  where
+    asSubType ::
+      forall sub_ptr sub.
+      (Ptr C'wasm_externtype_t -> IO (Ptr sub_ptr)) ->
+      (Ptr sub_ptr -> IO (Ptr sub_ptr)) ->
+      (Ptr sub_ptr -> IO sub) ->
+      IO sub
+    asSubType as_sub copy new = mask_ $ as_sub externtype_ptr >>= (copy >=> new)
 
 --------------------------------------------------------------------------------
 -- Function Types
@@ -848,6 +801,9 @@ externTypeAsMemoryType externType =
 --
 -- WebAssembly functions can have 0 or more parameters and results.
 newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
+
+instance Show FuncType where
+  show _ft = "(TODO: define Show FuncType instance !!!)" -- FIXME !!!
 
 withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
 withFuncType = withForeignPtr . unFuncType
@@ -1404,6 +1360,25 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
 -- Memories are described in units of pages (64KB) and represent contiguous chunks of addressable memory.
 newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
 
+instance Show MemoryType where
+  showsPrec p mt =
+    showParen (p > appPrec) $
+      showString "newMemoryType "
+        . showsArg mini
+        . showString " "
+        . showsArg mbMax
+        . showString " "
+        . showsArg wordLen
+    where
+      appPrec = 10
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (appPrec + 1)
+
+      mini = getMin mt
+      mbMax = getMax mt
+      wordLen = wordLength mt
+
 newMemoryTypeFromPtr :: Ptr C'wasm_memorytype_t -> IO MemoryType
 newMemoryTypeFromPtr = fmap MemoryType . newForeignPtr p'wasm_memorytype_delete
 
@@ -1591,6 +1566,22 @@ instance Exception MemoryAccessError
 -- The most common use for tables is a function table through which call_indirect can invoke other functions.
 newtype TableType = TableType {getWasmtimeTableType :: ForeignPtr C'wasm_tabletype_t}
 
+instance Show TableType where
+  showsPrec p tt =
+    showParen (p > appPrec) $
+      showString "newTableType "
+        . showsArg tableRefType
+        . showString " "
+        . showsArg tableLimits
+    where
+      appPrec = 10
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (appPrec + 1)
+
+      tableRefType = tableTypeElement tt
+      tableLimits = tableTypeLimits tt
+
 withTableType :: TableType -> (Ptr C'wasm_tabletype_t -> IO a) -> IO a
 withTableType = withForeignPtr . getWasmtimeTableType
 
@@ -1605,6 +1596,7 @@ data TableRefType = FuncRef | ExternRef
 
 -- | Specifies a minimum and maximum size for a 'Table'
 data TableLimits = TableLimits {tableMin :: Int32, tableMax :: Int32}
+  deriving (Show)
 
 -- | Creates a new 'Table' descriptor which will contain the specified element type and have the limits applied to its length.
 newTableType ::
@@ -1767,6 +1759,25 @@ getTableType ctx table = unsafePerformIO $
 
 -- | The type of a global.
 newtype GlobalType = GlobalType {unGlobalType :: ForeignPtr C'wasm_globaltype_t}
+
+instance Show GlobalType where
+  showsPrec p gt =
+    showParen (p > appPrec) $
+      showString "newGlobalType "
+        . showString ("(Proxy @" ++ ty ++ ") ")
+        . shows mut
+    where
+      appPrec = 10
+
+      ty = case globalTypeKind gt of
+        KindI32 -> "Int32"
+        KindI64 -> "Int64"
+        KindF32 -> "Float"
+        KindF64 -> "Double"
+        KindV128 -> "Word128"
+        KindFuncRef -> "FuncRef" -- FIXME !!!
+        KindExternRef -> "ExternRef" -- FIXME !!!
+      mut = globalTypeMutability gt
 
 withGlobalType :: GlobalType -> (Ptr C'wasm_globaltype_t -> IO a) -> IO a
 withGlobalType = withForeignPtr . unGlobalType

@@ -8,7 +8,6 @@ module Main (main) where
 import Control.Exception (Exception, throwIO)
 import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
-import Data.Foldable (forM_)
 import Paths_wasmtime (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Wasmtime
@@ -31,26 +30,6 @@ main = do
 
   putStrLn "Compiling module..."
   myModule <- handleException $ newModule engine wasm
-
-  putStrLn "Imports:"
-  let imports = moduleImports myModule
-  forM_ imports $ \imp -> do
-    putStrLn $
-      "kind: "
-        ++ show (externTypeKind $ importTypeType imp)
-        ++ " module: "
-        ++ show (importTypeModule imp)
-        ++ " name: "
-        ++ show (importTypeName imp)
-
-  putStrLn "Exports:"
-  let exports = moduleExports myModule
-  forM_ exports $ \export -> do
-    putStrLn $
-      "kind: "
-        ++ show (externTypeKind $ exportTypeType export)
-        ++ " name: "
-        ++ show (exportTypeName export)
 
   putStrLn "Creating callback..."
   func <- newFunc ctx hello
