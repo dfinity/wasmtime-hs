@@ -1112,6 +1112,9 @@ instance (HasKind a, HasKind b, HasKind c, HasKind d) => Results (a, b, c, d) wh
 newtype Func s = Func {getWasmtimeFunc :: C'wasmtime_func_t}
   deriving (Show, Typeable)
 
+withFunc :: Func s -> (Ptr C'wasmtime_func_t -> IO a) -> IO a
+withFunc = with . getWasmtimeFunc
+
 type FuncCallback =
   Ptr () -> -- env
   Ptr C'wasmtime_caller_t -> -- caller
@@ -1259,7 +1262,7 @@ instance Results r => Funcable (IO (Either Trap r)) where
   exportCall args_and_results_fp _ix len ctx func =
     withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) ->
       withContext ctx $ \ctx_ptr ->
-        with (getWasmtimeFunc func) $ \func_ptr ->
+        withFunc func $ \func_ptr ->
           alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             error_ptr <-
               c'wasmtime_func_call_unchecked
@@ -1318,7 +1321,7 @@ toTypedFunc ::
   m (Maybe (TypedFunc s f))
 toTypedFunc ctx func = unsafeIOToPrim $ do
   withContext ctx $ \ctx_ptr ->
-    with (getWasmtimeFunc func) $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+    withFunc func $ \func_ptr -> do
       (functype_ptr :: Ptr C'wasm_functype_t) <- c'wasmtime_func_type ctx_ptr func_ptr
       (func_params_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_params functype_ptr
       (func_results_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_results functype_ptr
