@@ -701,6 +701,8 @@ newImportType modName mbName externType =
         c'wasm_importtype_new mod_name_ptr name_ptr externtype_ptr
           >>= newImportTypeFromPtr
 
+-- | Marshal a Haskell 'String' to a "C'wasm_name_t". Note that the continuation
+-- should take ownership of the (contents of) "C'wasm_name_t".
 withNameFromString :: String -> (Ptr C'wasm_name_t -> IO a) -> IO a
 withNameFromString name f =
   withCStringLen name $ \(inp_name_ptr, name_sz) ->
