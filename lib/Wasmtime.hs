@@ -2321,8 +2321,7 @@ trapTrace trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
     frame_vec <- peek frame_vec_ptr
     let sz = fromIntegral $ c'wasm_frame_vec_t'size frame_vec :: Int
     let dt = c'wasm_frame_vec_t'data frame_vec :: Ptr (Ptr C'wasm_frame_t)
-    vec <- V.generateM sz $ \ix ->
-      peekElemOff dt ix >>= (c'wasm_frame_copy >=> newFrameFromPtr)
+    vec <- V.generateM sz $ peekElemOff dt >=> c'wasm_frame_copy >=> newFrameFromPtr
     c'wasm_frame_vec_delete frame_vec_ptr
     pure vec
 
