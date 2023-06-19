@@ -71,19 +71,43 @@ module Wasmtime
     -- * Conversion
     Wasm,
     wasmToBytes,
-    unsafeFromByteString,
+    wasmFromBytes,
+    unsafeWasmFromBytes,
     wat2wasm,
 
     -- * Module
     Module,
     newModule,
 
+    -- ** Imports
+    moduleImports,
+    ImportType,
+    newImportType,
+    importTypeModule,
+    importTypeName,
+    importTypeType,
+
+    -- ** Exports
+    moduleExports,
+    ExportType,
+    newExportType,
+    exportTypeName,
+    exportTypeType,
+
+    -- ** Extern Types
+    ExternType (..),
+
     -- * Kinds
     Kind (..),
     HasKind,
 
     -- * Functions
+    FuncType,
+    newFuncType,
+    funcTypeParams,
+    funcTypeResults,
     Func,
+    getFuncType,
     newFunc,
     Funcable,
     Result,
@@ -200,7 +224,7 @@ import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
 import Control.Applicative ((<|>))
 import Control.Exception (Exception, bracket, mask_, onException, throwIO, try)
-import Control.Monad (guard, when)
+import Control.Monad (guard, when, (>=>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
 import Control.Monad.ST (ST, runST)
@@ -223,7 +247,7 @@ import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
 import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtr, newForeignPtr, withForeignPtr)
-import Foreign.Marshal.Alloc (alloca, finalizerFree, malloc)
+import Foreign.Marshal.Alloc (alloca, finalizerFree)
 import Foreign.Marshal.Array
 import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
@@ -540,13 +564,31 @@ consumeFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
 -- Conversion
 --------------------------------------------------------------------------------
 
--- | WASM code.
-newtype Wasm = Wasm {wasmToBytes :: B.ByteString}
+-- | WebAssembly binary code.
+newtype Wasm = Wasm
+  { -- | Return the WebAssembly binary as bytes.
+    wasmToBytes :: B.ByteString
+  }
 
--- | Convert bytes into WASM. This function doesn't check if the bytes
--- are actual WASM code hence it's unsafe.
-unsafeFromByteString :: B.ByteString -> Wasm
-unsafeFromByteString = Wasm
+-- | Unsafely convert bytes into WASM.
+--
+-- This function doesn't check if the bytes are actual WASM code hence it's
+-- unsafe. Use 'wasmFromBytes' instead if you're not sure the bytes are actual
+-- WASM.
+unsafeWasmFromBytes :: B.ByteString -> Wasm
+unsafeWasmFromBytes = Wasm
+
+-- | This function will validate the provided 'B.ByteString' to determine if it
+-- is a valid WebAssembly binary within the context of the 'Engine' provided.
+wasmFromBytes :: Engine -> B.ByteString -> Either WasmtimeError Wasm
+wasmFromBytes engine inp@(BI.BS inp_fp inp_size) =
+  unsafePerformIO $
+    withEngine engine $ \engine_ptr ->
+      withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
+        try $ do
+          error_ptr <- c'wasmtime_module_validate engine_ptr inp_ptr $ fromIntegral inp_size
+          checkWasmtimeError error_ptr
+          pure $ Wasm inp
 
 -- | Converts from the text format of WebAssembly to the binary format.
 --
@@ -576,8 +618,13 @@ wat2wasm (BI.BS inp_fp inp_size) =
 -- Module
 --------------------------------------------------------------------------------
 
+-- | A compiled Wasmtime module.
+--
+-- This type represents a compiled WebAssembly module. The compiled module is
+-- ready to be instantiated and can be inspected for imports/exports.
 newtype Module = Module {unModule :: ForeignPtr C'wasmtime_module_t}
 
+-- | Compiles a WebAssembly binary into a 'Module'.
 newModule :: Engine -> Wasm -> Either WasmtimeError Module
 newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
   try $
@@ -598,14 +645,260 @@ withModule :: Module -> (Ptr C'wasmtime_module_t -> IO a) -> IO a
 withModule = withForeignPtr . unModule
 
 --------------------------------------------------------------------------------
+-- Module Imports
+--------------------------------------------------------------------------------
+
+-- | Type of an import.
+newtype ImportType = ImportType {unImportType :: ForeignPtr C'wasm_importtype_t}
+
+instance Show ImportType where
+  showsPrec p it =
+    showParen (p > appPrec) $
+      showString "newImportType "
+        . showsArg (importTypeModule it)
+        . showString " "
+        . showsArg (importTypeName it)
+        . showString " "
+        . showsArg (importTypeType it)
+    where
+      appPrec = 10
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (appPrec + 1)
+
+withImportType :: ImportType -> (Ptr C'wasm_importtype_t -> IO a) -> IO a
+withImportType = withForeignPtr . unImportType
+
+newImportTypeFromPtr :: Ptr C'wasm_importtype_t -> IO ImportType
+newImportTypeFromPtr = fmap ImportType . newForeignPtr p'wasm_importtype_delete
+
+-- | Returns a vector of imports that this module expects.
+moduleImports :: Module -> Vector ImportType
+moduleImports m =
+  unsafePerformIO $
+    withModule m $ \mod_ptr ->
+      alloca $ \(importtype_vec_ptr :: Ptr C'wasm_importtype_vec_t) -> mask_ $ do
+        -- Ownership of the wasm_importtype_vec_t is passed to the caller
+        -- so we have to copy the contained wasm_importtype_t elements
+        -- and finally delete the wasm_importtype_vec_t:
+        c'wasmtime_module_imports mod_ptr importtype_vec_ptr
+        sz :: CSize <- peek $ p'wasm_importtype_vec_t'size importtype_vec_ptr
+        dt :: Ptr (Ptr C'wasm_importtype_t) <-
+          peek $ p'wasm_importtype_vec_t'data importtype_vec_ptr
+        vec <-
+          V.generateM (fromIntegral sz) $
+            peekElemOff dt >=> c'wasm_importtype_copy >=> newImportTypeFromPtr
+        c'wasm_importtype_vec_delete importtype_vec_ptr
+        pure vec
+
+-- | Creates a new import type.
+newImportType ::
+  -- | Module
+  String ->
+  -- | Optional name (in the module linking proposal the import name can be omitted).
+  Maybe String ->
+  ExternType ->
+  ImportType
+newImportType modName mbName externType =
+  unsafePerformIO $
+    withNameFromString modName $ \mod_name_ptr ->
+      maybeWithNameFromString mbName $ \name_ptr -> mask_ $ do
+        externtype_ptr <- externTypeToPtr externType
+        c'wasm_importtype_new mod_name_ptr name_ptr externtype_ptr
+          >>= newImportTypeFromPtr
+
+-- | Marshal a Haskell 'String' to a "C'wasm_name_t". Note that the continuation
+-- should take ownership of the (contents of) "C'wasm_name_t".
+withNameFromString :: String -> (Ptr C'wasm_name_t -> IO a) -> IO a
+withNameFromString name f =
+  withCStringLen name $ \(inp_name_ptr, name_sz) ->
+    alloca $ \(name_ptr :: Ptr C'wasm_name_t) -> do
+      c'wasm_byte_vec_new name_ptr (fromIntegral name_sz) $ castPtr inp_name_ptr
+      f name_ptr
+
+maybeWithNameFromString :: Maybe String -> (Ptr C'wasm_name_t -> IO a) -> IO a
+maybeWithNameFromString Nothing f = f nullPtr
+maybeWithNameFromString (Just name) f = withNameFromString name f
+
+-- | Returns the module this import is importing from.
+importTypeModule :: ImportType -> String
+importTypeModule importType =
+  unsafePerformIO $
+    withImportType importType $
+      c'wasm_importtype_module >=> peekByteVecAsString
+
+-- | Returns the name this import is importing from.
+importTypeName :: ImportType -> Maybe String
+importTypeName importType =
+  unsafePerformIO $
+    withImportType importType $ \importtype_ptr -> do
+      name_ptr <- c'wasm_importtype_name importtype_ptr
+      if name_ptr == nullPtr
+        then pure Nothing
+        else Just <$> peekByteVecAsString name_ptr
+
+-- | Returns the type of item this import is importing.
+importTypeType :: ImportType -> ExternType
+importTypeType importType =
+  unsafePerformIO $
+    withImportType importType $
+      c'wasm_importtype_type >=> newExternTypeFromPtr
+
+--------------------------------------------------------------------------------
+-- Module Exports
+--------------------------------------------------------------------------------
+
+-- | Type of an export.
+newtype ExportType = ExportType {unExportType :: ForeignPtr C'wasm_exporttype_t}
+
+instance Show ExportType where
+  showsPrec p et =
+    showParen (p > appPrec) $
+      showString "newExportType "
+        . showsArg (exportTypeName et)
+        . showString " "
+        . showsArg (exportTypeType et)
+    where
+      appPrec = 10
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (appPrec + 1)
+
+withExportType :: ExportType -> (Ptr C'wasm_exporttype_t -> IO a) -> IO a
+withExportType = withForeignPtr . unExportType
+
+newExportTypeFromPtr :: Ptr C'wasm_exporttype_t -> IO ExportType
+newExportTypeFromPtr = fmap ExportType . newForeignPtr p'wasm_exporttype_delete
+
+-- | Returns the list of exports that this module provides.
+moduleExports :: Module -> Vector ExportType
+moduleExports m =
+  unsafePerformIO $
+    withModule m $ \mod_ptr ->
+      alloca $ \(exporttype_vec_ptr :: Ptr C'wasm_exporttype_vec_t) -> mask_ $ do
+        -- Ownership of the wasm_exporttype_vec_t is passed to the caller
+        -- so we have to copy the contained wasm_exporttype_t elements
+        -- and finally delete the wasm_exporttype_vec_t:
+        c'wasmtime_module_exports mod_ptr exporttype_vec_ptr
+        sz :: CSize <- peek $ p'wasm_exporttype_vec_t'size exporttype_vec_ptr
+        dt :: Ptr (Ptr C'wasm_exporttype_t) <-
+          peek $ p'wasm_exporttype_vec_t'data exporttype_vec_ptr
+        vec <-
+          V.generateM (fromIntegral sz) $
+            peekElemOff dt >=> c'wasm_exporttype_copy >=> newExportTypeFromPtr
+        c'wasm_exporttype_vec_delete exporttype_vec_ptr
+        pure vec
+
+-- | Creates a new export type.
+newExportType ::
+  -- | name
+  String ->
+  ExternType ->
+  ExportType
+newExportType name externType =
+  unsafePerformIO $
+    withNameFromString name $ \name_ptr -> mask_ $ do
+      externtype_ptr <- externTypeToPtr externType
+      c'wasm_exporttype_new name_ptr externtype_ptr
+        >>= newExportTypeFromPtr
+
+-- | Returns the name of this export.
+exportTypeName :: ExportType -> String
+exportTypeName exportType =
+  unsafePerformIO $
+    withExportType exportType $
+      c'wasm_exporttype_name >=> peekByteVecAsString
+
+-- | Returns the type of this export.
+exportTypeType :: ExportType -> ExternType
+exportTypeType exportType =
+  unsafePerformIO $
+    withExportType exportType $
+      c'wasm_exporttype_type >=> newExternTypeFromPtr
+
+--------------------------------------------------------------------------------
+-- Extern Types
+--------------------------------------------------------------------------------
+
+-- | Possible types which can be externally referenced from a WebAssembly module.
+--
+-- These can be retrieved from 'importTypeType' or 'exportTypeType'.
+data ExternType
+  = ExternFuncType FuncType
+  | ExternGlobalType GlobalType
+  | ExternTableType TableType
+  | ExternMemoryType MemoryType
+  deriving (Show)
+
+externTypeToPtr :: ExternType -> IO (Ptr C'wasm_externtype_t)
+externTypeToPtr = \case
+  ExternFuncType funcType ->
+    withFuncType funcType $ c'wasm_functype_as_externtype >=> c'wasm_externtype_copy
+  ExternGlobalType globalType ->
+    withGlobalType globalType $ c'wasm_globaltype_as_externtype >=> c'wasm_externtype_copy
+  ExternTableType tableType ->
+    withTableType tableType $ c'wasm_tabletype_as_externtype >=> c'wasm_externtype_copy
+  ExternMemoryType memoryType ->
+    withMemoryType memoryType $ c'wasm_memorytype_as_externtype >=> c'wasm_externtype_copy
+
+newExternTypeFromPtr :: Ptr C'wasm_externtype_t -> IO ExternType
+newExternTypeFromPtr externtype_ptr = do
+  k <- c'wasm_externtype_kind externtype_ptr
+  if
+      | k == c'WASM_EXTERN_FUNC ->
+          ExternFuncType
+            <$> asSubType
+              c'wasm_externtype_as_functype
+              c'wasm_functype_copy
+              newFuncTypeFromPtr
+      | k == c'WASM_EXTERN_GLOBAL ->
+          ExternGlobalType
+            <$> asSubType
+              c'wasm_externtype_as_globaltype
+              c'wasm_globaltype_copy
+              newGlobalTypeFromPtr
+      | k == c'WASM_EXTERN_TABLE ->
+          ExternTableType
+            <$> asSubType
+              c'wasm_externtype_as_tabletype
+              c'wasm_tabletype_copy
+              newTableTypeFromPtr
+      | k == c'WASM_EXTERN_MEMORY ->
+          ExternMemoryType
+            <$> asSubType
+              c'wasm_externtype_as_memorytype
+              c'wasm_memorytype_copy
+              newMemoryTypeFromPtr
+      | otherwise -> error $ "Unknown wasm_externkind_t " ++ show k ++ "!"
+  where
+    asSubType ::
+      forall sub_ptr sub.
+      (Ptr C'wasm_externtype_t -> IO (Ptr sub_ptr)) ->
+      (Ptr sub_ptr -> IO (Ptr sub_ptr)) ->
+      (Ptr sub_ptr -> IO sub) ->
+      IO sub
+    asSubType as_sub copy new = mask_ $ as_sub externtype_ptr >>= (copy >=> new)
+
+--------------------------------------------------------------------------------
 -- Function Types
 --------------------------------------------------------------------------------
 
+-- | A descriptor for a function in a WebAssembly module.
+--
+-- WebAssembly functions can have 0 or more parameters and results.
 newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
+
+instance Show FuncType where
+  show _ft = "(TODO: define Show FuncType instance !!!)" -- FIXME !!!
 
 withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
 withFuncType = withForeignPtr . unFuncType
 
+newFuncTypeFromPtr :: Ptr C'wasm_functype_t -> IO FuncType
+newFuncTypeFromPtr = fmap FuncType . newForeignPtr p'wasm_functype_delete
+
+-- | Creates a new function type with the parameter and result types of the
+-- Haskell function @f@.
 newFuncType ::
   forall f m r.
   ( Funcable f,
@@ -616,32 +909,38 @@ newFuncType ::
   FuncType
 newFuncType _proxy = unsafePerformIO $ mask_ $ do
   withKinds (paramKinds $ Proxy @f) $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
-    withKinds (resultKinds $ Proxy @r) $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) -> do
-      functype_ptr <- c'wasm_functype_new params_ptr result_ptr
-      FuncType <$> newForeignPtr p'wasm_functype_delete functype_ptr
+    withKinds (resultKinds $ Proxy @r) $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) ->
+      c'wasm_functype_new params_ptr result_ptr >>= newFuncTypeFromPtr
   where
     withKinds :: VU.Vector C'wasm_valkind_t -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
     withKinds kinds f =
       allocaArray n $ \(valtypes_ptr_ptr :: Ptr (Ptr C'wasm_valtype_t)) -> do
         VU.iforM_ kinds $ \ix k -> do
-          -- The C'wasm_valtype_t will be deleted later via del_valtypes.
           valtype_ptr <- c'wasm_valtype_new k
           pokeElemOff valtypes_ptr_ptr ix valtype_ptr
-        -- c'wasm_functype_new takes ownership of the C'wasm_valtype_vec_t so we
-        -- just malloc here without freeing explicitly later.
-        (valtype_vec_ptr :: Ptr C'wasm_valtype_vec_t) <- malloc
-        c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr_ptr
-        x <- f valtype_vec_ptr
-        let del_valtypes ix
-              | ix == n = pure ()
-              | otherwise = do
-                  valtype_ptr <- peekElemOff valtypes_ptr_ptr ix
-                  c'wasm_valtype_delete valtype_ptr
-                  del_valtypes (ix + 1)
-        del_valtypes 0
-        pure x
+        alloca $ \(valtype_vec_ptr :: Ptr C'wasm_valtype_vec_t) -> do
+          c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr_ptr
+          f valtype_vec_ptr
       where
         n = VU.length kinds
+
+-- | Returns the vector of parameters of this function type.
+funcTypeParams :: FuncType -> V.Vector Kind
+funcTypeParams funcType =
+  unsafePerformIO $ withFuncType funcType $ c'wasm_functype_params >=> unmarshalValTypeVec
+
+-- | Returns the vector of results of this function type.
+funcTypeResults :: FuncType -> V.Vector Kind
+funcTypeResults funcType =
+  unsafePerformIO $ withFuncType funcType $ c'wasm_functype_results >=> unmarshalValTypeVec
+
+unmarshalValTypeVec :: Ptr C'wasm_valtype_vec_t -> IO (V.Vector Kind)
+unmarshalValTypeVec valtype_vec_ptr = do
+  sz :: CSize <- peek $ p'wasm_valtype_vec_t'size valtype_vec_ptr
+  dt :: Ptr (Ptr C'wasm_valtype_t) <- peek $ p'wasm_valtype_vec_t'data valtype_vec_ptr
+  V.generateM (fromIntegral sz) $ \ix -> do
+    cur_valtype_ptr <- peekElemOff dt ix
+    fromWasmKind <$> c'wasm_valtype_kind cur_valtype_ptr
 
 -- | Type (kind) of values that:
 --
@@ -834,6 +1133,18 @@ instance (HasKind a, HasKind b, HasKind c, HasKind d) => Results (a, b, c, d) wh
 newtype Func s = Func {getWasmtimeFunc :: C'wasmtime_func_t}
   deriving (Show, Typeable)
 
+withFunc :: Func s -> (Ptr C'wasmtime_func_t -> IO a) -> IO a
+withFunc = with . getWasmtimeFunc
+
+-- | Returns the type of the given function.
+getFuncType :: MonadPrim s m => Context s -> Func s -> m FuncType
+getFuncType ctx func =
+  unsafeIOToPrim $
+    withContext ctx $ \ctx_ptr ->
+      withFunc func $ \func_ptr ->
+        mask_ $
+          c'wasmtime_func_type ctx_ptr func_ptr >>= newFuncTypeFromPtr
+
 type FuncCallback =
   Ptr () -> -- env
   Ptr C'wasmtime_caller_t -> -- caller
@@ -981,7 +1292,7 @@ instance Results r => Funcable (IO (Either Trap r)) where
   exportCall args_and_results_fp _ix len ctx func =
     withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) ->
       withContext ctx $ \ctx_ptr ->
-        with (getWasmtimeFunc func) $ \func_ptr ->
+        withFunc func $ \func_ptr ->
           alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             error_ptr <-
               c'wasmtime_func_call_unchecked
@@ -1038,9 +1349,9 @@ toTypedFunc ::
   Context s ->
   Func s ->
   m (Maybe (TypedFunc s f))
-toTypedFunc ctx func = unsafeIOToPrim $ do
+toTypedFunc ctx func = unsafeIOToPrim $
   withContext ctx $ \ctx_ptr ->
-    with (getWasmtimeFunc func) $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+    withFunc func $ \func_ptr -> do
       (functype_ptr :: Ptr C'wasm_functype_t) <- c'wasmtime_func_type ctx_ptr func_ptr
       (func_params_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_params functype_ptr
       (func_results_ptr :: Ptr C'wasm_valtype_vec_t) <- c'wasm_functype_results functype_ptr
@@ -1162,6 +1473,28 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
 -- Memories are described in units of pages (64KB) and represent contiguous chunks of addressable memory.
 newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
 
+instance Show MemoryType where
+  showsPrec p mt =
+    showParen (p > appPrec) $
+      showString "newMemoryType "
+        . showsArg mini
+        . showString " "
+        . showsArg mbMax
+        . showString " "
+        . showsArg wordLen
+    where
+      appPrec = 10
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (appPrec + 1)
+
+      mini = getMin mt
+      mbMax = getMax mt
+      wordLen = wordLength mt
+
+newMemoryTypeFromPtr :: Ptr C'wasm_memorytype_t -> IO MemoryType
+newMemoryTypeFromPtr = fmap MemoryType . newForeignPtr p'wasm_memorytype_delete
+
 -- | Creates a descriptor for a WebAssembly 'Memory' with the specified minimum number of memory pages,
 -- an optional maximum of memory pages, and a 64 bit flag, where false defaults to 32 bit memory.
 newMemoryType ::
@@ -1174,7 +1507,7 @@ newMemoryType ::
   MemoryType
 newMemoryType mini mbMax wordLen = unsafePerformIO $ mask_ $ do
   mem_type_ptr <- c'wasmtime_memorytype_new mini max_present maxi is64
-  MemoryType <$> newForeignPtr p'wasm_memorytype_delete mem_type_ptr
+  newMemoryTypeFromPtr mem_type_ptr
   where
     (max_present, maxi) = maybe (False, 0) (True,) mbMax
     is64 = wordLen == Bit64
@@ -1346,8 +1679,27 @@ instance Exception MemoryAccessError
 -- The most common use for tables is a function table through which call_indirect can invoke other functions.
 newtype TableType = TableType {getWasmtimeTableType :: ForeignPtr C'wasm_tabletype_t}
 
+instance Show TableType where
+  showsPrec p tt =
+    showParen (p > appPrec) $
+      showString "newTableType "
+        . showsArg tableRefType
+        . showString " "
+        . showsArg tableLimits
+    where
+      appPrec = 10
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (appPrec + 1)
+
+      tableRefType = tableTypeElement tt
+      tableLimits = tableTypeLimits tt
+
 withTableType :: TableType -> (Ptr C'wasm_tabletype_t -> IO a) -> IO a
 withTableType = withForeignPtr . getWasmtimeTableType
+
+newTableTypeFromPtr :: Ptr C'wasm_tabletype_t -> IO TableType
+newTableTypeFromPtr = fmap TableType . newForeignPtr p'wasm_tabletype_delete
 
 -- | The type of a table.
 data TableRefType = FuncRef | ExternRef
@@ -1357,6 +1709,7 @@ data TableRefType = FuncRef | ExternRef
 
 -- | Specifies a minimum and maximum size for a 'Table'
 data TableLimits = TableLimits {tableMin :: Int32, tableMax :: Int32}
+  deriving (Show)
 
 -- | Creates a new 'Table' descriptor which will contain the specified element type and have the limits applied to its length.
 newTableType ::
@@ -1364,7 +1717,7 @@ newTableType ::
   TableLimits ->
   TableType
 newTableType tableRefType limits = unsafePerformIO $
-  alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> do
+  alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> mask_ $ do
     let (valkind :: C'wasm_valkind_t) = case tableRefType of
           FuncRef -> c'WASMTIME_FUNCREF
           ExternRef -> c'WASMTIME_EXTERNREF
@@ -1375,8 +1728,7 @@ newTableType tableRefType limits = unsafePerformIO $
             }
     valtype_ptr <- c'wasm_valtype_new valkind
     poke limits_ptr limits'
-    tabletype_ptr <- c'wasm_tabletype_new valtype_ptr limits_ptr
-    TableType <$> newForeignPtr p'wasm_tabletype_delete tabletype_ptr
+    c'wasm_tabletype_new valtype_ptr limits_ptr >>= newTableTypeFromPtr
 
 -- | Returns the element type of this table
 tableTypeElement :: TableType -> TableRefType
@@ -1510,9 +1862,9 @@ tableSet ctx table ix val = unsafeIOToPrim $
 getTableType :: Context s -> Table s -> TableType
 getTableType ctx table = unsafePerformIO $
   withContext ctx $ \ctx_ptr ->
-    withTable table $ \table_ptr -> mask_ $ do
-      tt_ptr <- c'wasmtime_table_type ctx_ptr table_ptr
-      TableType <$> newForeignPtr p'wasm_tabletype_delete tt_ptr
+    withTable table $ \table_ptr ->
+      mask_ $
+        c'wasmtime_table_type ctx_ptr table_ptr >>= newTableTypeFromPtr
 
 --------------------------------------------------------------------------------
 -- Globals
@@ -1520,6 +1872,25 @@ getTableType ctx table = unsafePerformIO $
 
 -- | The type of a global.
 newtype GlobalType = GlobalType {unGlobalType :: ForeignPtr C'wasm_globaltype_t}
+
+instance Show GlobalType where
+  showsPrec p gt =
+    showParen (p > appPrec) $
+      showString "newGlobalType "
+        . showString ("(Proxy @" ++ ty ++ ") ")
+        . shows mut
+    where
+      appPrec = 10
+
+      ty = case globalTypeKind gt of
+        KindI32 -> "Int32"
+        KindI64 -> "Int64"
+        KindF32 -> "Float"
+        KindF64 -> "Double"
+        KindV128 -> "Word128"
+        KindFuncRef -> "(Func s)"
+        KindExternRef -> "(Ptr C'wasmtime_externref_t)" -- FIXME !!!
+      mut = globalTypeMutability gt
 
 withGlobalType :: GlobalType -> (Ptr C'wasm_globaltype_t -> IO a) -> IO a
 withGlobalType = withForeignPtr . unGlobalType
@@ -1980,9 +2351,7 @@ trapTrace trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
     frame_vec <- peek frame_vec_ptr
     let sz = fromIntegral $ c'wasm_frame_vec_t'size frame_vec :: Int
     let dt = c'wasm_frame_vec_t'data frame_vec :: Ptr (Ptr C'wasm_frame_t)
-    vec <- V.generateM sz $ \ix -> do
-      frame_ptr <- peekElemOff dt ix
-      newFrameFromPtr frame_ptr
+    vec <- V.generateM sz $ peekElemOff dt >=> c'wasm_frame_copy >=> newFrameFromPtr
     c'wasm_frame_vec_delete frame_vec_ptr
     pure vec
 
@@ -2078,8 +2447,9 @@ instance Show WasmtimeError where
     withWasmtimeError wasmtimeError $ \error_ptr ->
       alloca $ \(wasm_name_ptr :: Ptr C'wasm_name_t) -> do
         c'wasmtime_error_message error_ptr wasm_name_ptr
-        let p = castPtr wasm_name_ptr :: Ptr C'wasm_byte_vec_t
-        peekByteVecAsString p
+        msg <- peekByteVecAsString wasm_name_ptr
+        c'wasm_byte_vec_delete wasm_name_ptr
+        pure msg
 
 --------------------------------------------------------------------------------
 -- Utils
