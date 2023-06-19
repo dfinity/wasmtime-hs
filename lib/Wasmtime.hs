@@ -104,7 +104,10 @@ module Wasmtime
     -- * Functions
     FuncType,
     newFuncType,
+    funcTypeParams,
+    funcTypeResults,
     Func,
+    getFuncType,
     newFunc,
     Funcable,
     Result,
@@ -921,6 +924,24 @@ newFuncType _proxy = unsafePerformIO $ mask_ $ do
       where
         n = VU.length kinds
 
+-- | Returns the vector of parameters of this function type.
+funcTypeParams :: FuncType -> V.Vector Kind
+funcTypeParams funcType =
+  unsafePerformIO $ withFuncType funcType $ c'wasm_functype_params >=> unmarshalValTypeVec
+
+-- | Returns the vector of results of this function type.
+funcTypeResults :: FuncType -> V.Vector Kind
+funcTypeResults funcType =
+  unsafePerformIO $ withFuncType funcType $ c'wasm_functype_results >=> unmarshalValTypeVec
+
+unmarshalValTypeVec :: Ptr C'wasm_valtype_vec_t -> IO (V.Vector Kind)
+unmarshalValTypeVec valtype_vec_ptr = do
+  sz :: CSize <- peek $ p'wasm_valtype_vec_t'size valtype_vec_ptr
+  dt :: Ptr (Ptr C'wasm_valtype_t) <- peek $ p'wasm_valtype_vec_t'data valtype_vec_ptr
+  V.generateM (fromIntegral sz) $ \ix -> do
+    cur_valtype_ptr <- peekElemOff dt ix
+    fromWasmKind <$> c'wasm_valtype_kind cur_valtype_ptr
+
 -- | Type (kind) of values that:
 --
 -- * WASM @'Func'tions@ can take as parameters or return as results.
@@ -1114,6 +1135,15 @@ newtype Func s = Func {getWasmtimeFunc :: C'wasmtime_func_t}
 
 withFunc :: Func s -> (Ptr C'wasmtime_func_t -> IO a) -> IO a
 withFunc = with . getWasmtimeFunc
+
+-- | Returns the type of the given function.
+getFuncType :: MonadPrim s m => Context s -> Func s -> m FuncType
+getFuncType ctx func =
+  unsafeIOToPrim $
+    withContext ctx $ \ctx_ptr ->
+      withFunc func $ \func_ptr ->
+        mask_ $
+          c'wasmtime_func_type ctx_ptr func_ptr >>= newFuncTypeFromPtr
 
 type FuncCallback =
   Ptr () -> -- env
@@ -1319,7 +1349,7 @@ toTypedFunc ::
   Context s ->
   Func s ->
   m (Maybe (TypedFunc s f))
-toTypedFunc ctx func = unsafeIOToPrim $ do
+toTypedFunc ctx func = unsafeIOToPrim $
   withContext ctx $ \ctx_ptr ->
     withFunc func $ \func_ptr -> do
       (functype_ptr :: Ptr C'wasm_functype_t) <- c'wasmtime_func_type ctx_ptr func_ptr
