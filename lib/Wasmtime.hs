@@ -82,6 +82,7 @@ module Wasmtime
     -- ** Imports
     moduleImports,
     ImportType,
+    newImportType,
     importTypeModule,
     importTypeName,
     importTypeType,
@@ -89,6 +90,7 @@ module Wasmtime
     -- ** Exports
     moduleExports,
     ExportType,
+    newExportType,
     exportTypeName,
     exportTypeType,
 
@@ -646,6 +648,21 @@ withModule = withForeignPtr . unModule
 -- | Type of an import.
 newtype ImportType = ImportType {unImportType :: ForeignPtr C'wasm_importtype_t}
 
+instance Show ImportType where
+  showsPrec p it =
+    showParen (p > appPrec) $
+      showString "newImportType "
+        . showsArg (importTypeModule it)
+        . showString " "
+        . showsArg (importTypeName it)
+        . showString " "
+        . showsArg (importTypeType it)
+    where
+      appPrec = 10
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (appPrec + 1)
+
 withImportType :: ImportType -> (Ptr C'wasm_importtype_t -> IO a) -> IO a
 withImportType = withForeignPtr . unImportType
 
@@ -667,6 +684,29 @@ moduleImports m =
           c'wasm_importtype_copy importtype_ptr >>= newImportTypeFromPtr
         c'wasm_importtype_vec_delete importtype_vec_ptr
         pure vec
+
+-- | Creates a new import type.
+newImportType ::
+  -- | Module
+  String ->
+  -- | Optional name (in the module linking proposal the import name can be omitted).
+  Maybe String ->
+  ExternType ->
+  ImportType
+newImportType modName mbName externType =
+  unsafePerformIO $ mask_ $ do
+    mod_name_ptr <- nameFromString modName
+    name_ptr <- maybe (pure nullPtr) nameFromString mbName
+    externtype_ptr <- externTypeToPtr externType
+    c'wasm_importtype_new mod_name_ptr name_ptr externtype_ptr
+      >>= newImportTypeFromPtr
+
+nameFromString :: String -> IO (Ptr C'wasm_name_t)
+nameFromString name = do
+  name_ptr :: Ptr C'wasm_name_t <- malloc
+  withCStringLen name $ \(inp_name_ptr, name_sz) -> do
+    c'wasm_byte_vec_new name_ptr (fromIntegral name_sz) $ castPtr inp_name_ptr
+    pure name_ptr
 
 -- | Returns the module this import is importing from.
 importTypeModule :: ImportType -> String
@@ -703,6 +743,19 @@ importTypeType importType =
 -- | Type of an export.
 newtype ExportType = ExportType {unExportType :: ForeignPtr C'wasm_exporttype_t}
 
+instance Show ExportType where
+  showsPrec p et =
+    showParen (p > appPrec) $
+      showString "newExportType "
+        . showsArg (exportTypeName et)
+        . showString " "
+        . showsArg (exportTypeType et)
+    where
+      appPrec = 10
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (appPrec + 1)
+
 withExportType :: ExportType -> (Ptr C'wasm_exporttype_t -> IO a) -> IO a
 withExportType = withForeignPtr . unExportType
 
@@ -723,6 +776,19 @@ moduleExports m =
           c'wasm_exporttype_copy exporttype_ptr >>= newExportTypeFromPtr
         c'wasm_exporttype_vec_delete exporttype_vec_ptr
         pure vec
+
+-- | Creates a new export type.
+newExportType ::
+  -- | name
+  String ->
+  ExternType ->
+  ExportType
+newExportType name externType =
+  unsafePerformIO $ mask_ $ do
+    name_ptr <- nameFromString name
+    externtype_ptr <- externTypeToPtr externType
+    c'wasm_exporttype_new name_ptr externtype_ptr
+      >>= newExportTypeFromPtr
 
 -- | Returns the name of this export.
 exportTypeName :: ExportType -> String
@@ -753,6 +819,17 @@ data ExternType
   | ExternTableType TableType
   | ExternMemoryType MemoryType
   deriving (Show)
+
+externTypeToPtr :: ExternType -> IO (Ptr C'wasm_externtype_t)
+externTypeToPtr = \case
+  ExternFuncType funcType ->
+    withFuncType funcType $ c'wasm_functype_as_externtype >=> c'wasm_externtype_copy
+  ExternGlobalType globalType ->
+    withGlobalType globalType $ c'wasm_globaltype_as_externtype >=> c'wasm_externtype_copy
+  ExternTableType tableType ->
+    withTableType tableType $ c'wasm_tabletype_as_externtype >=> c'wasm_externtype_copy
+  ExternMemoryType memoryType ->
+    withMemoryType memoryType $ c'wasm_memorytype_as_externtype >=> c'wasm_externtype_copy
 
 newExternTypeFromPtr :: Ptr C'wasm_externtype_t -> IO ExternType
 newExternTypeFromPtr externtype_ptr = do

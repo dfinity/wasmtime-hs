@@ -23,6 +23,8 @@ module Bindings.Wasm where
 
 #ccall wasm_byte_vec_new_uninitialized , Ptr <wasm_byte_vec_t> -> CSize -> IO ()
 
+#ccall wasm_byte_vec_new , Ptr <wasm_byte_vec_t> -> CSize -> Ptr <wasm_byte_t> -> IO ()
+
 #ccall wasm_byte_vec_delete , Ptr <wasm_byte_vec_t> -> IO ()
 
 #synonym_t wasm_name_t , <wasm_byte_vec_t>
@@ -117,6 +119,12 @@ module Bindings.Wasm where
 
 #ccall wasm_importtype_copy , Ptr <wasm_importtype_t> -> IO (Ptr <wasm_importtype_t>)
 
+#ccall wasm_importtype_new , \
+  Ptr <wasm_name_t> -> \
+  Ptr <wasm_name_t> -> \
+  Ptr <wasm_externtype_t> -> \
+  IO (Ptr <wasm_importtype_t>)
+
 #ccall wasm_importtype_module , Ptr <wasm_importtype_t> -> IO (Ptr <wasm_name_t>)
 
 #ccall wasm_importtype_name , Ptr <wasm_importtype_t> -> IO (Ptr <wasm_name_t>)
@@ -139,6 +147,11 @@ module Bindings.Wasm where
 #ccall wasm_exporttype_vec_delete , Ptr <wasm_exporttype_vec_t> -> IO ()
 
 #ccall wasm_exporttype_copy , Ptr <wasm_exporttype_t> -> IO (Ptr <wasm_exporttype_t>)
+
+#ccall wasm_exporttype_new , \
+  Ptr <wasm_name_t> -> \
+  Ptr <wasm_externtype_t> -> \
+  IO (Ptr <wasm_exporttype_t>)
 
 #ccall wasm_exporttype_name , Ptr <wasm_exporttype_t> -> IO (Ptr <wasm_name_t>)
 
