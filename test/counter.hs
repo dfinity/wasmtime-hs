@@ -43,7 +43,11 @@ main = do
   putStrLn "Extracting exports..."
   --   Just memory <- getExportedMemory ctx inst "memory"
   Just (init :: TypedFunc RealWorld (IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "canister_init"
+  Just (readf :: TypedFunc RealWorld (IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "canister_query get"
+
   res <- callFunc ctx init
+  print ("res", res)
+  res <- callFunc ctx readf
   print ("res", res)
 
 msg_reply :: IO (Either Trap ())
