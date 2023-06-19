@@ -694,18 +694,23 @@ newImportType ::
   ExternType ->
   ImportType
 newImportType modName mbName externType =
-  unsafePerformIO $ mask_ $ do
-    mod_name_ptr <- nameFromString modName
-    name_ptr <- maybe (pure nullPtr) nameFromString mbName
-    externtype_ptr <- externTypeToPtr externType
-    c'wasm_importtype_new mod_name_ptr name_ptr externtype_ptr
-      >>= newImportTypeFromPtr
+  unsafePerformIO $
+    withNameFromString modName $ \mod_name_ptr ->
+      maybeWithNameFromString mbName $ \name_ptr -> mask_ $ do
+        externtype_ptr <- externTypeToPtr externType
+        c'wasm_importtype_new mod_name_ptr name_ptr externtype_ptr
+          >>= newImportTypeFromPtr
 
-nameFromString :: String -> IO (Ptr C'wasm_name_t)
-nameFromString name = withCStringLen name $ \(inp_name_ptr, name_sz) -> do
-  name_ptr :: Ptr C'wasm_name_t <- malloc
-  c'wasm_byte_vec_new name_ptr (fromIntegral name_sz) $ castPtr inp_name_ptr
-  pure name_ptr
+withNameFromString :: String -> (Ptr C'wasm_name_t -> IO a) -> IO a
+withNameFromString name f =
+  withCStringLen name $ \(inp_name_ptr, name_sz) ->
+    alloca $ \(name_ptr :: Ptr C'wasm_name_t) -> do
+      c'wasm_byte_vec_new name_ptr (fromIntegral name_sz) $ castPtr inp_name_ptr
+      f name_ptr
+
+maybeWithNameFromString :: Maybe String -> (Ptr C'wasm_name_t -> IO a) -> IO a
+maybeWithNameFromString Nothing f = f nullPtr
+maybeWithNameFromString (Just name) f = withNameFromString name f
 
 -- | Returns the module this import is importing from.
 importTypeModule :: ImportType -> String
@@ -780,11 +785,11 @@ newExportType ::
   ExternType ->
   ExportType
 newExportType name externType =
-  unsafePerformIO $ mask_ $ do
-    name_ptr <- nameFromString name
-    externtype_ptr <- externTypeToPtr externType
-    c'wasm_exporttype_new name_ptr externtype_ptr
-      >>= newExportTypeFromPtr
+  unsafePerformIO $
+    withNameFromString name $ \name_ptr -> mask_ $ do
+      externtype_ptr <- externTypeToPtr externType
+      c'wasm_exporttype_new name_ptr externtype_ptr
+        >>= newExportTypeFromPtr
 
 -- | Returns the name of this export.
 exportTypeName :: ExportType -> String
