@@ -246,7 +246,7 @@ import Data.Word (Word32, Word64, Word8)
 import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
-import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtr, newForeignPtr, withForeignPtr)
+import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
 import Foreign.Marshal.Alloc (alloca, finalizerFree)
 import Foreign.Marshal.Array
 import Foreign.Marshal.Utils (with)
@@ -2065,7 +2065,8 @@ typedGlobalSet ctx typedGlobal x =
 --------------------------------------------------------------------------------
 
 -- | Representation of a instance in Wasmtime.
-newtype Instance s = Instance {unInstance :: ForeignPtr C'wasmtime_instance_t}
+newtype Instance s = Instance {unInstance :: C'wasmtime_instance_t}
+  deriving (Show)
 
 -- | Instantiate a wasm module.
 --
@@ -2086,9 +2087,8 @@ newInstance ::
 newInstance ctx m externs = unsafeIOToPrim $
   withContext ctx $ \ctx_ptr ->
     withModule m $ \mod_ptr ->
-      withExterns externs $ \externs_ptr n -> do
-        inst_fp <- mallocForeignPtr
-        withForeignPtr inst_fp $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
+      withExterns externs $ \externs_ptr n ->
+        alloca $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
           alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             error_ptr <-
               c'wasmtime_instance_new
@@ -2101,11 +2101,11 @@ newInstance ctx m externs = unsafeIOToPrim $
             checkWasmtimeError error_ptr
             trap_ptr <- peek trap_ptr_ptr
             if trap_ptr == nullPtr
-              then pure $ Right $ Instance inst_fp
+              then Right . Instance <$> peek inst_ptr
               else Left <$> newTrapFromPtr trap_ptr
 
 withInstance :: Instance s -> (Ptr C'wasmtime_instance_t -> IO a) -> IO a
-withInstance = withForeignPtr . unInstance
+withInstance = with . unInstance
 
 -- | Get an export by name from an instance.
 getExport :: MonadPrim s m => Context s -> Instance s -> String -> m (Maybe (Extern s))
