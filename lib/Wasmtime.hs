@@ -702,11 +702,10 @@ newImportType modName mbName externType =
       >>= newImportTypeFromPtr
 
 nameFromString :: String -> IO (Ptr C'wasm_name_t)
-nameFromString name = do
+nameFromString name = withCStringLen name $ \(inp_name_ptr, name_sz) -> do
   name_ptr :: Ptr C'wasm_name_t <- malloc
-  withCStringLen name $ \(inp_name_ptr, name_sz) -> do
-    c'wasm_byte_vec_new name_ptr (fromIntegral name_sz) $ castPtr inp_name_ptr
-    pure name_ptr
+  c'wasm_byte_vec_new name_ptr (fromIntegral name_sz) $ castPtr inp_name_ptr
+  pure name_ptr
 
 -- | Returns the module this import is importing from.
 importTypeModule :: ImportType -> String
@@ -769,8 +768,9 @@ moduleExports m =
     withModule m $ \mod_ptr ->
       alloca $ \(exporttype_vec_ptr :: Ptr C'wasm_exporttype_vec_t) -> mask_ $ do
         c'wasmtime_module_exports mod_ptr exporttype_vec_ptr
-        sz <- peek $ p'wasm_exporttype_vec_t'size exporttype_vec_ptr
-        dt <- peek $ p'wasm_exporttype_vec_t'data exporttype_vec_ptr
+        sz :: CSize <- peek $ p'wasm_exporttype_vec_t'size exporttype_vec_ptr
+        dt :: Ptr (Ptr C'wasm_exporttype_t) <-
+          peek $ p'wasm_exporttype_vec_t'data exporttype_vec_ptr
         vec <- V.generateM (fromIntegral sz) $ \ix -> do
           exporttype_ptr <- peekElemOff dt ix
           c'wasm_exporttype_copy exporttype_ptr >>= newExportTypeFromPtr
