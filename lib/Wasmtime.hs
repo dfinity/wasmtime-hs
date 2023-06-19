@@ -711,10 +711,8 @@ nameFromString name = withCStringLen name $ \(inp_name_ptr, name_sz) -> do
 importTypeModule :: ImportType -> String
 importTypeModule importType =
   unsafePerformIO $
-    withImportType importType $ \importtype_ptr -> do
-      name_ptr <- c'wasm_importtype_module importtype_ptr
-      let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
-      peekByteVecAsString p
+    withImportType importType $
+      c'wasm_importtype_module >=> peekByteVecAsString
 
 -- | Returns the name this import is importing from.
 importTypeName :: ImportType -> Maybe String
