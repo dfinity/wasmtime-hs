@@ -244,7 +244,7 @@ import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
 import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtr, newForeignPtr, withForeignPtr)
-import Foreign.Marshal.Alloc (alloca, finalizerFree, malloc)
+import Foreign.Marshal.Alloc (alloca, finalizerFree)
 import Foreign.Marshal.Array
 import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
@@ -913,14 +913,11 @@ newFuncType _proxy = unsafePerformIO $ mask_ $ do
     withKinds kinds f =
       allocaArray n $ \(valtypes_ptr_ptr :: Ptr (Ptr C'wasm_valtype_t)) -> do
         VU.iforM_ kinds $ \ix k -> do
-          -- The C'wasm_valtype_t will be deleted later via del_valtypes.
           valtype_ptr <- c'wasm_valtype_new k
           pokeElemOff valtypes_ptr_ptr ix valtype_ptr
-        -- c'wasm_functype_new takes ownership of the C'wasm_valtype_vec_t so we
-        -- just malloc here without freeing explicitly later.
-        (valtype_vec_ptr :: Ptr C'wasm_valtype_vec_t) <- malloc
-        c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr_ptr
-        f valtype_vec_ptr
+        alloca $ \(valtype_vec_ptr :: Ptr C'wasm_valtype_vec_t) -> do
+          c'wasm_valtype_vec_new valtype_vec_ptr (fromIntegral n) valtypes_ptr_ptr
+          f valtype_vec_ptr
       where
         n = VU.length kinds
 
