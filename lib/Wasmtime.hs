@@ -722,9 +722,7 @@ importTypeName importType =
       name_ptr <- c'wasm_importtype_name importtype_ptr
       if name_ptr == nullPtr
         then pure Nothing
-        else do
-          let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
-          Just <$> peekByteVecAsString p
+        else Just <$> peekByteVecAsString name_ptr
 
 -- | Returns the type of item this import is importing.
 importTypeType :: ImportType -> ExternType
@@ -2409,8 +2407,9 @@ instance Show WasmtimeError where
     withWasmtimeError wasmtimeError $ \error_ptr ->
       alloca $ \(wasm_name_ptr :: Ptr C'wasm_name_t) -> do
         c'wasmtime_error_message error_ptr wasm_name_ptr
-        let p = castPtr wasm_name_ptr :: Ptr C'wasm_byte_vec_t
-        peekByteVecAsString p
+        msg <- peekByteVecAsString wasm_name_ptr
+        c'wasm_byte_vec_delete wasm_name_ptr
+        pure msg
 
 --------------------------------------------------------------------------------
 -- Utils
