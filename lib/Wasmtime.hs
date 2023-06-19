@@ -1888,8 +1888,8 @@ instance Show GlobalType where
         KindF32 -> "Float"
         KindF64 -> "Double"
         KindV128 -> "Word128"
-        KindFuncRef -> "FuncRef" -- FIXME !!!
-        KindExternRef -> "ExternRef" -- FIXME !!!
+        KindFuncRef -> "(Func s)"
+        KindExternRef -> "(Ptr C'wasmtime_externref_t)" -- FIXME !!!
       mut = globalTypeMutability gt
 
 withGlobalType :: GlobalType -> (Ptr C'wasm_globaltype_t -> IO a) -> IO a
