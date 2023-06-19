@@ -675,13 +675,16 @@ moduleImports m =
   unsafePerformIO $
     withModule m $ \mod_ptr ->
       alloca $ \(importtype_vec_ptr :: Ptr C'wasm_importtype_vec_t) -> mask_ $ do
+        -- Ownership of the wasm_importtype_vec_t is passed to the caller
+        -- so we have to copy the contained wasm_importtype_t elements
+        -- and finally delete the wasm_importtype_vec_t:
         c'wasmtime_module_imports mod_ptr importtype_vec_ptr
         sz :: CSize <- peek $ p'wasm_importtype_vec_t'size importtype_vec_ptr
         dt :: Ptr (Ptr C'wasm_importtype_t) <-
           peek $ p'wasm_importtype_vec_t'data importtype_vec_ptr
-        vec <- V.generateM (fromIntegral sz) $ \ix -> do
-          importtype_ptr :: Ptr C'wasm_importtype_t <- peekElemOff dt ix
-          c'wasm_importtype_copy importtype_ptr >>= newImportTypeFromPtr
+        vec <-
+          V.generateM (fromIntegral sz) $
+            peekElemOff dt >=> c'wasm_importtype_copy >=> newImportTypeFromPtr
         c'wasm_importtype_vec_delete importtype_vec_ptr
         pure vec
 
@@ -770,13 +773,16 @@ moduleExports m =
   unsafePerformIO $
     withModule m $ \mod_ptr ->
       alloca $ \(exporttype_vec_ptr :: Ptr C'wasm_exporttype_vec_t) -> mask_ $ do
+        -- Ownership of the wasm_exporttype_vec_t is passed to the caller
+        -- so we have to copy the contained wasm_exporttype_t elements
+        -- and finally delete the wasm_exporttype_vec_t:
         c'wasmtime_module_exports mod_ptr exporttype_vec_ptr
         sz :: CSize <- peek $ p'wasm_exporttype_vec_t'size exporttype_vec_ptr
         dt :: Ptr (Ptr C'wasm_exporttype_t) <-
           peek $ p'wasm_exporttype_vec_t'data exporttype_vec_ptr
-        vec <- V.generateM (fromIntegral sz) $ \ix -> do
-          exporttype_ptr <- peekElemOff dt ix
-          c'wasm_exporttype_copy exporttype_ptr >>= newExportTypeFromPtr
+        vec <-
+          V.generateM (fromIntegral sz) $
+            peekElemOff dt >=> c'wasm_exporttype_copy >=> newExportTypeFromPtr
         c'wasm_exporttype_vec_delete exporttype_vec_ptr
         pure vec
 
@@ -797,10 +803,8 @@ newExportType name externType =
 exportTypeName :: ExportType -> String
 exportTypeName exportType =
   unsafePerformIO $
-    withExportType exportType $ \exporttype_ptr -> do
-      name_ptr <- c'wasm_exporttype_name exporttype_ptr
-      let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
-      peekByteVecAsString p
+    withExportType exportType $
+      c'wasm_exporttype_name >=> peekByteVecAsString
 
 -- | Returns the type of this export.
 exportTypeType :: ExportType -> ExternType
