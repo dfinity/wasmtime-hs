@@ -246,8 +246,8 @@ import Data.Word (Word32, Word64, Word8)
 import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
-import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
-import Foreign.Marshal.Alloc (alloca, finalizerFree)
+import Foreign.ForeignPtr (ForeignPtr, withForeignPtr)
+import Foreign.Marshal.Alloc (alloca, free)
 import Foreign.Marshal.Array
 import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
@@ -277,7 +277,9 @@ newEngine :: IO Engine
 newEngine = mask_ $ do
   engine_ptr <- c'wasm_engine_new
   checkAllocation engine_ptr
-  Engine <$> newForeignPtr p'wasm_engine_delete engine_ptr
+  fmap Engine $ Foreign.Concurrent.newForeignPtr engine_ptr $ do
+    putStrLn "Finalize: Engine"
+    c'wasm_engine_delete engine_ptr
 
 withEngine :: Engine -> (Ptr C'wasm_engine_t -> IO a) -> IO a
 withEngine = withForeignPtr . unEngine
@@ -290,7 +292,9 @@ newEngineWithConfig cfg = mask_ $ do
   unConfig cfg cfg_ptr `onException` c'wasm_config_delete cfg_ptr
   engine_ptr <- c'wasm_engine_new_with_config cfg_ptr
   checkAllocation engine_ptr `onException` c'wasm_config_delete cfg_ptr
-  Engine <$> newForeignPtr p'wasm_engine_delete engine_ptr
+  fmap Engine $ Foreign.Concurrent.newForeignPtr engine_ptr $ do
+    putStrLn "Finalize: Engine"
+    c'wasm_engine_delete engine_ptr
 
 -- | Increments the engine-local epoch variable.
 --
@@ -514,7 +518,9 @@ newStore :: MonadPrim s m => Engine -> m (Store s)
 newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
   wasmtime_store_ptr <- c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
   checkAllocation wasmtime_store_ptr
-  Store <$> newForeignPtr p'wasmtime_store_delete wasmtime_store_ptr
+  fmap Store $ Foreign.Concurrent.newForeignPtr wasmtime_store_ptr $ do
+    putStrLn "Finalize: Store"
+    c'wasmtime_store_delete wasmtime_store_ptr
 
 withStore :: Store s -> (Ptr C'wasmtime_store_t -> IO a) -> IO a
 withStore = withForeignPtr . unStore
@@ -610,7 +616,8 @@ wat2wasm (BI.BS inp_fp inp_size) =
       let word_ptr :: Ptr Word8
           word_ptr = castPtr data_ptr
       out_fp <-
-        Foreign.Concurrent.newForeignPtr word_ptr $
+        Foreign.Concurrent.newForeignPtr word_ptr $ do
+          putStrLn "Finalize: Wasm"
           c'wasm_byte_vec_delete wasm_byte_vec_ptr
       pure $ Wasm $ BI.fromForeignPtr0 out_fp $ fromIntegral size
 
@@ -639,7 +646,9 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
               module_ptr_ptr
           checkWasmtimeError error_ptr
           module_ptr <- peek module_ptr_ptr
-          Module <$> newForeignPtr p'wasmtime_module_delete module_ptr
+          fmap Module $ Foreign.Concurrent.newForeignPtr module_ptr $ do
+            putStrLn "Finalize: Module"
+            c'wasmtime_module_delete module_ptr
 
 withModule :: Module -> (Ptr C'wasmtime_module_t -> IO a) -> IO a
 withModule = withForeignPtr . unModule
@@ -670,7 +679,9 @@ withImportType :: ImportType -> (Ptr C'wasm_importtype_t -> IO a) -> IO a
 withImportType = withForeignPtr . unImportType
 
 newImportTypeFromPtr :: Ptr C'wasm_importtype_t -> IO ImportType
-newImportTypeFromPtr = fmap ImportType . newForeignPtr p'wasm_importtype_delete
+newImportTypeFromPtr p = fmap ImportType $ Foreign.Concurrent.newForeignPtr p $ do
+  putStrLn "Finalize: ImportType"
+  c'wasm_importtype_delete p
 
 -- | Returns a vector of imports that this module expects.
 moduleImports :: Module -> Vector ImportType
@@ -768,7 +779,9 @@ withExportType :: ExportType -> (Ptr C'wasm_exporttype_t -> IO a) -> IO a
 withExportType = withForeignPtr . unExportType
 
 newExportTypeFromPtr :: Ptr C'wasm_exporttype_t -> IO ExportType
-newExportTypeFromPtr = fmap ExportType . newForeignPtr p'wasm_exporttype_delete
+newExportTypeFromPtr p = fmap ExportType $ Foreign.Concurrent.newForeignPtr p $ do
+  putStrLn "Finalize: ExportType"
+  c'wasm_exporttype_delete p
 
 -- | Returns the list of exports that this module provides.
 moduleExports :: Module -> Vector ExportType
@@ -895,7 +908,9 @@ withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
 withFuncType = withForeignPtr . unFuncType
 
 newFuncTypeFromPtr :: Ptr C'wasm_functype_t -> IO FuncType
-newFuncTypeFromPtr = fmap FuncType . newForeignPtr p'wasm_functype_delete
+newFuncTypeFromPtr p = fmap FuncType $ Foreign.Concurrent.newForeignPtr p $ do
+  putStrLn "Finalize: FuncType"
+  c'wasm_functype_delete p
 
 -- | Creates a new function type with the parameter and result types of the
 -- Haskell function @f@.
@@ -1393,7 +1408,9 @@ callFunc ::
   f
 callFunc ctx typedFunc = unsafePerformIO $ mask_ $ do
   args_and_results_ptr :: Ptr C'wasmtime_val_raw_t <- mallocArray len
-  args_and_results_fp <- newForeignPtr finalizerFree args_and_results_ptr
+  args_and_results_fp <- Foreign.Concurrent.newForeignPtr args_and_results_ptr $ do
+    putStrLn "Finalize: C'wasmtime_val_raw_t"
+    free args_and_results_ptr
   pure $ exportCall args_and_results_fp 0 (fromIntegral len) ctx (fromTypedFunc typedFunc)
   where
     nargs = nrOfParams $ Proxy @f
@@ -1493,7 +1510,9 @@ instance Show MemoryType where
       wordLen = wordLength mt
 
 newMemoryTypeFromPtr :: Ptr C'wasm_memorytype_t -> IO MemoryType
-newMemoryTypeFromPtr = fmap MemoryType . newForeignPtr p'wasm_memorytype_delete
+newMemoryTypeFromPtr p = fmap MemoryType $ Foreign.Concurrent.newForeignPtr p $ do
+  putStrLn "Finalize: MemoryType"
+  c'wasm_memorytype_delete p
 
 -- | Creates a descriptor for a WebAssembly 'Memory' with the specified minimum number of memory pages,
 -- an optional maximum of memory pages, and a 64 bit flag, where false defaults to 32 bit memory.
@@ -1570,7 +1589,9 @@ getMemoryType ctx mem = unsafePerformIO $
   withContext ctx $ \ctx_ptr ->
     withMemory mem $ \mem_ptr -> mask_ $ do
       memtype_ptr <- c'wasmtime_memory_type ctx_ptr mem_ptr
-      MemoryType <$> newForeignPtr p'wasm_memorytype_delete memtype_ptr
+      fmap MemoryType $ Foreign.Concurrent.newForeignPtr memtype_ptr $ do
+        putStrLn "Finalize: MemoryType"
+        c'wasm_memorytype_delete memtype_ptr
 
 -- | Returns the linear memory size in bytes. Always a multiple of 64KB (65536).
 getMemorySizeBytes :: MonadPrim s m => Context s -> Memory s -> m Word64
@@ -1699,7 +1720,9 @@ withTableType :: TableType -> (Ptr C'wasm_tabletype_t -> IO a) -> IO a
 withTableType = withForeignPtr . getWasmtimeTableType
 
 newTableTypeFromPtr :: Ptr C'wasm_tabletype_t -> IO TableType
-newTableTypeFromPtr = fmap TableType . newForeignPtr p'wasm_tabletype_delete
+newTableTypeFromPtr p = fmap TableType $ Foreign.Concurrent.newForeignPtr p $ do
+  putStrLn "Finalize: TableType"
+  c'wasm_tabletype_delete p
 
 -- | The type of a table.
 data TableRefType = FuncRef | ExternRef
@@ -1904,7 +1927,9 @@ newGlobalType proxy mutability = unsafePerformIO $ do
 
 newGlobalTypeFromPtr :: Ptr C'wasm_globaltype_t -> IO GlobalType
 newGlobalTypeFromPtr globaltype_ptr =
-  GlobalType <$> newForeignPtr p'wasm_globaltype_delete globaltype_ptr
+  fmap GlobalType $ Foreign.Concurrent.newForeignPtr globaltype_ptr $ do
+    putStrLn "Finalize: GlobalType"
+    c'wasm_globaltype_delete globaltype_ptr
 
 newGlobalTypePtr :: HasKind a => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
 newGlobalTypePtr proxy mutability = do
@@ -2255,7 +2280,9 @@ newTrap msg = unsafePerformIO $ withCStringLen msg $ \(p, n) ->
   mask_ $ c'wasmtime_trap_new p (fromIntegral n) >>= newTrapFromPtr
 
 newTrapFromPtr :: Ptr C'wasm_trap_t -> IO Trap
-newTrapFromPtr = fmap Trap . newForeignPtr p'wasm_trap_delete
+newTrapFromPtr p = fmap Trap $ Foreign.Concurrent.newForeignPtr p $ do
+  putStrLn "Finalize: Trap"
+  c'wasm_trap_delete p
 
 withTrap :: Trap -> (Ptr C'wasm_trap_t -> IO a) -> IO a
 withTrap = withForeignPtr . unTrap
@@ -2365,7 +2392,9 @@ trapTrace trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
 newtype Frame = Frame {unFrame :: ForeignPtr C'wasm_frame_t}
 
 newFrameFromPtr :: Ptr C'wasm_frame_t -> IO Frame
-newFrameFromPtr = fmap Frame . newForeignPtr p'wasm_frame_delete
+newFrameFromPtr p = fmap Frame $ Foreign.Concurrent.newForeignPtr p $ do
+  putStrLn "Finalize: Frame"
+  c'wasm_frame_delete p
 
 withFrame :: Frame -> (Ptr C'wasm_frame_t -> IO a) -> IO a
 withFrame = withForeignPtr . unFrame
@@ -2426,7 +2455,9 @@ checkAllocation ptr = when (ptr == nullPtr) $ throwIO AllocationFailed
 newtype WasmtimeError = WasmtimeError {unWasmtimeError :: ForeignPtr C'wasmtime_error_t}
 
 newWasmtimeErrorFromPtr :: Ptr C'wasmtime_error_t -> IO WasmtimeError
-newWasmtimeErrorFromPtr = fmap WasmtimeError . newForeignPtr p'wasmtime_error_delete
+newWasmtimeErrorFromPtr p = fmap WasmtimeError $ Foreign.Concurrent.newForeignPtr p $ do
+  putStrLn "Finalize: WasmtimeError"
+  c'wasmtime_error_delete p
 
 checkWasmtimeError :: Ptr C'wasmtime_error_t -> IO ()
 checkWasmtimeError error_ptr = when (error_ptr /= nullPtr) $ do
