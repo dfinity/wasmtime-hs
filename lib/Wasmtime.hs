@@ -630,7 +630,7 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
   try $
     withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
       withEngine engine $ \engine_ptr ->
-        alloca $ \module_ptr_ptr -> mask_ $ do
+        allocaNullPtr $ \module_ptr_ptr -> mask_ $ do
           error_ptr <-
             c'wasmtime_module_new
               engine_ptr
@@ -1293,7 +1293,7 @@ instance Results r => Funcable (IO (Either Trap r)) where
     withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) ->
       withContext ctx $ \ctx_ptr ->
         withFunc func $ \func_ptr ->
-          alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+          allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             error_ptr <-
               c'wasmtime_func_call_unchecked
                 ctx_ptr
@@ -2089,7 +2089,7 @@ newInstance ctx m externs = unsafeIOToPrim $
     withModule m $ \mod_ptr ->
       withExterns externs $ \externs_ptr n ->
         alloca $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
-          alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+          allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             error_ptr <-
               c'wasmtime_instance_new
                 ctx_ptr
@@ -2461,3 +2461,10 @@ withNonNullPtr :: (Ptr a -> IO b) -> Ptr a -> IO (Maybe b)
 withNonNullPtr f ptr
   | ptr == nullPtr = pure Nothing
   | otherwise = Just <$> f ptr
+
+-- | Allocate a pointer to a pointer and initialise it with NULL before calling
+-- the continuation on it.
+allocaNullPtr :: (Ptr (Ptr a) -> IO b) -> IO b
+allocaNullPtr f = alloca $ \ptr_ptr -> do
+  poke ptr_ptr nullPtr
+  f ptr_ptr
