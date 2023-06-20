@@ -55,6 +55,14 @@
         packages.gcd-c = check_c_example "gcd";
         packages.memory-c = check_c_example "memory";
 
+        packages.segfault-c = pkgs.runCommandCC "segfault-c"
+          {
+            buildInputs = [ pkgs.wasmtime.dev ];
+          } ''
+          mkdir -p $out/bin
+          cc ${./test/segfault.c} -lwasmtime -o $out/bin/segfault-c
+        '';
+
         # The default development shell brings in all dependencies of
         # wasmtime-hs (like all Haskell dependencies, libwasmtime, GHC).
         # Additionally we bring in cabal and HLS so VS Code works out of the
@@ -64,6 +72,7 @@
           nativeBuildInputs = [
             pkgs.cabal-install
             haskellPackages.haskell-language-server
+            pkgs.gdb
           ];
         };
         # so that we can format .nix code using: nix fmt

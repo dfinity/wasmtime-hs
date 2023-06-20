@@ -128,3 +128,13 @@ test-suite fuel
     build-depends:    wasmtime
     build-depends:    tasty >= 1.4.3
     build-depends:    tasty-hunit >= 0.10.0
+
+executable segfault
+  ghc-options: -rtsopts
+
+  hs-source-dirs: test
+  main-is: segfault.hs
+
+  build-depends: base >=4.12 && <5
+
+  extra-libraries: wasmtime
