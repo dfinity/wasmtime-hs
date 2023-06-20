@@ -6,6 +6,7 @@ module Main (main) where
 import Control.Exception (Exception, throwIO)
 import Control.Monad.Primitive (MonadPrim, RealWorld)
 import qualified Data.ByteString as B
+import Data.Foldable (for_)
 import Data.Int (Int32)
 import Data.Word (Word8)
 import Paths_wasmtime (getDataFileName)
@@ -22,33 +23,37 @@ main = do
   engine <- newEngine
   store <- newStore engine
   ctx <- storeContext store
-  --   wasm <- wasmFromPath "test/c.wat"
-  wasm <- wasmFromPath' "test/c.wasm"
+  wasm <- wasmFromPath "test/c.wat"
+  --   wasm <- wasmFromPath' "test/c.wasm"
 
   putStrLn "Compiling module..."
   myModule <- handleWasmtimeError $ newModule engine wasm
 
-  f <- newFunc ctx msg_reply
+  for_ ([1 ..] :: [Int32]) $ \i -> do
+    print i
+    f <- newFunc ctx msg_reply
 
-  putStrLn "Instantiating module..."
-  inst <- newInstance ctx myModule [toExtern f]
-  inst <- case inst of
-    Left trap -> do
-      print ("trap", trap)
-      error "nok"
-    Right inst -> do
-      putStrLn "ok got inst"
-      pure inst
+    putStrLn "Instantiating module..."
+    inst <- newInstance ctx myModule [toExtern f]
+    inst <- case inst of
+      Left trap -> do
+        print ("trap", trapCode trap)
+        error "nok"
+      Right inst -> do
+        putStrLn "ok got inst"
+        pure inst
 
-  putStrLn "Extracting exports..."
-  --   Just memory <- getExportedMemory ctx inst "memory"
-  Just (init :: TypedFunc RealWorld (IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "canister_init"
-  Just (readf :: TypedFunc RealWorld (IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "canister_query get"
+    putStrLn "Extracting exports..."
+    --   Just memory <- getExportedMemory ctx inst "memory"
+    Just (init :: TypedFunc RealWorld (IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "canister_init"
+    Just (readf :: TypedFunc RealWorld (IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "canister_query get"
 
-  res <- callFunc ctx init
-  print ("res", res)
-  res <- callFunc ctx readf
-  print ("res", res)
+    res <- callFunc ctx init
+    print ("res", res)
+    res <- callFunc ctx readf
+    print ("res", res)
+
+  putStrLn "end"
 
 msg_reply :: IO (Either Trap ())
 msg_reply = return $ Right ()
