@@ -630,7 +630,7 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
   try $
     withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
       withEngine engine $ \engine_ptr ->
-        alloca $ \module_ptr_ptr -> mask_ $ do
+        allocaNullPtr $ \module_ptr_ptr -> mask_ $ do
           error_ptr <-
             c'wasmtime_module_new
               engine_ptr
@@ -1293,7 +1293,7 @@ instance Results r => Funcable (IO (Either Trap r)) where
     withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) ->
       withContext ctx $ \ctx_ptr ->
         withFunc func $ \func_ptr ->
-          alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+          allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             error_ptr <-
               c'wasmtime_func_call_unchecked
                 ctx_ptr
@@ -2089,7 +2089,7 @@ newInstance ctx m externs = unsafeIOToPrim $
     withModule m $ \mod_ptr ->
       withExterns externs $ \externs_ptr n ->
         alloca $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
-          alloca $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+          allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             error_ptr <-
               c'wasmtime_instance_new
                 ctx_ptr
@@ -2258,15 +2258,14 @@ newTrapFromPtr :: Ptr C'wasm_trap_t -> IO Trap
 newTrapFromPtr = fmap Trap . newForeignPtr p'wasm_trap_delete
 
 withTrap :: Trap -> (Ptr C'wasm_trap_t -> IO a) -> IO a
-withTrap trap = withForeignPtr (unTrap trap)
+withTrap = withForeignPtr . unTrap
 
 instance Show Trap where
   show trap = unsafePerformIO $
     withTrap trap $ \trap_ptr ->
       alloca $ \(wasm_msg_ptr :: Ptr C'wasm_message_t) -> do
         c'wasm_trap_message trap_ptr wasm_msg_ptr
-        let p = castPtr wasm_msg_ptr :: Ptr C'wasm_byte_vec_t
-        peekByteVecAsString p
+        peekByteVecAsString wasm_msg_ptr
 
 instance Exception Trap
 
@@ -2333,11 +2332,11 @@ data TrapCode
 -- This function may return 'Nothing', for example, for traps created when there
 -- wasn't anything on the wasm stack.
 trapOrigin :: Trap -> Maybe Frame
-trapOrigin trap = unsafePerformIO $ withTrap trap $ \trap_ptr -> mask_ $ do
-  frame_ptr <- c'wasm_trap_origin trap_ptr
-  if frame_ptr == nullPtr
-    then pure Nothing
-    else Just <$> newFrameFromPtr frame_ptr
+trapOrigin trap =
+  unsafePerformIO $
+    mask_ $
+      withTrap trap $
+        c'wasm_trap_origin >=> withNonNullPtr newFrameFromPtr
 
 -- | Returns the trace of wasm frames for this trap.
 --
@@ -2348,10 +2347,11 @@ trapTrace :: Trap -> Vector Frame
 trapTrace trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
   alloca $ \(frame_vec_ptr :: Ptr C'wasm_frame_vec_t) -> mask_ $ do
     c'wasm_trap_trace trap_ptr frame_vec_ptr
-    frame_vec <- peek frame_vec_ptr
-    let sz = fromIntegral $ c'wasm_frame_vec_t'size frame_vec :: Int
-    let dt = c'wasm_frame_vec_t'data frame_vec :: Ptr (Ptr C'wasm_frame_t)
-    vec <- V.generateM sz $ peekElemOff dt >=> c'wasm_frame_copy >=> newFrameFromPtr
+    sz :: CSize <- peek $ p'wasm_frame_vec_t'size frame_vec_ptr
+    dt :: Ptr (Ptr C'wasm_frame_t) <- peek $ p'wasm_frame_vec_t'data frame_vec_ptr
+    vec <-
+      V.generateM (fromIntegral sz) $
+        peekElemOff dt >=> c'wasm_frame_copy >=> newFrameFromPtr
     c'wasm_frame_vec_delete frame_vec_ptr
     pure vec
 
@@ -2368,33 +2368,29 @@ newFrameFromPtr :: Ptr C'wasm_frame_t -> IO Frame
 newFrameFromPtr = fmap Frame . newForeignPtr p'wasm_frame_delete
 
 withFrame :: Frame -> (Ptr C'wasm_frame_t -> IO a) -> IO a
-withFrame frame = withForeignPtr (unFrame frame)
+withFrame = withForeignPtr . unFrame
 
 -- | Returns 'Just' a human-readable name for this frame's function.
 --
 -- This function will attempt to load a human-readable name for the function
 -- this frame points to. This function may return 'Nothing'.
 frameFuncName :: Frame -> Maybe String
-frameFuncName frame = unsafePerformIO $ withFrame frame $ \frame_ptr -> do
-  name_ptr <- c'wasmtime_frame_func_name frame_ptr
-  if name_ptr == nullPtr
-    then pure Nothing
-    else do
-      let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
-      Just <$> peekByteVecAsString p
+frameFuncName frame =
+  unsafePerformIO $
+    withFrame frame $
+      c'wasmtime_frame_func_name
+        >=> withNonNullPtr peekByteVecAsString
 
 -- | Returns 'Just' a human-readable name for this frame's module.
 --
 -- This function will attempt to load a human-readable name for the module this
 -- frame points to. This function may return 'Nothing'.
 frameModuleName :: Frame -> Maybe String
-frameModuleName frame = unsafePerformIO $ withFrame frame $ \frame_ptr -> do
-  name_ptr <- c'wasmtime_frame_module_name frame_ptr
-  if name_ptr == nullPtr
-    then pure Nothing
-    else do
-      let p = castPtr name_ptr :: Ptr C'wasm_byte_vec_t
-      Just <$> peekByteVecAsString p
+frameModuleName frame =
+  unsafePerformIO $
+    withFrame frame $
+      c'wasmtime_frame_module_name
+        >=> withNonNullPtr peekByteVecAsString
 
 -- | Returns the function index in the original wasm module that this
 -- frame corresponds to.
@@ -2460,3 +2456,15 @@ peekByteVecAsString p = do
   data_ptr <- peek $ p'wasm_byte_vec_t'data p
   size <- peek $ p'wasm_byte_vec_t'size p
   peekCStringLen (data_ptr, fromIntegral size)
+
+withNonNullPtr :: (Ptr a -> IO b) -> Ptr a -> IO (Maybe b)
+withNonNullPtr f ptr
+  | ptr == nullPtr = pure Nothing
+  | otherwise = Just <$> f ptr
+
+-- | Allocate a pointer to a pointer and initialise it with NULL before calling
+-- the continuation on it.
+allocaNullPtr :: (Ptr (Ptr a) -> IO b) -> IO b
+allocaNullPtr f = alloca $ \ptr_ptr -> do
+  poke ptr_ptr nullPtr
+  f ptr_ptr
