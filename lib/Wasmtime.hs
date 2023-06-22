@@ -104,6 +104,7 @@ module Wasmtime
     -- * Functions
     FuncType,
     newFuncType,
+    (.->.),
     funcTypeParams,
     funcTypeResults,
     Func,
@@ -889,7 +890,16 @@ newExternTypeFromPtr externtype_ptr = do
 newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
 
 instance Show FuncType where
-  show _ft = "(TODO: define Show FuncType instance !!!)" -- FIXME !!!
+  showsPrec p ft =
+    showParen (p > arrowPrec) $
+      showsArg (funcTypeParams ft)
+        . showString " .->. "
+        . showsArg (funcTypeResults ft)
+    where
+      arrowPrec = 0
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (arrowPrec + 1)
 
 withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
 withFuncType = withForeignPtr . unFuncType
@@ -907,10 +917,29 @@ newFuncType ::
   ) =>
   Proxy f ->
   FuncType
-newFuncType _proxy = unsafePerformIO $ mask_ $ do
-  withKinds (paramKinds $ Proxy @f) $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
-    withKinds (resultKinds $ Proxy @r) $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) ->
-      c'wasm_functype_new params_ptr result_ptr >>= newFuncTypeFromPtr
+newFuncType _proxy =
+  newFuncTypeFromValKinds (paramKinds $ Proxy @f) (resultKinds $ Proxy @r)
+
+infixr 0 .->.
+
+-- | Creates a new function type with the given parameter and result kinds.
+(.->.) ::
+  -- | Parameter kinds
+  V.Vector Kind ->
+  -- | Result kinds
+  V.Vector Kind ->
+  FuncType
+params .->. result =
+  newFuncTypeFromValKinds
+    (V.convert $ fmap toWasmKind $ params)
+    (V.convert $ fmap toWasmKind $ result)
+
+newFuncTypeFromValKinds :: VU.Vector C'wasm_valkind_t -> VU.Vector C'wasm_valkind_t -> FuncType
+newFuncTypeFromValKinds params results = unsafePerformIO $
+  mask_ $
+    withKinds params $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
+      withKinds results $ \(result_ptr :: Ptr C'wasm_valtype_vec_t) ->
+        c'wasm_functype_new params_ptr result_ptr >>= newFuncTypeFromPtr
   where
     withKinds :: VU.Vector C'wasm_valkind_t -> (Ptr C'wasm_valtype_vec_t -> IO a) -> IO a
     withKinds kinds f =
@@ -1368,9 +1397,7 @@ toTypedFunc ctx func = unsafeIOToPrim $
     desired_results = resultKinds $ Proxy @r
 
     kindsOf :: C'wasm_valtype_vec_t -> IO (VU.Vector C'wasm_valkind_t)
-    kindsOf valtype_vec = VU.generateM s $ \ix -> do
-      cur_valtype_ptr <- peekElemOff p ix
-      c'wasm_valtype_kind cur_valtype_ptr
+    kindsOf valtype_vec = VU.generateM s $ peekElemOff p >=> c'wasm_valtype_kind
       where
         s :: Int
         s = fromIntegral $ c'wasm_valtype_vec_t'size valtype_vec
