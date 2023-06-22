@@ -23,18 +23,18 @@ main = do
   engine <- newEngine
   store <- newStore engine
   ctx <- storeContext store
-  wasm <- wasmFromPath "test/c.wat"
-  --   wasm <- wasmFromPath' "test/c.wasm"
+  wasm <- wasmFromPath "test/memtest.wat"
 
   putStrLn "Compiling module..."
   myModule <- handleWasmtimeError $ newModule engine wasm
 
-  for_ ([1 ..] :: [Int32]) $ \i -> do
+  for_ ([1 .. ] :: [Int32]) $ \i -> do
     print i
-    f <- newFunc ctx msg_reply
+    fIo <- newFunc ctx io_imp
+    fPure <- newFunc ctx pure_imp
 
     putStrLn "Instantiating module..."
-    inst <- newInstance ctx myModule [toExtern f]
+    inst <- newInstance ctx myModule [toExtern fIo, toExtern fPure]
     inst <- case inst of
       Left trap -> do
         print ("trap", trapCode trap)
@@ -44,19 +44,28 @@ main = do
         pure inst
 
     putStrLn "Extracting exports..."
-    --   Just memory <- getExportedMemory ctx inst "memory"
-    Just (init :: TypedFunc RealWorld (IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "canister_init"
-    Just (readf :: TypedFunc RealWorld (IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "canister_query get"
+    Just memory <- getExportedMemory ctx inst "memory"
+    Just (size :: TypedFunc RealWorld (IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "size"
+    Just (load :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "load"
+    Just (store :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
+    Just (callImportedPure :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "call_imported_pure"
+    Just (callImportedIo :: TypedFunc RealWorld ( IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "call_imported_io"
 
-    res <- callFunc ctx init
+    Right res <- callFunc ctx size
     print ("res", res)
-    res <- callFunc ctx readf
+    Right res <- callFunc ctx load 3
     print ("res", res)
 
+
+  -- x <- readLn
+  -- putStrLn x
   putStrLn "end"
 
-msg_reply :: IO (Either Trap ())
-msg_reply = return $ Right ()
+io_imp :: IO (Either Trap ())
+io_imp = Right <$> putStrLn "hello io"
+
+pure_imp :: Int32 -> IO (Either Trap Int32)
+pure_imp x = pure . Right $ x * (x - 1)
 
 handleWasmtimeError :: Either WasmtimeError a -> IO a
 handleWasmtimeError = either throwIO pure
