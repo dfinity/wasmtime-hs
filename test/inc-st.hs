@@ -1,5 +1,3 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
@@ -46,15 +44,15 @@ st engine myModule = do
 
   Right (inst :: Instance s) <- newInstance ctx myModule [toExtern func]
 
-  Just (runTypedFunc :: TypedFunc s (ST s (Either Trap (List '[])))) <-
+  Just (runTypedFunc :: TypedFunc s (ST s (Either Trap ()))) <-
     getExportedTypedFunc ctx inst "run"
 
-  Right Nil <- callFunc ctx runTypedFunc
+  Right () <- callFunc ctx runTypedFunc
 
   readSTRef stRef
 
-inc :: STRef s Int -> ST s (Either Trap (List '[]))
-inc stRef = Right Nil <$ modifySTRef stRef (+ 1)
+inc :: STRef s Int -> ST s (Either Trap ())
+inc stRef = Right <$> modifySTRef stRef (+ 1)
 
 handleException :: Exception e => Either e r -> IO r
 handleException = either throwIO pure
