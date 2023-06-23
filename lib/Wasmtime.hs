@@ -1339,7 +1339,7 @@ callFunc ctx typedFunc = curry callFuncOnParams
           withFunc (fromTypedFunc typedFunc) $ \func_ptr ->
             allocaArray n $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
               pokeRawVals args_and_results_ptr params
-              allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+              allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> mask_ $ do
                 error_ptr <-
                   c'wasmtime_func_call_unchecked
                     ctx_ptr
