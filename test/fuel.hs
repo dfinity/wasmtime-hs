@@ -1,3 +1,5 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -35,13 +37,13 @@ main = do
   inst <- newInstance ctx myModule [] >>= handleException
 
   putStrLn "Extracting exports..."
-  Just (fib :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "fibonacci"
+  Just (fib :: TypedFunc RealWorld (Int32 -> IO (Either Trap (List '[Int32])))) <- getExportedTypedFunc ctx inst "fibonacci"
   (Left trap :: Either Trap ()) <- try $ for_ ([1 ..] :: [Int32]) $ \i -> do
     Just fuel_before <- fuelConsumed ctx
     res <- callFunc ctx fib i
     case res of
       Left trap -> putStrLn ("Exhausted fuel computing fib " ++ show i) >> throwIO trap
-      Right m -> do
+      Right (m :. Nil) -> do
         Just fuel_after <- fuelConsumed ctx
         let diff = fuel_after - fuel_before
         putStrLn $ "fib " ++ show i ++ " = " ++ show m ++ " consumed " ++ show diff ++ " fuel."
