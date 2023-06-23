@@ -2453,7 +2453,7 @@ infixr 5 :.
 -- (Internally it's also used to pass parameters to WASM functions).
 --
 -- See the documentation of 'toTypedFunc' for an example.
-data List as where
+data List (as :: [Type]) where
   Nil :: List '[]
   (:.) :: a -> List as -> List (a ': as)
 
@@ -2469,7 +2469,7 @@ instance Ord (List '[]) where
 instance (Ord a, Ord (List as)) => Ord (List (a ': as)) where
   (x :. xs) `compare` (y :. ys) = x `compare` y <> xs `compare` ys
 
-type family Foldr f z xs where
+type family Foldr f z (xs :: [Type]) where
   Foldr f z '[] = z
   Foldr f z (x ': xs) = f x (Foldr f z xs)
 
