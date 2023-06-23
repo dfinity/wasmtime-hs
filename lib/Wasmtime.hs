@@ -376,7 +376,8 @@ setConfig f x = Config $ \cfg_ptr -> f cfg_ptr x
 setDebugInfo :: Bool -> Config
 setDebugInfo = setConfig c'wasmtime_config_debug_info_set
 
--- | Configures whether execution of WebAssembly will “consume fuel” to either halt or yield execution as desired.
+-- | Configures whether execution of WebAssembly will “consume fuel” to either
+-- halt or yield execution as desired.
 setConsumeFuel :: Bool -> Config
 setConsumeFuel = setConfig c'wasmtime_config_consume_fuel_set
 
@@ -414,7 +415,8 @@ setWasmRelaxedSimd = setConfig c'wasmtime_config_wasm_relaxed_simd_set
 setWasmRelaxedSimdDeterministic :: Bool -> Config
 setWasmRelaxedSimdDeterministic = setConfig c'wasmtime_config_wasm_relaxed_simd_deterministic_set
 
--- | Configures whether the WebAssembly bulk memory operations proposal will be enabled for compilation.
+-- | Configures whether the WebAssembly bulk memory operations proposal will be
+-- enabled for compilation.
 --
 -- Defaults to True.
 setWasmBulkMemory :: Bool -> Config
@@ -454,20 +456,33 @@ setCaneliftNanCanonicalization = setConfig c'wasmtime_config_cranelift_nan_canon
 -- setStaticMemoryForced :: Bool -> Config -> Config
 -- setStaticMemoryForced = setConfig c'wasmtime_config_static_memory_forced_set
 
--- | Configures the maximum size, in bytes, where a linear memory is considered static, above which it’ll be considered dynamic.
+-- | Configures the maximum size, in bytes, where a linear memory is considered
+-- static, above which it’ll be considered dynamic.
 --
--- The default value for this property depends on the host platform. For 64-bit platforms there’s lots of address space available, so the default configured here is 4GB. WebAssembly linear memories currently max out at 4GB which means that on 64-bit platforms Wasmtime by default always uses a static memory. This, coupled with a sufficiently sized guard region, should produce the fastest JIT code on 64-bit platforms, but does require a large address space reservation for each wasm memory.
--- For 32-bit platforms this value defaults to 1GB. This means that wasm memories whose maximum size is less than 1GB will be allocated statically, otherwise they’ll be considered dynamic.
+-- The default value for this property depends on the host platform. For 64-bit
+-- platforms there’s lots of address space available, so the default configured
+-- here is 4GB. WebAssembly linear memories currently max out at 4GB which means
+-- that on 64-bit platforms Wasmtime by default always uses a static
+-- memory. This, coupled with a sufficiently sized guard region, should produce
+-- the fastest JIT code on 64-bit platforms, but does require a large address
+-- space reservation for each wasm memory.  For 32-bit platforms this value
+-- defaults to 1GB. This means that wasm memories whose maximum size is less
+-- than 1GB will be allocated statically, otherwise they’ll be considered
+-- dynamic.
 setStaticMemoryMaximumSize :: Word64 -> Config
 setStaticMemoryMaximumSize = setConfig c'wasmtime_config_static_memory_maximum_size_set
 
--- | Configures the size, in bytes, of the guard region used at the end of a static memory’s address space reservation.
+-- | Configures the size, in bytes, of the guard region used at the end of a
+-- static memory’s address space reservation.
 --
--- The default value for this property is 2GB on 64-bit platforms. This allows eliminating almost all bounds checks on loads/stores with an immediate offset of less than 2GB. On 32-bit platforms this defaults to 64KB.
+-- The default value for this property is 2GB on 64-bit platforms. This allows
+-- eliminating almost all bounds checks on loads/stores with an immediate offset
+-- of less than 2GB. On 32-bit platforms this defaults to 64KB.
 setStaticMemoryGuardSize :: Word64 -> Config
 setStaticMemoryGuardSize = setConfig c'wasmtime_config_static_memory_guard_size_set
 
--- | Configures the size, in bytes, of the guard region used at the end of a dynamic memory’s address space reservation.
+-- | Configures the size, in bytes, of the guard region used at the end of a
+-- dynamic memory’s address space reservation.
 --
 -- Defaults to 64KB
 setDynamicMemoryGuardSize :: Word64 -> Config
@@ -502,7 +517,8 @@ newtype Strategy = Strategy C'wasmtime_strategy_t
 autoStrategy :: Strategy
 autoStrategy = Strategy c'WASMTIME_STRATEGY_AUTO
 
--- | Cranelift aims to be a reasonably fast code generator which generates high quality machine code
+-- | Cranelift aims to be a reasonably fast code generator which generates high
+-- quality machine code
 craneliftStrategy :: Strategy
 craneliftStrategy = Strategy c'WASMTIME_STRATEGY_CRANELIFT
 
@@ -1064,7 +1080,8 @@ newFuncTypeFromPtr = fmap FuncType . newForeignPtr p'wasm_functype_delete
 -- For example the following:
 --
 -- @
--- let funcType = 'newFuncType' $ 'Proxy' @(Int32 -> Float -> IO (Either 'Trap' (Word128, Double, Int64)))
+-- let funcType = 'newFuncType' $
+--       'Proxy' @(Int32 -> Float -> IO (Either 'Trap' (Word128, Double, Int64)))
 -- print funcType
 -- @
 --
@@ -1350,7 +1367,13 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
     callback _env _caller params_ptr nargs result_ptr nresults = do
       let actualNrOfArgs = fromIntegral nargs
       if actualNrOfArgs /= expectedNrOfArgs
-        then error $ "Expected " ++ show expectedNrOfArgs ++ " number of arguments but got " ++ show actualNrOfArgs ++ "!"
+        then
+          error $
+            "Expected "
+              ++ show expectedNrOfArgs
+              ++ " number of arguments but got "
+              ++ show actualNrOfArgs
+              ++ "!"
         else do
           mbParams <- runMaybeT $ peekVals params_ptr
           case mbParams of
@@ -1495,7 +1518,10 @@ callFunc ctx typedFunc = curry callFuncOnParams
                 checkWasmtimeError error_ptr
                 trap_ptr <- peek trap_ptr_ptr
                 if trap_ptr == nullPtr
-                  then Right . fromHList <$> (peekRawVals args_and_results_ptr :: IO (List results))
+                  then do
+                    results :: List results <- peekRawVals args_and_results_ptr
+                    let r = fromHList results :: r
+                    pure $ Right r
                   else Left <$> newTrapFromPtr trap_ptr
 
     n :: Int
@@ -1703,8 +1729,9 @@ typedGlobalSet ctx typedGlobal x =
 
 -- | A descriptor for a table in a WebAssembly module.
 --
--- Tables are contiguous chunks of a specific element, typically a funcref or an externref.
--- The most common use for tables is a function table through which call_indirect can invoke other functions.
+-- Tables are contiguous chunks of a specific element, typically a funcref or an
+-- externref.  The most common use for tables is a function table through which
+-- call_indirect can invoke other functions.
 newtype TableType = TableType {getWasmtimeTableType :: ForeignPtr C'wasm_tabletype_t}
 
 instance Eq TableType where
@@ -1744,7 +1771,8 @@ data TableRefType = FuncRef | ExternRef
 data TableLimits = TableLimits {tableMin :: Int32, tableMax :: Int32}
   deriving (Show, Eq)
 
--- | Creates a new 'Table' descriptor which will contain the specified element type and have the limits applied to its length.
+-- | Creates a new 'Table' descriptor which will contain the specified element
+-- type and have the limits applied to its length.
 newTableType ::
   TableRefType ->
   TableLimits ->
@@ -1772,7 +1800,11 @@ tableTypeElement tt = unsafePerformIO $
     if
         | valkind == c'WASMTIME_FUNCREF -> pure FuncRef
         | valkind == c'WASMTIME_EXTERNREF -> pure ExternRef
-        | otherwise -> error $ "Got invalid valkind " ++ show valkind ++ " from c'wasm_valtype_kind."
+        | otherwise ->
+            error $
+              "Got invalid valkind "
+                ++ show valkind
+                ++ " from c'wasm_valtype_kind."
 
 -- | Returns the minimum and maximum size of this tabletype
 tableTypeLimits :: TableType -> TableLimits
@@ -1812,7 +1844,8 @@ newTable ::
   MonadPrim s m =>
   Context s ->
   TableType ->
-  -- | An optional initial value which will be used to fill in the table, if its initial size is > 0.
+  -- | An optional initial value which will be used to fill in the table,
+  -- if its initial size is > 0.
   Maybe TableValue ->
   m (Either WasmtimeError (Table s))
 newTable ctx tt mbVal = unsafeIOToPrim $
@@ -1823,11 +1856,11 @@ newTable ctx tt mbVal = unsafeIOToPrim $
           error_ptr <- case mbVal of
             Nothing -> do
               c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
-            (Just (FuncRefValue (Func func_t))) -> do
+            Just (FuncRefValue (Func func_t)) -> do
               alloca $ \val_ptr -> do
                 pokeVal val_ptr func_t
                 c'wasmtime_table_new ctx_ptr tt_ptr val_ptr table_ptr
-            (Just (ExternRefValue _todo)) -> do
+            Just (ExternRefValue _todo) -> do
               error "not implemented: ExternRefValue Tables"
           checkWasmtimeError error_ptr
           Table <$> peek table_ptr
@@ -1848,10 +1881,10 @@ growTable ctx table delta mbVal = unsafeIOToPrim $
       withTable table $ \table_ptr ->
         alloca $ \prev_size_ptr -> do
           error_ptr <- case mbVal of
-            Nothing -> do
+            Nothing ->
               c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) nullPtr prev_size_ptr
-            (Just val) ->
-              withTableValue val $ \val_ptr -> do
+            Just val ->
+              withTableValue val $ \val_ptr ->
                 c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) val_ptr prev_size_ptr
           checkWasmtimeError error_ptr
           peek prev_size_ptr
@@ -1873,7 +1906,9 @@ tableGet ctx table ix = unsafeIOToPrim $
           then pure Nothing
           else Just <$> peekTableVal val_ptr
 
--- | Set an element at the given index. This function will return an error if the index is too large.
+-- | Set an element at the given index.
+--
+-- This function will return an error if the index is too large.
 tableSet ::
   MonadPrim s m =>
   Context s ->
@@ -1905,7 +1940,8 @@ getTableType ctx table = unsafePerformIO $
 
 -- | A descriptor for a WebAssembly memory type.
 --
--- Memories are described in units of pages (64KB) and represent contiguous chunks of addressable memory.
+-- Memories are described in units of pages (64KB) and represent contiguous
+-- chunks of addressable memory.
 newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
 
 instance Eq MemoryType where
@@ -1936,8 +1972,9 @@ instance Show MemoryType where
 newMemoryTypeFromPtr :: Ptr C'wasm_memorytype_t -> IO MemoryType
 newMemoryTypeFromPtr = fmap MemoryType . newForeignPtr p'wasm_memorytype_delete
 
--- | Creates a descriptor for a WebAssembly 'Memory' with the specified minimum number of memory pages,
--- an optional maximum of memory pages, and a 64 bit flag, where false defaults to 32 bit memory.
+-- | Creates a descriptor for a WebAssembly 'Memory' with the specified minimum
+-- number of memory pages, an optional maximum of memory pages, and a specifier
+-- for the 'WordLength' (32 bit / 64 bit memory).
 newMemoryType ::
   -- | Minimum number of memory pages.
   Word64 ->
@@ -2043,11 +2080,13 @@ growMemory ctx mem delta = unsafeIOToPrim $
           checkWasmtimeError error_ptr
           peek before_size_ptr
 
--- | Takes a continuation which can mutate the linear memory. The continuation is provided with
--- a pointer to the beginning of the memory and its maximum length. Do not write outside the bounds!
+-- | Takes a continuation which can mutate the linear memory. The continuation
+-- is provided with a pointer to the beginning of the memory and its maximum
+-- length. Do not write outside the bounds!
 --
--- This function is unsafe, because we do not restrict the continuation in any way.
--- DO NOT call exported wasm functions, grow the memory or do anything similar in the continuation!
+-- This function is unsafe, because we do not restrict the continuation in any
+-- way.  DO NOT call exported wasm functions, grow the memory or do anything
+-- similar in the continuation!
 unsafeWithMemory :: Context s -> Memory s -> (Ptr Word8 -> Size -> IO a) -> IO a
 unsafeWithMemory ctx mem f =
   withContext ctx $ \ctx_ptr ->
@@ -2063,8 +2102,11 @@ readMemory ctx mem = unsafeIOToPrim $
     BI.create (fromIntegral mem_size) $ \dst_ptr ->
       BI.memcpy dst_ptr mem_data_ptr (fromIntegral mem_size)
 
--- | Takes an offset and a length, and returns a copy of the memory starting at offset until offset + length.
--- Returns @Left MemoryAccessError@ if offset + length exceeds the length of the memory.
+-- | Takes an offset and a length, and returns a copy of the memory starting at
+-- offset until offset + length.
+--
+-- Returns @Left MemoryAccessError@ if offset + length exceeds the length of the
+-- memory.
 readMemoryAt ::
   MonadPrim s m =>
   Context s ->
@@ -2082,7 +2124,10 @@ readMemoryAt ctx mem offset sz = do
       else do
         res <- unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
           BI.create (fromIntegral mem_size) $ \dst_ptr ->
-            BI.memcpy dst_ptr (advancePtr mem_data_ptr (fromIntegral offset)) (fromIntegral mem_size)
+            BI.memcpy
+              dst_ptr
+              (advancePtr mem_data_ptr (fromIntegral offset))
+              (fromIntegral mem_size)
         pure $ Right res
 
 -- | Safely writes a 'ByteString' to this memory at the given offset.
