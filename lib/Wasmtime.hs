@@ -1243,12 +1243,12 @@ instance (HasValType v, Storable v, Vals vs) => Vals (v ': vs) where
       <*> peekVals (advancePtr vals_ptr 1)
 
   pokeRawVals raw_vals_ptr (v :. vs) = do
-    pokeRawVal raw_vals_ptr v
+    poke (castPtr raw_vals_ptr) v
     pokeRawVals (advancePtr raw_vals_ptr 1) vs
 
   peekRawVals raw_vals_ptr =
     (:.)
-      <$> peekRawVal raw_vals_ptr
+      <$> peek (castPtr raw_vals_ptr)
       <*> peekRawVals (advancePtr raw_vals_ptr 1)
 
 pokeVal :: forall r. (HasValType r, Storable r) => Ptr C'wasmtime_val_t -> r -> IO ()
@@ -1257,6 +1257,12 @@ pokeVal vals_ptr r = do
   let p :: Ptr C'wasmtime_valunion_t
       p = p'wasmtime_val'of vals_ptr
   poke (castPtr p) r
+
+uncheckedPeekVal :: forall r. (HasValType r, Storable r) => Ptr C'wasmtime_val_t -> IO r
+uncheckedPeekVal val_ptr = peek (castPtr of_ptr :: Ptr r)
+  where
+    of_ptr :: Ptr C'wasmtime_valunion_t
+    of_ptr = p'wasmtime_val'of val_ptr
 
 peekTableVal :: Ptr C'wasmtime_val_t -> IO TableValue
 peekTableVal val_ptr = do
@@ -1268,18 +1274,6 @@ peekTableVal val_ptr = do
   where
     kind_ptr = p'wasmtime_val'kind val_ptr
     of_ptr = p'wasmtime_val'of val_ptr
-
-uncheckedPeekVal :: forall r. (HasValType r, Storable r) => Ptr C'wasmtime_val_t -> IO r
-uncheckedPeekVal val_ptr = peek (castPtr of_ptr :: Ptr r)
-  where
-    of_ptr :: Ptr C'wasmtime_valunion_t
-    of_ptr = p'wasmtime_val'of val_ptr
-
-pokeRawVal :: Storable r => Ptr C'wasmtime_val_raw_t -> r -> IO ()
-pokeRawVal = poke . castPtr
-
-peekRawVal :: Storable r => Ptr C'wasmtime_val_raw_t -> IO r
-peekRawVal = peek . castPtr
 
 --------------------------------------------------------------------------------
 -- Functions
