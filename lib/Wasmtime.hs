@@ -107,7 +107,7 @@ module Wasmtime
     Foldr,
     Curry (..),
     Len (..),
-    FromHList (..),
+    HListable (..),
 
     -- * Functions
     FuncType,
@@ -928,7 +928,7 @@ newFuncType ::
   forall f (params :: [Type]) m r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    FromHList r,
+    HListable r,
     Types r ~ results,
     Result f ~ m (Either Trap r),
     Vals params,
@@ -1173,7 +1173,7 @@ newFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    FromHList r,
+    HListable r,
     Types r ~ results,
     Result f ~ m (Either Trap r),
     Foldr (->) (m (Either Trap r)) params ~ f,
@@ -1250,11 +1250,11 @@ instance Funcable b => Funcable (a -> b) where
   type Params (a -> b) = a ': Params b
   type Result (a -> b) = Result b
 
-instance (FromHList r, Types r ~ results, Vals results) => Funcable (IO (Either Trap r)) where
+instance (HListable r, Types r ~ results, Vals results) => Funcable (IO (Either Trap r)) where
   type Params (IO (Either Trap r)) = '[]
   type Result (IO (Either Trap r)) = IO (Either Trap r)
 
-instance (FromHList r, Types r ~ results, Vals results) => Funcable (ST s (Either Trap r)) where
+instance (HListable r, Types r ~ results, Vals results) => Funcable (ST s (Either Trap r)) where
   type Params (ST s (Either Trap r)) = '[]
   type Result (ST s (Either Trap r)) = ST s (Either Trap r)
 
@@ -1271,21 +1271,21 @@ newtype TypedFunc s f = TypedFunc
 -- You can then call this 'TypedFunc' using 'callFunc' for example:
 --
 -- @
--- mbTypedFunc <- toTypedFunc ctx someExportedGcdFunc
+-- mbTypedFunc <- 'toTypedFunc' ctx someExportedGcdFunc
 -- case mbTypedFunc of
 --   Nothing -> error "gcd did not have the expected type!"
---   Just (gcdTypedFunc :: TypedFunc RealWorld (Int32 -> Int32 -> IO (List '[Int32]))) -> do
---     let wasmGCD :: Int32 -> Int32 -> IO (List '[Int32])
---         wasmGCD = callFunc ctx gcdTypedFunc
+--   Just (gcdTypedFunc :: 'TypedFunc' RealWorld (Int32 -> Int32 -> IO (Either Trap Int32))) -> do
+--     let wasmGCD :: Int32 -> Int32 -> IO (Either 'Trap' Int32)
+--         wasmGCD = 'callFunc' ctx gcdTypedFunc
 --     -- Call gcd on its two Int32 arguments:
---     (r :. Nil) <- wasmGCD 6 27
---     print r -- prints "3"
+--     r <- wasmGCD 6 27
+--     print r -- prints "Right 3"
 -- @
 toTypedFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    FromHList r,
+    HListable r,
     Types r ~ results,
     Result f ~ m (Either Trap r),
     Vals params,
@@ -1308,11 +1308,13 @@ toTypedFunc ctx func = do
     expectedFuncType = newFuncType $ Proxy @f
 
 -- | Call an exported 'TypedFunc'.
+--
+-- See 'toTypedFunc' for an example.
 callFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    FromHList r,
+    HListable r,
     Types r ~ results,
     Result f ~ m (Either Trap r),
     Foldr (->) (m (Either Trap r)) params ~ f,
@@ -2128,7 +2130,7 @@ getExportedTypedFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    FromHList r,
+    HListable r,
     Types r ~ results,
     Result f ~ m (Either Trap r),
     Vals params,
@@ -2497,67 +2499,79 @@ instance Len '[] where
 instance Len as => Len (a ': as) where
   len _proxy = 1 + len (Proxy @as)
 
-class FromHList a where
+-- | WASM functions can return zero or more results of different types. These
+-- results are represented using heterogeneous lists via the 'List' type.
+--
+-- Working with @'List's@ can be cumbersome because you need to enable the
+-- @DataKinds@ and @GADTs@ language extensions.
+--
+-- For this reason functions like 'newFunc' and `callFunc` use this 'HListable'
+-- type class to automatically convert @'List's@ to \"normal\" Haskell types
+-- like @()@, primitive types like @Int32@ or to tuples of primitive types.
+--
+-- Note there also exists an identity instance for @'List's@ themselves so if
+-- you want to use heterogeneous lists you can.
+class HListable a where
   type Types a :: [Type]
   fromHList :: List (Types a) -> a
   toHList :: a -> List (Types a)
 
-instance FromHList (List as) where
+instance HListable (List as) where
   type Types (List as) = as
   fromHList = id
   toHList = id
 
-instance FromHList () where
+instance HListable () where
   type Types () = '[]
   fromHList Nil = ()
   toHList () = Nil
 
-instance FromHList Int32 where
+instance HListable Int32 where
   type Types Int32 = '[Int32]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList Int64 where
+instance HListable Int64 where
   type Types Int64 = '[Int64]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList Float where
+instance HListable Float where
   type Types Float = '[Float]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList Double where
+instance HListable Double where
   type Types Double = '[Double]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList Word128 where
+instance HListable Word128 where
   type Types Word128 = '[Word128]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList (Func s) where
+instance HListable (Func s) where
   type Types (Func s) = '[Func s]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList (Ptr C'wasmtime_externref_t) where
+instance HListable (Ptr C'wasmtime_externref_t) where
   type Types (Ptr C'wasmtime_externref_t) = '[Ptr C'wasmtime_externref_t]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList (a, b) where
+instance HListable (a, b) where
   type Types (a, b) = '[a, b]
   fromHList (x :. y :. Nil) = (x, y)
   toHList (x, y) = (x :. y :. Nil)
 
-instance FromHList (a, b, c) where
+instance HListable (a, b, c) where
   type Types (a, b, c) = '[a, b, c]
   fromHList (a :. b :. c :. Nil) = (a, b, c)
   toHList (a, b, c) = (a :. b :. c :. Nil)
 
-instance FromHList (a, b, c, d) where
+instance HListable (a, b, c, d) where
   type Types (a, b, c, d) = '[a, b, c, d]
   fromHList (a :. b :. c :. d :. Nil) = (a, b, c, d)
   toHList (a, b, c, d) = (a :. b :. c :. d :. Nil)
