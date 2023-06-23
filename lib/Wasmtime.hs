@@ -1037,23 +1037,21 @@ kindToHaskellTypeStr = \case
 -- | Class of Haskell types that WASM @'Func'tions@ can take as parameters or
 -- return as results or which can be retrieved from and set to @'Global's@.
 class HasKind a where
-  kind :: a -> C'wasm_valkind_t
+  kind :: Proxy a -> C'wasm_valkind_t
 
-instance HasKind Int32 where kind _ = c'WASMTIME_I32
+instance HasKind Int32 where kind _proxy = c'WASMTIME_I32
 
-instance HasKind Int64 where kind _ = c'WASMTIME_I64
+instance HasKind Int64 where kind _proxy = c'WASMTIME_I64
 
-instance HasKind Float where kind _ = c'WASMTIME_F32
+instance HasKind Float where kind _proxy = c'WASMTIME_F32
 
-instance HasKind Double where kind _ = c'WASMTIME_F64
+instance HasKind Double where kind _proxy = c'WASMTIME_F64
 
-instance HasKind Word128 where kind _ = c'WASMTIME_V128
+instance HasKind Word128 where kind _proxy = c'WASMTIME_V128
 
-instance HasKind C'wasmtime_func_t where kind _ = c'WASMTIME_FUNCREF
+instance HasKind C'wasmtime_func_t where kind _proxy = c'WASMTIME_FUNCREF
 
-instance HasKind (Ptr C'wasmtime_externref_t) where kind _ = c'WASMTIME_EXTERNREF
-
-instance HasKind Kind where kind = toWasmKind
+instance HasKind (Ptr C'wasmtime_externref_t) where kind _proxy = c'WASMTIME_EXTERNREF
 
 class ValTypes (v :: [Type]) where
   pokeValTypes :: Ptr (Ptr C'wasm_valtype_t) -> Proxy v -> IO ()
@@ -1063,13 +1061,9 @@ instance ValTypes '[] where
 
 instance (HasKind v, Vals vs) => ValTypes (v ': vs) where
   pokeValTypes valtypes_ptr_ptr _proxy = do
-    pokeSingleValType valtypes_ptr_ptr (undefined :: v)
+    valtype_ptr <- c'wasm_valtype_new $ kind $ Proxy @v
+    poke valtypes_ptr_ptr valtype_ptr
     pokeValTypes (advancePtr valtypes_ptr_ptr 1) (Proxy @vs)
-
-pokeSingleValType :: (HasKind v) => Ptr (Ptr C'wasm_valtype_t) -> v -> IO ()
-pokeSingleValType valtypes_ptr_ptr v = do
-  valtype_ptr <- c'wasm_valtype_new $ kind v
-  poke valtypes_ptr_ptr valtype_ptr
 
 class ValTypes v => Vals (v :: [Type]) where
   pokeVals :: Ptr C'wasmtime_val_t -> List v -> IO ()
@@ -1090,7 +1084,7 @@ instance (HasKind v, Storable v, Vals vs) => Vals (v ': vs) where
 
   peekVals vals_ptr = do
     k :: C'wasmtime_valkind_t <- liftIO $ peek $ p'wasmtime_val'kind vals_ptr
-    guard $ kind (undefined :: v) == k
+    guard $ kind (Proxy @v) == k
 
     let valunion_ptr :: Ptr C'wasmtime_valunion_t
         valunion_ptr = p'wasmtime_val'of vals_ptr
@@ -1113,7 +1107,7 @@ instance (HasKind v, Storable v, Vals vs) => Vals (v ': vs) where
 
 pokeVal :: forall r. (HasKind r, Storable r) => Ptr C'wasmtime_val_t -> r -> IO ()
 pokeVal vals_ptr r = do
-  poke (p'wasmtime_val'kind vals_ptr) $ kind r
+  poke (p'wasmtime_val'kind vals_ptr) $ kind $ Proxy @r
   let p :: Ptr C'wasmtime_valunion_t
       p = p'wasmtime_val'of vals_ptr
   poke (castPtr p) r
@@ -1260,115 +1254,6 @@ instance Vals results => Funcable (IO (Either Trap (List results))) where
 instance Vals results => Funcable (ST s (Either Trap (List results))) where
   type Params (ST s (Either Trap (List results))) = '[]
   type Result (ST s (Either Trap (List results))) = ST s (Either Trap (List results))
-
-{-
--- | Class of Haskell functions / actions that can be imported into and exported
--- from WASM modules.
-class Funcable f where
-  type Params f :: Type
-  type Result f :: Type
-
-  params :: Proxy f -> Params f
-
-  -- | The number of parameters.
-  nrOfParams :: Proxy f -> Int
-
-  -- | Call the given Haskell function / action @f@ on the arguments stored in
-  -- the given 'C'wasmtime_val_t' array.
-  importCall ::
-    -- | Haskell function / action.
-    f ->
-    -- | Array of parameters of the function.
-    Ptr C'wasmtime_val_t ->
-    -- | Number of parameters.
-    Int ->
-    IO (Maybe (Result f))
-
-  -- | Returns a Haskell function / action of type @f@ which, when applied to
-  -- parameters, will call the given exported 'Func' on those parameters.
-  exportCall ::
-    -- | Array where to poke the parameters of the function.
-    ForeignPtr C'wasmtime_val_raw_t ->
-    -- | Index where to poke the next parameter in the previous array.
-    Int ->
-    -- | Total number of parameters.
-    CSize ->
-    Context s ->
-    Func s ->
-    f
-
-instance (HasKind a, Funcable b) => Funcable (a -> b) where
-  type Params (a -> b) = a ': Params b
-  type Result (a -> b) = Result b
-
-  params _proxy = (undefined :: a) :. params (Proxy @b)
-
-  nrOfParams _proxy = 1 + nrOfParams (Proxy @b)
-
-  importCall _ _ 0 = pure Nothing
-  importCall f p n = do
-    k :: C'wasmtime_valkind_t <- peek $ p'wasmtime_val'kind p
-    if kind (Proxy @a) == k
-      then do
-        let valunion_ptr :: Ptr C'wasmtime_valunion_t
-            valunion_ptr = p'wasmtime_val'of p
-
-            val_ptr :: Ptr a
-            val_ptr = castPtr valunion_ptr
-        val :: a <- peek val_ptr
-        importCall (f val) (advancePtr p 1) (n - 1)
-      else pure Nothing
-
-  exportCall args_and_results_fp ix len ctx func (x :: a) = unsafePerformIO $
-    withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
-      let cur_pos = advancePtr args_and_results_ptr ix
-      poke (castPtr cur_pos) x
-      pure $ exportCall args_and_results_fp (ix + 1) len ctx func
-
-instance Vals r => Funcable (IO (Either Trap r)) where
-  type Params (IO (Either Trap r)) = '[]
-  type Result (IO (Either Trap r)) = IO (Either Trap r)
-
-  params _proxy = Nil
-
-  nrOfParams _proxy = 0
-
-  importCall x _ 0 = pure $ Just x
-  importCall _ _ _ = pure Nothing
-
-  exportCall args_and_results_fp _ix len ctx func =
-    withForeignPtr args_and_results_fp $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) ->
-      withContext ctx $ \ctx_ptr ->
-        withFunc func $ \func_ptr ->
-          allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
-            error_ptr <-
-              c'wasmtime_func_call_unchecked
-                ctx_ptr
-                func_ptr
-                args_and_results_ptr
-                len
-                trap_ptr_ptr
-            checkWasmtimeError error_ptr
-            trap_ptr <- peek trap_ptr_ptr
-            if trap_ptr == nullPtr
-              then Right <$> peekRawVals args_and_results_ptr
-              else Left <$> newTrapFromPtr trap_ptr
-
-instance Vals r => Funcable (ST s (Either Trap r)) where
-  type Params (ST s (Either Trap r)) = '[]
-  type Result (ST s (Either Trap r)) = ST s (Either Trap r)
-
-  params _proxy = Nil
-
-  nrOfParams _proxy = 0
-
-  importCall x _ 0 = pure $ Just x
-  importCall _ _ _ = pure Nothing
-
-  exportCall args_and_results_fp ix len ctx func =
-    unsafeIOToPrim $
-      exportCall args_and_results_fp ix len ctx func
--}
 
 -- | A 'Func' annotated with its type.
 newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
@@ -1973,7 +1858,7 @@ newGlobalTypeFromPtr globaltype_ptr =
 
 newGlobalTypePtr :: forall a. HasKind a => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
 newGlobalTypePtr _proxy mutability = do
-  valtype_ptr <- c'wasm_valtype_new $ kind (undefined :: a)
+  valtype_ptr <- c'wasm_valtype_new $ kind $ Proxy @a
   c'wasm_globaltype_new valtype_ptr $ toWasmMutability mutability
 
 -- TODO: think about whether we should reflect Mutability on the type-level
@@ -2047,7 +1932,7 @@ toTypedGlobal ::
 toTypedGlobal ctx global = do
   globalType <- getGlobalType ctx global
   let actualKind = toWasmKind $ globalTypeKind globalType
-      expectedKind = kind (undefined :: a)
+      expectedKind = kind $ Proxy @a
   if actualKind == expectedKind
     then pure $ Just $ TypedGlobal global
     else pure Nothing

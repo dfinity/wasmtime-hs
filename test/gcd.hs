@@ -38,10 +38,13 @@ main = do
   Just (gcdTypedFunc :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap (List '[Int32])))) <-
     getExportedTypedFunc ctx inst "gcd"
 
-  let a = 6
-      b = 27
-  (r :. Nil) <- callFunc ctx gcdTypedFunc a b >>= handleException
+  let wasmGCD :: Int32 -> Int32 -> IO (Either Trap (List '[Int32]))
+      wasmGCD = callFunc ctx gcdTypedFunc
 
+      a = 6
+      b = 27
+
+  (r :. Nil) <- wasmGCD a b >>= handleException
   printf "gcd(%d, %d) = %d\n" a b r
 
 handleException :: Exception e => Either e r -> IO r
