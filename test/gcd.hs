@@ -1,3 +1,5 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
@@ -33,12 +35,12 @@ main = do
 
   inst <- newInstance ctx myModule [] >>= handleException
 
-  Just (gcdTypedFunc :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap Int32))) <-
+  Just (gcdTypedFunc :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap (List '[Int32])))) <-
     getExportedTypedFunc ctx inst "gcd"
 
   let a = 6
       b = 27
-  r <- callFunc ctx gcdTypedFunc a b >>= handleException
+  (r :. Nil) <- callFunc ctx gcdTypedFunc a b >>= handleException
 
   printf "gcd(%d, %d) = %d\n" a b r
 
