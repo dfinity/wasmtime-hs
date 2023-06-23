@@ -100,9 +100,9 @@ module Wasmtime
     -- ** Extern Types
     ExternType (..),
 
-    -- * Kinds
-    Kind (..),
-    HasKind,
+    -- * ValTypes
+    ValType (..),
+    HasValType,
     ValTypes,
     List (..),
     Foldr,
@@ -166,7 +166,7 @@ module Wasmtime
     GlobalType,
     newGlobalType,
     Mutability (..),
-    globalTypeKind,
+    globalTypeValType,
     globalTypeMutability,
     Global,
     getGlobalType,
@@ -904,14 +904,14 @@ instance Eq FuncType where
 instance Show FuncType where
   showsPrec p ft =
     showParen (p > arrowPrec) $
-      showKinds (funcTypeParams ft)
+      showValTypes (funcTypeParams ft)
         . showString " .->. "
-        . showKinds (funcTypeResults ft)
+        . showValTypes (funcTypeResults ft)
     where
       arrowPrec = 0
 
-      showKinds :: V.Vector Kind -> ShowS
-      showKinds kinds =
+      showValTypes :: V.Vector ValType -> ShowS
+      showValTypes kinds =
         showString "Proxy @'["
           . showString (intercalate ", " $ map kindToHaskellTypeStr $ V.toList kinds)
           . showString "]"
@@ -972,16 +972,16 @@ withValTypeVec types f =
     n = len $ Proxy @types
 
 -- | Returns the vector of parameters of this function type.
-funcTypeParams :: FuncType -> V.Vector Kind
+funcTypeParams :: FuncType -> V.Vector ValType
 funcTypeParams funcType =
   unsafePerformIO $ withFuncType funcType $ c'wasm_functype_params >=> unmarshalValTypeVec
 
 -- | Returns the vector of results of this function type.
-funcTypeResults :: FuncType -> V.Vector Kind
+funcTypeResults :: FuncType -> V.Vector ValType
 funcTypeResults funcType =
   unsafePerformIO $ withFuncType funcType $ c'wasm_functype_results >=> unmarshalValTypeVec
 
-unmarshalValTypeVec :: Ptr C'wasm_valtype_vec_t -> IO (V.Vector Kind)
+unmarshalValTypeVec :: Ptr C'wasm_valtype_vec_t -> IO (V.Vector ValType)
 unmarshalValTypeVec valtype_vec_ptr = do
   sz :: CSize <- peek $ p'wasm_valtype_vec_t'size valtype_vec_ptr
   dt :: Ptr (Ptr C'wasm_valtype_t) <- peek $ p'wasm_valtype_vec_t'data valtype_vec_ptr
@@ -989,82 +989,86 @@ unmarshalValTypeVec valtype_vec_ptr = do
     cur_valtype_ptr <- peekElemOff dt ix
     fromWasmKind <$> c'wasm_valtype_kind cur_valtype_ptr
 
--- | Type (kind) of values that:
+-- | Type of values that:
 --
 -- * WASM @'Func'tions@ can take as parameters or return as results.
 -- * can be retrieved from and set to @'Global's@.
-data Kind
-  = KindI32
-  | KindI64
-  | KindF32
-  | KindF64
-  | KindV128
-  | KindFuncRef
-  | KindExternRef
+data ValType
+  = ValTypeI32
+  | ValTypeI64
+  | ValTypeF32
+  | ValTypeF64
+  | ValTypeV128
+  | ValTypeFuncRef
+  | ValTypeExternRef
   deriving (Show, Eq)
 
-fromWasmKind :: C'wasm_valkind_t -> Kind
+fromWasmKind :: C'wasm_valkind_t -> ValType
 fromWasmKind k
-  | k == c'WASMTIME_I32 = KindI32
-  | k == c'WASMTIME_I64 = KindI64
-  | k == c'WASMTIME_F32 = KindF32
-  | k == c'WASMTIME_F64 = KindF64
-  | k == c'WASMTIME_V128 = KindV128
-  | k == c'WASMTIME_FUNCREF = KindFuncRef
-  | k == c'WASMTIME_EXTERNREF = KindExternRef
+  | k == c'WASMTIME_I32 = ValTypeI32
+  | k == c'WASMTIME_I64 = ValTypeI64
+  | k == c'WASMTIME_F32 = ValTypeF32
+  | k == c'WASMTIME_F64 = ValTypeF64
+  | k == c'WASMTIME_V128 = ValTypeV128
+  | k == c'WASMTIME_FUNCREF = ValTypeFuncRef
+  | k == c'WASMTIME_EXTERNREF = ValTypeExternRef
   | otherwise = error $ "Unknown wasm_valkind_t " ++ show k ++ "!"
 
-toWasmKind :: Kind -> C'wasm_valkind_t
+toWasmKind :: ValType -> C'wasm_valkind_t
 toWasmKind = \case
-  KindI32 -> c'WASMTIME_I32
-  KindI64 -> c'WASMTIME_I64
-  KindF32 -> c'WASMTIME_F32
-  KindF64 -> c'WASMTIME_F64
-  KindV128 -> c'WASMTIME_V128
-  KindFuncRef -> c'WASMTIME_FUNCREF
-  KindExternRef -> c'WASMTIME_EXTERNREF
+  ValTypeI32 -> c'WASMTIME_I32
+  ValTypeI64 -> c'WASMTIME_I64
+  ValTypeF32 -> c'WASMTIME_F32
+  ValTypeF64 -> c'WASMTIME_F64
+  ValTypeV128 -> c'WASMTIME_V128
+  ValTypeFuncRef -> c'WASMTIME_FUNCREF
+  ValTypeExternRef -> c'WASMTIME_EXTERNREF
 
-kindToHaskellTypeStr :: Kind -> String
+kindToHaskellTypeStr :: ValType -> String
 kindToHaskellTypeStr = \case
-  KindI32 -> "Int32"
-  KindI64 -> "Int64"
-  KindF32 -> "Float"
-  KindF64 -> "Double"
-  KindV128 -> "Word128"
-  KindFuncRef -> "(Func s)"
-  KindExternRef -> "(Ptr C'wasmtime_externref_t)" -- FIXME !!!
+  ValTypeI32 -> "Int32"
+  ValTypeI64 -> "Int64"
+  ValTypeF32 -> "Float"
+  ValTypeF64 -> "Double"
+  ValTypeV128 -> "Word128"
+  ValTypeFuncRef -> "(Func s)"
+  ValTypeExternRef -> "(Ptr C'wasmtime_externref_t)" -- FIXME !!!
 
 -- | Class of Haskell types that WASM @'Func'tions@ can take as parameters or
 -- return as results or which can be retrieved from and set to @'Global's@.
-class HasKind a where
+class HasValType a where
   kind :: Proxy a -> C'wasm_valkind_t
 
-instance HasKind Int32 where kind _proxy = c'WASMTIME_I32
+instance HasValType Int32 where kind _proxy = c'WASMTIME_I32
 
-instance HasKind Int64 where kind _proxy = c'WASMTIME_I64
+instance HasValType Int64 where kind _proxy = c'WASMTIME_I64
 
-instance HasKind Float where kind _proxy = c'WASMTIME_F32
+instance HasValType Float where kind _proxy = c'WASMTIME_F32
 
-instance HasKind Double where kind _proxy = c'WASMTIME_F64
+instance HasValType Double where kind _proxy = c'WASMTIME_F64
 
-instance HasKind Word128 where kind _proxy = c'WASMTIME_V128
+instance HasValType Word128 where kind _proxy = c'WASMTIME_V128
 
-instance HasKind C'wasmtime_func_t where kind _proxy = c'WASMTIME_FUNCREF
+instance HasValType C'wasmtime_func_t where kind _proxy = c'WASMTIME_FUNCREF
 
-instance HasKind (Ptr C'wasmtime_externref_t) where kind _proxy = c'WASMTIME_EXTERNREF
+instance HasValType (Ptr C'wasmtime_externref_t) where kind _proxy = c'WASMTIME_EXTERNREF
 
+-- | Class of types (of kind list of types) that can be passed and returned from
+-- WASM functions.
 class ValTypes (v :: [Type]) where
   pokeValTypes :: Ptr (Ptr C'wasm_valtype_t) -> Proxy v -> IO ()
 
 instance ValTypes '[] where
   pokeValTypes _valtypes_ptr_ptr _proxy = pure ()
 
-instance (HasKind v, Vals vs) => ValTypes (v ': vs) where
+instance (HasValType v, Vals vs) => ValTypes (v ': vs) where
   pokeValTypes valtypes_ptr_ptr _proxy = do
     valtype_ptr <- c'wasm_valtype_new $ kind $ Proxy @v
     poke valtypes_ptr_ptr valtype_ptr
     pokeValTypes (advancePtr valtypes_ptr_ptr 1) (Proxy @vs)
 
+-- | Class of types (of kind list of types) that can be passed and returned from
+-- WASM functions.
 class ValTypes v => Vals (v :: [Type]) where
   pokeVals :: Ptr C'wasmtime_val_t -> List v -> IO ()
   peekVals :: Ptr C'wasmtime_val_t -> MaybeT IO (List v)
@@ -1077,7 +1081,7 @@ instance Vals '[] where
   pokeRawVals _raw_vals_ptr Nil = pure ()
   peekRawVals _raw_vals_ptr = pure Nil
 
-instance (HasKind v, Storable v, Vals vs) => Vals (v ': vs) where
+instance (HasValType v, Storable v, Vals vs) => Vals (v ': vs) where
   pokeVals vals_ptr (v :. vs) = do
     pokeVal vals_ptr v
     pokeVals (advancePtr vals_ptr 1) vs
@@ -1105,7 +1109,7 @@ instance (HasKind v, Storable v, Vals vs) => Vals (v ': vs) where
       <$> peekRawVal raw_vals_ptr
       <*> peekRawVals (advancePtr raw_vals_ptr 1)
 
-pokeVal :: forall r. (HasKind r, Storable r) => Ptr C'wasmtime_val_t -> r -> IO ()
+pokeVal :: forall r. (HasValType r, Storable r) => Ptr C'wasmtime_val_t -> r -> IO ()
 pokeVal vals_ptr r = do
   poke (p'wasmtime_val'kind vals_ptr) $ kind $ Proxy @r
   let p :: Ptr C'wasmtime_valunion_t
@@ -1123,7 +1127,7 @@ peekTableVal val_ptr = do
     kind_ptr = p'wasmtime_val'kind val_ptr
     of_ptr = p'wasmtime_val'of val_ptr
 
-uncheckedPeekVal :: forall r. (HasKind r, Storable r) => Ptr C'wasmtime_val_t -> IO r
+uncheckedPeekVal :: forall r. (HasValType r, Storable r) => Ptr C'wasmtime_val_t -> IO r
 uncheckedPeekVal val_ptr = peek (castPtr of_ptr :: Ptr r)
   where
     of_ptr :: Ptr C'wasmtime_valunion_t
@@ -1208,7 +1212,7 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
         else do
           mbParams <- runMaybeT $ peekVals params_ptr
           case mbParams of
-            Nothing -> error "Kind mismatch!"
+            Nothing -> error "ValType mismatch!"
             Just (params :: List params) -> do
               r <- unsafePrimToIO $ (uncurry f :: List params -> m (Either Trap (List results))) params
               case r of
@@ -1239,6 +1243,8 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
     expectedNrOfArgs = len $ Proxy @params
     expectedNrOfResults = len $ Proxy @results
 
+-- | Class of Haskell functions / actions that can be imported into and exported
+-- from WASM modules.
 class Funcable f where
   type Params f :: [Type]
   type Result f :: Type
@@ -1256,7 +1262,11 @@ instance Vals results => Funcable (ST s (Either Trap (List results))) where
   type Result (ST s (Either Trap (List results))) = ST s (Either Trap (List results))
 
 -- | A 'Func' annotated with its type.
-newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
+newtype TypedFunc s f = TypedFunc
+  { -- | Extract the untyped 'Func' from the typed 'TypedFunc'.
+    fromTypedFunc :: Func s
+  }
+  deriving (Show)
 
 -- | Retrieves the type of the given 'Func' from the 'Store' and checks if it
 -- matches the desired type @f@ of the returned 'TypedFunc'.
@@ -1268,8 +1278,10 @@ newtype TypedFunc s f = TypedFunc {fromTypedFunc :: Func s} deriving (Show)
 -- case mbTypedFunc of
 --   Nothing -> error "gcd did not have the expected type!"
 --   Just (gcdTypedFunc :: TypedFunc RealWorld (Int32 -> Int32 -> IO (List '[Int32]))) -> do
+--     let wasmGCD :: Int32 -> Int32 -> IO (List '[Int32])
+--         wasmGCD = callFunc ctx gcdTypedFunc
 --     -- Call gcd on its two Int32 arguments:
---     (r :. Nil) <- callFunc ctx gcdTypedFunc 6 27
+--     (r :. Nil) <- wasmGCD 6 27
 --     print r -- prints "3"
 -- @
 toTypedFunc ::
@@ -1827,7 +1839,7 @@ newtype GlobalType = GlobalType {unGlobalType :: ForeignPtr C'wasm_globaltype_t}
 
 instance Eq GlobalType where
   gt1 == gt2 =
-    globalTypeKind gt1 == globalTypeKind gt2
+    globalTypeValType gt1 == globalTypeValType gt2
       && globalTypeMutability gt1 == globalTypeMutability gt2
 
 instance Show GlobalType where
@@ -1839,7 +1851,7 @@ instance Show GlobalType where
     where
       appPrec = 10
 
-      ty = kindToHaskellTypeStr $ globalTypeKind gt
+      ty = kindToHaskellTypeStr $ globalTypeValType gt
       mut = globalTypeMutability gt
 
 withGlobalType :: GlobalType -> (Ptr C'wasm_globaltype_t -> IO a) -> IO a
@@ -1847,7 +1859,7 @@ withGlobalType = withForeignPtr . unGlobalType
 
 -- | Returns a new 'GlobalType' with the kind of the given Haskell type and the
 -- specified 'Mutability'.
-newGlobalType :: HasKind a => Proxy a -> Mutability -> GlobalType
+newGlobalType :: HasValType a => Proxy a -> Mutability -> GlobalType
 newGlobalType proxy mutability = unsafePerformIO $ do
   globaltype_ptr <- newGlobalTypePtr proxy mutability
   newGlobalTypeFromPtr globaltype_ptr
@@ -1856,7 +1868,7 @@ newGlobalTypeFromPtr :: Ptr C'wasm_globaltype_t -> IO GlobalType
 newGlobalTypeFromPtr globaltype_ptr =
   GlobalType <$> newForeignPtr p'wasm_globaltype_delete globaltype_ptr
 
-newGlobalTypePtr :: forall a. HasKind a => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
+newGlobalTypePtr :: forall a. HasValType a => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
 newGlobalTypePtr _proxy mutability = do
   valtype_ptr <- c'wasm_valtype_new $ kind $ Proxy @a
   c'wasm_globaltype_new valtype_ptr $ toWasmMutability mutability
@@ -1881,9 +1893,9 @@ fromWasmMutability 0 = Immutable
 fromWasmMutability 1 = Mutable
 fromWasmMutability m = error $ "Unknown wasm_mutability_t " ++ show m ++ "!"
 
--- | Returns the 'Kind' of the given 'GlobalType'.
-globalTypeKind :: GlobalType -> Kind
-globalTypeKind globalType = unsafePerformIO $
+-- | Returns the 'ValType' of the given 'GlobalType'.
+globalTypeValType :: GlobalType -> ValType
+globalTypeValType globalType = unsafePerformIO $
   withGlobalType globalType $ \globalType_ptr -> do
     valtype_ptr <- c'wasm_globaltype_content globalType_ptr
     fromWasmKind <$> c'wasm_valtype_kind valtype_ptr
@@ -1925,13 +1937,13 @@ getGlobalType ctx global =
 -- matches the desired type @a@ of the returned 'TypedGlobal'.
 toTypedGlobal ::
   forall s m a.
-  (MonadPrim s m, HasKind a) =>
+  (MonadPrim s m, HasValType a) =>
   Context s ->
   Global s ->
   m (Maybe (TypedGlobal s a))
 toTypedGlobal ctx global = do
   globalType <- getGlobalType ctx global
-  let actualKind = toWasmKind $ globalTypeKind globalType
+  let actualKind = toWasmKind $ globalTypeValType globalType
       expectedKind = kind $ Proxy @a
   if actualKind == expectedKind
     then pure $ Just $ TypedGlobal global
@@ -1958,7 +1970,7 @@ withTypedGlobal = with . getWasmtimeGlobal . unTypedGlobal
 -- store ('Context').
 newTypedGlobal ::
   forall s m a.
-  (MonadPrim s m, HasKind a, Storable a) =>
+  (MonadPrim s m, HasValType a, Storable a) =>
   Context s ->
   -- | Specifies whether the global can be mutated or not.
   Mutability ->
@@ -1982,7 +1994,7 @@ newTypedGlobal ctx mutability x =
 
 -- | Returns the current value of the given typed global.
 typedGlobalGet ::
-  (MonadPrim s m, HasKind a, Storable a) =>
+  (MonadPrim s m, HasValType a, Storable a) =>
   Context s ->
   TypedGlobal s a ->
   m a
@@ -1999,7 +2011,7 @@ typedGlobalGet ctx typedGlobal =
 -- Returns an error if it’s not a mutable global, or if value comes from a
 -- different store than the one provided.
 typedGlobalSet ::
-  (MonadPrim s m, HasKind a, Storable a) =>
+  (MonadPrim s m, HasValType a, Storable a) =>
   Context s ->
   TypedGlobal s a ->
   a ->
@@ -2158,7 +2170,7 @@ getExportedTable ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
 -- the type of the global matches the desired type @a@ ('toTypedGlobal').
 getExportedTypedGlobal ::
   forall s m a.
-  (MonadPrim s m, HasKind a) =>
+  (MonadPrim s m, HasValType a) =>
   Context s ->
   Instance s ->
   String ->
@@ -2437,6 +2449,10 @@ allocaNullPtr f = alloca $ \ptr_ptr -> do
 
 infixr 5 :.
 
+-- | Heterogeneous list that is used to return results from WASM functions.
+-- (Internally it's also used to pass parameters to WASM functions).
+--
+-- See the documentation of 'toTypedFunc' for an example.
 data List as where
   Nil :: List '[]
   (:.) :: a -> List as -> List (a ': as)
