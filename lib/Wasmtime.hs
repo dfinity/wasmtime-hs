@@ -1,11 +1,9 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE PolyKinds #-}
@@ -930,7 +928,8 @@ newFuncType ::
   forall f (params :: [Type]) m r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    FromHList r results,
+    FromHList r,
+    Types r ~ results,
     Result f ~ m (Either Trap r),
     Vals params,
     Vals results,
@@ -1174,7 +1173,8 @@ newFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    FromHList r results,
+    FromHList r,
+    Types r ~ results,
     Result f ~ m (Either Trap r),
     Foldr (->) (m (Either Trap r)) params ~ f,
     Curry params,
@@ -1250,11 +1250,11 @@ instance Funcable b => Funcable (a -> b) where
   type Params (a -> b) = a ': Params b
   type Result (a -> b) = Result b
 
-instance (FromHList r results, Vals results) => Funcable (IO (Either Trap r)) where
+instance (FromHList r, Types r ~ results, Vals results) => Funcable (IO (Either Trap r)) where
   type Params (IO (Either Trap r)) = '[]
   type Result (IO (Either Trap r)) = IO (Either Trap r)
 
-instance (FromHList r results, Vals results) => Funcable (ST s (Either Trap r)) where
+instance (FromHList r, Types r ~ results, Vals results) => Funcable (ST s (Either Trap r)) where
   type Params (ST s (Either Trap r)) = '[]
   type Result (ST s (Either Trap r)) = ST s (Either Trap r)
 
@@ -1285,7 +1285,8 @@ toTypedFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    FromHList r results,
+    FromHList r,
+    Types r ~ results,
     Result f ~ m (Either Trap r),
     Vals params,
     Vals results,
@@ -1311,7 +1312,8 @@ callFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    FromHList r results,
+    FromHList r,
+    Types r ~ results,
     Result f ~ m (Either Trap r),
     Foldr (->) (m (Either Trap r)) params ~ f,
     Curry params,
@@ -2126,7 +2128,8 @@ getExportedTypedFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    FromHList r results,
+    FromHList r,
+    Types r ~ results,
     Result f ~ m (Either Trap r),
     Vals params,
     Vals results,
@@ -2494,54 +2497,67 @@ instance Len '[] where
 instance Len as => Len (a ': as) where
   len _proxy = 1 + len (Proxy @as)
 
-class FromHList a (rs :: [Type]) | a -> rs, rs -> a where
-  fromHList :: List rs -> a
-  toHList :: a -> List rs
+class FromHList a where
+  type Types a :: [Type]
+  fromHList :: List (Types a) -> a
+  toHList :: a -> List (Types a)
 
--- instance FromHList (List as) as where
---   fromHList = id
---   toHList = id
+instance FromHList (List as) where
+  type Types (List as) = as
+  fromHList = id
+  toHList = id
 
-instance FromHList () '[] where
+instance FromHList () where
+  type Types () = '[]
   fromHList Nil = ()
   toHList () = Nil
 
-instance FromHList Int32 '[Int32] where
+instance FromHList Int32 where
+  type Types Int32 = '[Int32]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList Int64 '[Int64] where
+instance FromHList Int64 where
+  type Types Int64 = '[Int64]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList Float '[Float] where
+instance FromHList Float where
+  type Types Float = '[Float]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList Double '[Double] where
+instance FromHList Double where
+  type Types Double = '[Double]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList Word128 '[Word128] where
+instance FromHList Word128 where
+  type Types Word128 = '[Word128]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList (Func s) '[Func s] where
+instance FromHList (Func s) where
+  type Types (Func s) = '[Func s]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList (Ptr C'wasmtime_externref_t) '[Ptr C'wasmtime_externref_t] where
+instance FromHList (Ptr C'wasmtime_externref_t) where
+  type Types (Ptr C'wasmtime_externref_t) = '[Ptr C'wasmtime_externref_t]
   fromHList (x :. Nil) = x
   toHList x = (x :. Nil)
 
-instance FromHList (a, b) '[a, b] where
+instance FromHList (a, b) where
+  type Types (a, b) = '[a, b]
   fromHList (x :. y :. Nil) = (x, y)
   toHList (x, y) = (x :. y :. Nil)
 
-instance FromHList (a, b, c) '[a, b, c] where
+instance FromHList (a, b, c) where
+  type Types (a, b, c) = '[a, b, c]
   fromHList (a :. b :. c :. Nil) = (a, b, c)
   toHList (a, b, c) = (a :. b :. c :. Nil)
 
-instance FromHList (a, b, c, d) '[a, b, c, d] where
+instance FromHList (a, b, c, d) where
+  type Types (a, b, c, d) = '[a, b, c, d]
   fromHList (a :. b :. c :. d :. Nil) = (a, b, c, d)
   toHList (a, b, c, d) = (a :. b :. c :. d :. Nil)
