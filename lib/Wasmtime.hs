@@ -1268,8 +1268,12 @@ peekTableVal :: Ptr C'wasmtime_val_t -> IO TableValue
 peekTableVal val_ptr = do
   k <- peek kind_ptr
   if
-      | k == c'WASMTIME_FUNCREF -> FuncRefValue . Func <$> peek (castPtr of_ptr :: Ptr C'wasmtime_func_t)
-      | k == c'WASMTIME_EXTERNREF -> ExternRefValue <$> peek (castPtr of_ptr :: Ptr (Ptr C'wasmtime_externref_t))
+      | k == c'WASMTIME_FUNCREF ->
+          FuncRefValue . Func
+            <$> peek (castPtr of_ptr :: Ptr C'wasmtime_func_t)
+      | k == c'WASMTIME_EXTERNREF ->
+          ExternRefValue
+            <$> peek (castPtr of_ptr :: Ptr (Ptr C'wasmtime_externref_t))
       | otherwise -> error $ "unsupported valkind " ++ show k
   where
     kind_ptr = p'wasmtime_val'kind val_ptr
