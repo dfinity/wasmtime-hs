@@ -106,7 +106,6 @@ module Wasmtime
     ValType (..),
     HasValType,
     List (..),
-    headH,
     Foldr,
     Curry (..),
     Len (..),
@@ -2457,9 +2456,6 @@ infixr 5 :.
 data List (as :: [Type]) where
   Nil :: List '[]
   (:.) :: a -> List as -> List (a ': as)
-
-headH :: List (a ': as) -> a
-headH (x :. _) = x
 
 instance Eq (List '[]) where
   Nil == Nil = True
