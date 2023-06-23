@@ -2,10 +2,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
-{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
@@ -2728,104 +2726,104 @@ instance HListable () where
 instance HListable Int32 where
   type Types Int32 = '[Int32]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable Int64 where
   type Types Int64 = '[Int64]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable Float where
   type Types Float = '[Float]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable Double where
   type Types Double = '[Double]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable Word128 where
   type Types Word128 = '[Word128]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable (Func s) where
   type Types (Func s) = '[Func s]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable (Ptr C'wasmtime_externref_t) where
   type Types (Ptr C'wasmtime_externref_t) = '[Ptr C'wasmtime_externref_t]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable (a, b) where
   type Types (a, b) = '[a, b]
   fromHList (x :. y :. Nil) = (x, y)
-  toHList (x, y) = (x :. y :. Nil)
+  toHList (x, y) = x :. y :. Nil
 
 instance HListable (a, b, c) where
   type Types (a, b, c) = '[a, b, c]
   fromHList (a :. b :. c :. Nil) = (a, b, c)
-  toHList (a, b, c) = (a :. b :. c :. Nil)
+  toHList (a, b, c) = a :. b :. c :. Nil
 
 instance HListable (a, b, c, d) where
   type Types (a, b, c, d) = '[a, b, c, d]
   fromHList (a :. b :. c :. d :. Nil) = (a, b, c, d)
-  toHList (a, b, c, d) = (a :. b :. c :. d :. Nil)
+  toHList (a, b, c, d) = a :. b :. c :. d :. Nil
 
 instance HListable (a, b, c, d, e) where
   type Types (a, b, c, d, e) = '[a, b, c, d, e]
   fromHList (a :. b :. c :. d :. e :. Nil) = (a, b, c, d, e)
-  toHList (a, b, c, d, e) = (a :. b :. c :. d :. e :. Nil)
+  toHList (a, b, c, d, e) = a :. b :. c :. d :. e :. Nil
 
 instance HListable (a, b, c, d, e, f) where
   type Types (a, b, c, d, e, f) = '[a, b, c, d, e, f]
   fromHList (a :. b :. c :. d :. e :. f :. Nil) = (a, b, c, d, e, f)
-  toHList (a, b, c, d, e, f) = (a :. b :. c :. d :. e :. f :. Nil)
+  toHList (a, b, c, d, e, f) = a :. b :. c :. d :. e :. f :. Nil
 
 instance HListable (a, b, c, d, e, f, g) where
   type Types (a, b, c, d, e, f, g) = '[a, b, c, d, e, f, g]
   fromHList (a :. b :. c :. d :. e :. f :. g :. Nil) = (a, b, c, d, e, f, g)
-  toHList (a, b, c, d, e, f, g) = (a :. b :. c :. d :. e :. f :. g :. Nil)
+  toHList (a, b, c, d, e, f, g) = a :. b :. c :. d :. e :. f :. g :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h) where
   type Types (a, b, c, d, e, f, g, h) = '[a, b, c, d, e, f, g, h]
   fromHList (a :. b :. c :. d :. e :. f :. g :. h :. Nil) = (a, b, c, d, e, f, g, h)
-  toHList (a, b, c, d, e, f, g, h) = (a :. b :. c :. d :. e :. f :. g :. h :. Nil)
+  toHList (a, b, c, d, e, f, g, h) = a :. b :. c :. d :. e :. f :. g :. h :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i) where
   type Types (a, b, c, d, e, f, g, h, i) = '[a, b, c, d, e, f, g, h, i]
   fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. Nil) = (a, b, c, d, e, f, g, h, i)
-  toHList (a, b, c, d, e, f, g, h, i) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. Nil)
+  toHList (a, b, c, d, e, f, g, h, i) = a :. b :. c :. d :. e :. f :. g :. h :. i :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j) where
   type Types (a, b, c, d, e, f, g, h, i, j) = '[a, b, c, d, e, f, g, h, i, j]
   fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. Nil) = (a, b, c, d, e, f, g, h, i, j)
-  toHList (a, b, c, d, e, f, g, h, i, j) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. Nil)
+  toHList (a, b, c, d, e, f, g, h, i, j) = a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j, k) where
   type Types (a, b, c, d, e, f, g, h, i, j, k) = '[a, b, c, d, e, f, g, h, i, j, k]
   fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. Nil) = (a, b, c, d, e, f, g, h, i, j, k)
-  toHList (a, b, c, d, e, f, g, h, i, j, k) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. Nil)
+  toHList (a, b, c, d, e, f, g, h, i, j, k) = a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j, k, l) where
   type Types (a, b, c, d, e, f, g, h, i, j, k, l) = '[a, b, c, d, e, f, g, h, i, j, k, l]
   fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. Nil) = (a, b, c, d, e, f, g, h, i, j, k, l)
-  toHList (a, b, c, d, e, f, g, h, i, j, k, l) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. Nil)
+  toHList (a, b, c, d, e, f, g, h, i, j, k, l) = a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j, k, l, m) where
   type Types (a, b, c, d, e, f, g, h, i, j, k, l, m) = '[a, b, c, d, e, f, g, h, i, j, k, l, m]
   fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. Nil) = (a, b, c, d, e, f, g, h, i, j, k, l, m)
-  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. Nil)
+  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m) = a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j, k, l, m, n) where
   type Types (a, b, c, d, e, f, g, h, i, j, k, l, m, n) = '[a, b, c, d, e, f, g, h, i, j, k, l, m, n]
   fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. Nil) = (a, b, c, d, e, f, g, h, i, j, k, l, m, n)
-  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m, n) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. Nil)
+  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m, n) = a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) where
   type Types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) = '[a, b, c, d, e, f, g, h, i, j, k, l, m, n, o]
   fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. o :. Nil) = (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o)
-  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. o :. Nil)
+  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) = a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. o :. Nil
