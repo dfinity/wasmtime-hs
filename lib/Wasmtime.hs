@@ -38,47 +38,44 @@ module Wasmtime
     setWasmMultiValue,
     setWasmMultiMemory,
     setWasmMemory64,
-    setStrategy,
     setParallelCompilation,
     setCraneliftDebugVerifier,
     setCaneliftNanCanonicalization,
-    setCraneliftOptLevel,
-    setProfilerSet,
     -- setStaticMemoryForced, -- seems absent
     setStaticMemoryMaximumSize,
     setStaticMemoryGuardSize,
     setDynamicMemoryGuardSize,
     loadCacheConfig,
+
+    -- ** Compilation Strategy
+    setStrategy,
     Strategy,
     autoStrategy,
     craneliftStrategy,
+
+    -- ** Optimization Level
+    setCraneliftOptLevel,
     OptLevel,
     noneOptLevel,
     speedOptLevel,
     speedAndSizeOptLevel,
+
+    -- ** Profiling Strategy
+    setProfiler,
     ProfilingStrategy,
     noneProfilingStrategy,
     jitDumpProfilingStrategy,
     vTuneProfilingStrategy,
     perfMapProfilingStrategy,
 
-    -- * Store
-    Store,
-    newStore,
-    Context,
-    storeContext,
-    addFuel,
-    fuelConsumed,
-    consumeFuel,
-
-    -- * Conversion
+    -- * WASM Conversion
     Wasm,
     wasmToBytes,
     wasmFromBytes,
     unsafeWasmFromBytes,
     wat2wasm,
 
-    -- * Module
+    -- * Modules
     Module,
     newModule,
 
@@ -100,32 +97,96 @@ module Wasmtime
     -- ** Extern Types
     ExternType (..),
 
-    -- * ValTypes
+    -- * Monads (IO & ST)
+    -- $monads
+
+    -- * Stores
+    Store,
+    newStore,
+    Context,
+    storeContext,
+    addFuel,
+    fuelConsumed,
+    consumeFuel,
+
+    -- * Types of WASM values
     ValType (..),
     HasValType,
+
+    -- * Functions
+
+    -- ** FuncTypes
+    FuncType,
+    newFuncType,
+    (.->.),
+    funcTypeParams,
+    funcTypeResults,
     List (..),
     Foldr,
     Curry (..),
     Len (..),
     HListable (..),
 
-    -- * Functions
-    FuncType,
-    newFuncType,
-    (.->.),
-    funcTypeParams,
-    funcTypeResults,
+    -- ** Funcs
     Func,
     getFuncType,
     newFunc,
     Funcable (..),
     Vals,
+
+    -- ** TypedFuncs
     TypedFunc,
     toTypedFunc,
     fromTypedFunc,
     callFunc,
 
+    -- * Globals
+
+    -- ** GlobalType
+    GlobalType,
+    newGlobalType,
+    Mutability (..),
+    globalTypeValType,
+    globalTypeMutability,
+
+    -- ** Global
+    Global,
+    getGlobalType,
+
+    -- ** TypedGlobal
+    TypedGlobal,
+    toTypedGlobal,
+    unTypedGlobal,
+    newTypedGlobal,
+
+    -- ** Global Operations
+    typedGlobalGet,
+    typedGlobalSet,
+
+    -- * Tables
+
+    -- ** TableType
+    TableType,
+    TableRefType (..),
+    TableLimits (..),
+    newTableType,
+    tableTypeElement,
+    tableTypeLimits,
+
+    -- ** Table
+    Table,
+    TableValue (..),
+    newTable,
+
+    -- ** Table operations
+    growTable,
+    tableGet,
+    tableSet,
+    getTableType,
+
     -- * Memory
+
+    -- ** MemoryType
     WordLength (..),
     MemoryType,
     newMemoryType,
@@ -133,11 +194,15 @@ module Wasmtime
     getMax,
     is64Memory,
     wordLength,
+
+    -- ** Memory
     Memory,
     newMemory,
     getMemoryType,
     getMemorySizeBytes,
     getMemorySizePages,
+
+    -- ** Memory Operations
     growMemory,
     Size,
     Offset,
@@ -146,36 +211,6 @@ module Wasmtime
     readMemoryAt,
     writeMemory,
     MemoryAccessError (..),
-
-    -- * Tables
-    TableType,
-    TableRefType (..),
-    TableLimits (..),
-    newTableType,
-    tableTypeElement,
-    tableTypeLimits,
-    Table,
-    TableValue (..),
-    newTable,
-    growTable,
-    tableGet,
-    tableSet,
-    getTableType,
-
-    -- * Globals
-    GlobalType,
-    newGlobalType,
-    Mutability (..),
-    globalTypeValType,
-    globalTypeMutability,
-    Global,
-    getGlobalType,
-    TypedGlobal,
-    toTypedGlobal,
-    unTypedGlobal,
-    newTypedGlobal,
-    typedGlobalGet,
-    typedGlobalSet,
 
     -- * Externs
     Extern,
@@ -186,6 +221,8 @@ module Wasmtime
     -- * Instances
     Instance,
     newInstance,
+
+    -- ** Exports
     getExport,
     getExportedTypedFunc,
     getExportedMemory,
@@ -397,12 +434,6 @@ setWasmMultiMemory = setConfig c'wasmtime_config_wasm_multi_memory_set
 setWasmMemory64 :: Bool -> Config
 setWasmMemory64 = setConfig c'wasmtime_config_wasm_memory64_set
 
--- | Configures which compilation strategy will be used for wasm modules.
---
--- Defaults to 'autoStrategy'
-setStrategy :: Strategy -> Config
-setStrategy (Strategy s) = setConfig c'wasmtime_config_strategy_set s
-
 -- | Configure wether wasmtime should compile a module using multiple threads.
 --
 -- Defaults to True.
@@ -416,16 +447,6 @@ setCraneliftDebugVerifier = setConfig c'wasmtime_config_cranelift_debug_verifier
 -- | Configures whether Cranelift should perform a NaN-canonicalization pass.
 setCaneliftNanCanonicalization :: Bool -> Config
 setCaneliftNanCanonicalization = setConfig c'wasmtime_config_cranelift_nan_canonicalization_set
-
--- | Configures the Cranelift code generator optimization level.
---
--- Defaults to 'noneOptLevel'
-setCraneliftOptLevel :: OptLevel -> Config
-setCraneliftOptLevel (OptLevel ol) = setConfig c'wasmtime_config_cranelift_opt_level_set ol
-
--- | Creates a default profiler based on the profiling strategy chosen.
-setProfilerSet :: ProfilingStrategy -> Config
-setProfilerSet (ProfilingStrategy ps) = setConfig c'wasmtime_config_profiler_set ps
 
 -- Seems absent
 
@@ -464,7 +485,15 @@ loadCacheConfig = setConfig $ \cfg_ptr filePath -> withCString filePath $ \str_p
   error_ptr <- c'wasmtime_config_cache_config_load cfg_ptr str_ptr
   checkWasmtimeError error_ptr
 
--- Config Enums
+--------------------------------------------------------------------------------
+-- Compilation Strategy
+--------------------------------------------------------------------------------
+
+-- | Configures which compilation strategy will be used for wasm modules.
+--
+-- Defaults to 'autoStrategy'
+setStrategy :: Strategy -> Config
+setStrategy (Strategy s) = setConfig c'wasmtime_config_strategy_set s
 
 -- | Configures which compilation strategy will be used for wasm modules.
 newtype Strategy = Strategy C'wasmtime_strategy_t
@@ -476,6 +505,16 @@ autoStrategy = Strategy c'WASMTIME_STRATEGY_AUTO
 -- | Cranelift aims to be a reasonably fast code generator which generates high quality machine code
 craneliftStrategy :: Strategy
 craneliftStrategy = Strategy c'WASMTIME_STRATEGY_CRANELIFT
+
+--------------------------------------------------------------------------------
+-- Optimization Level
+--------------------------------------------------------------------------------
+
+-- | Configures the Cranelift code generator optimization level.
+--
+-- Defaults to 'noneOptLevel'
+setCraneliftOptLevel :: OptLevel -> Config
+setCraneliftOptLevel (OptLevel ol) = setConfig c'wasmtime_config_cranelift_opt_level_set ol
 
 -- | Configures the Cranelift code generator optimization level.
 newtype OptLevel = OptLevel C'wasmtime_opt_level_t
@@ -491,6 +530,14 @@ speedOptLevel = OptLevel c'WASMTIME_OPT_LEVEL_SPEED
 -- | Similar to speed, but also performs transformations aimed at reducing code size.
 speedAndSizeOptLevel :: OptLevel
 speedAndSizeOptLevel = OptLevel c'WASMTIME_OPT_LEVEL_SPEED_AND_SIZE
+
+--------------------------------------------------------------------------------
+-- Profiling Strategy
+--------------------------------------------------------------------------------
+
+-- | Creates a default profiler based on the profiling strategy chosen.
+setProfiler :: ProfilingStrategy -> Config
+setProfiler (ProfilingStrategy ps) = setConfig c'wasmtime_config_profiler_set ps
 
 -- | Select which profiling technique to support.
 newtype ProfilingStrategy = ProfilingStrategy C'wasmtime_profiling_strategy_t
@@ -512,64 +559,7 @@ perfMapProfilingStrategy :: ProfilingStrategy
 perfMapProfilingStrategy = ProfilingStrategy c'WASMTIME_PROFILING_STRATEGY_PERFMAP
 
 --------------------------------------------------------------------------------
--- Store
---------------------------------------------------------------------------------
-
--- | A collection of instances and wasm global items.
-newtype Store s = Store {unStore :: ForeignPtr C'wasmtime_store_t}
-
-newStore :: MonadPrim s m => Engine -> m (Store s)
-newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
-  wasmtime_store_ptr <- c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
-  checkAllocation wasmtime_store_ptr
-  Store <$> newForeignPtr p'wasmtime_store_delete wasmtime_store_ptr
-
-withStore :: Store s -> (Ptr C'wasmtime_store_t -> IO a) -> IO a
-withStore = withForeignPtr . unStore
-
-data Context s = Context
-  { -- | Usage of a @wasmtime_context_t@ must not outlive the original @wasmtime_store_t@
-    -- so we keep a reference to a 'Store' to ensure it's not garbage collected.
-    storeContextStore :: !(Store s),
-    storeContextPtr :: !(Ptr C'wasmtime_context_t)
-  }
-
-storeContext :: MonadPrim s m => Store s -> m (Context s)
-storeContext store =
-  unsafeIOToPrim $ withStore store $ \wasmtime_store_ptr -> do
-    wasmtime_ctx_ptr <- c'wasmtime_store_context wasmtime_store_ptr
-    pure
-      Context
-        { storeContextStore = store,
-          storeContextPtr = wasmtime_ctx_ptr
-        }
-
-withContext :: Context s -> (Ptr C'wasmtime_context_t -> IO a) -> IO a
-withContext ctx f = withStore (storeContextStore ctx) $ \_store_ptr ->
-  f $ storeContextPtr ctx
-
-addFuel :: MonadPrim s m => Context s -> Word64 -> m (Either WasmtimeError ())
-addFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> try $ do
-  error_ptr <- c'wasmtime_context_add_fuel ctx_ptr amount
-  checkWasmtimeError error_ptr
-
-fuelConsumed :: MonadPrim s m => Context s -> m (Maybe Word64)
-fuelConsumed ctx = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
-  alloca $ \amount_ptr -> do
-    res <- c'wasmtime_context_fuel_consumed ctx_ptr amount_ptr
-    if not res
-      then pure Nothing
-      else Just <$> peek amount_ptr
-
-consumeFuel :: MonadPrim s m => Context s -> Word64 -> m (Either WasmtimeError Word64)
-consumeFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
-  alloca $ \remaining_ptr -> try $ do
-    error_ptr <- c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
-    checkWasmtimeError error_ptr
-    peek remaining_ptr
-
---------------------------------------------------------------------------------
--- Conversion
+-- WASM Conversion
 --------------------------------------------------------------------------------
 
 -- | WebAssembly binary code.
@@ -888,6 +878,152 @@ newExternTypeFromPtr externtype_ptr = do
     asSubType as_sub copy new = mask_ $ as_sub externtype_ptr >>= (copy >=> new)
 
 --------------------------------------------------------------------------------
+-- Monads (IO & ST)
+--------------------------------------------------------------------------------
+
+-- $monads
+--
+-- All side-effectful operations below happen in the Monad @m@ for all @m@ which
+-- have an instance for @'MonadPrim' s m@. This means they can be executed in
+-- both 'IO' and 'ST'.
+--
+-- The former allows you to import WASM functions that can do I/O like firing
+-- the missles. The latter allows you to run side-effectful WASM operations in
+-- pure code as long as the side-effects are contained within the 'ST'
+-- computation.
+--
+-- All (mutable) objects ('Store', 'Context', 'Func', 'TypedFunc', 'Global',
+-- 'TypedGlobal', 'Table' and 'Memory') have a phantom type @s@ that ensures
+-- that when executed within:
+--
+-- @
+-- 'runST' :: (forall s. 'ST' s a) -> a
+-- @
+--
+-- The (mutable) object can't leak outside the 'ST' computation and thus can't
+-- violate referential transparency.
+--
+-- In 'IO' the @s@ phantom type will be set to 'RealWorld'.
+
+--------------------------------------------------------------------------------
+-- Stores
+--------------------------------------------------------------------------------
+
+-- | A collection of instances and wasm global items.
+--
+-- All WebAssembly instances and items will be attached to and refer to a
+-- 'Store'. For example @'Instance's@, @'Func'tions@, @'Global's@, and
+-- @'Table's@ are all attached to a 'Store'. @'Instance's@ are created by
+-- instantiating a 'Module' within a 'Store' ('newInstance').
+--
+-- A 'Store' is intended to be a short-lived object in a program. No form of GC
+-- is implemented at this time within the 'Store' so once an instance is created
+-- within a 'Store' it will not be deallocated until the 'Store' itself is
+-- garbage collected. This makes 'Store' unsuitable for creating an unbounded
+-- number of instances in it because 'Store' will never release this
+-- memory. It’s recommended to have a 'Store' correspond roughly to the lifetime
+-- of a “main instance” that an embedding is interested in executing.
+newtype Store s = Store {unStore :: ForeignPtr C'wasmtime_store_t}
+
+-- | Creates a new store within the specified engine.
+newStore :: MonadPrim s m => Engine -> m (Store s)
+newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
+  wasmtime_store_ptr <- c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
+  checkAllocation wasmtime_store_ptr
+  Store <$> newForeignPtr p'wasmtime_store_delete wasmtime_store_ptr
+
+withStore :: Store s -> (Ptr C'wasmtime_store_t -> IO a) -> IO a
+withStore = withForeignPtr . unStore
+
+-- | A context is basically the same as a 'Store'. All functions in @wasmtime@
+-- that require a 'Store' will actually require a 'Context' instead.
+--
+-- We might fold 'Store' and 'Context' into a single type in the future.
+data Context s = Context
+  { -- | Usage of a @wasmtime_context_t@ must not outlive the original @wasmtime_store_t@
+    -- so we keep a reference to a 'Store' to ensure it's not garbage collected.
+    storeContextStore :: !(Store s),
+    storeContextPtr :: !(Ptr C'wasmtime_context_t)
+  }
+
+-- | Get a 'Context' from a 'Store'.
+storeContext :: MonadPrim s m => Store s -> m (Context s)
+storeContext store =
+  unsafeIOToPrim $ withStore store $ \wasmtime_store_ptr -> do
+    wasmtime_ctx_ptr <- c'wasmtime_store_context wasmtime_store_ptr
+    pure
+      Context
+        { storeContextStore = store,
+          storeContextPtr = wasmtime_ctx_ptr
+        }
+
+withContext :: Context s -> (Ptr C'wasmtime_context_t -> IO a) -> IO a
+withContext ctx f = withStore (storeContextStore ctx) $ \_store_ptr ->
+  f $ storeContextPtr ctx
+
+-- | Adds fuel to this 'Store' for wasm to consume while executing.
+--
+-- For this method to work fuel consumption must be enabled via
+-- 'setConsumeFuel'. By default a 'Store' starts with 0 fuel for wasm to execute
+-- with (meaning it will immediately 'Trap'). This function must be called for
+-- the store to have some fuel to allow WebAssembly to execute.
+--
+-- Most WebAssembly instructions consume 1 unit of fuel. Some instructions, such
+-- as @nop@, @drop@, @block@, and @loop@, consume 0 units, as any execution cost
+-- associated with them involves other instructions which do consume fuel.
+--
+-- Note that at this time when fuel is entirely consumed it will cause wasm to
+-- trap. More usages of fuel are planned for the future.
+--
+-- This function will return an error if fuel consumption is not enabled via
+-- 'setConsumeFuel'.
+addFuel :: MonadPrim s m => Context s -> Word64 -> m (Either WasmtimeError ())
+addFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> try $ do
+  error_ptr <- c'wasmtime_context_add_fuel ctx_ptr amount
+  checkWasmtimeError error_ptr
+
+-- | Returns the amount of fuel consumed by this store’s execution so far.
+--
+-- If fuel consumption is not enabled via 'setConsumeFuel' then this function
+-- will return 'Nothing'. Also note that fuel, if enabled, must be originally
+-- configured via 'addFuel'.
+fuelConsumed :: MonadPrim s m => Context s -> m (Maybe Word64)
+fuelConsumed ctx = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
+  alloca $ \amount_ptr -> do
+    res <- c'wasmtime_context_fuel_consumed ctx_ptr amount_ptr
+    if not res
+      then pure Nothing
+      else Just <$> peek amount_ptr
+
+-- | Synthetically consumes fuel from this 'Store'.
+--
+-- For this method to work fuel consumption must be enabled via 'setConsumeFuel'.
+--
+-- WebAssembly execution will automatically consume fuel but if so desired the
+-- embedder can also consume fuel manually to account for relative costs of host
+-- functions, for example.
+--
+-- This function will attempt to consume @fuel@ units of fuel from within this
+-- store. If the remaining amount of fuel allows this then @'Just' n@ is
+-- returned where @n@ is the amount of remaining fuel. Otherwise an error is
+-- returned and no fuel is consumed.
+--
+-- This function will return an error either if fuel consumption is not enabled
+-- via 'setConsumeFuel' or if fuel exceeds the amount of remaining fuel within
+-- this store.
+consumeFuel ::
+  MonadPrim s m =>
+  Context s ->
+  -- | Amount of @fuel@ to consume.
+  Word64 ->
+  m (Either WasmtimeError Word64)
+consumeFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
+  alloca $ \remaining_ptr -> try $ do
+    error_ptr <- c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
+    checkWasmtimeError error_ptr
+    peek remaining_ptr
+
+--------------------------------------------------------------------------------
 -- Function Types
 --------------------------------------------------------------------------------
 
@@ -924,6 +1060,15 @@ newFuncTypeFromPtr = fmap FuncType . newForeignPtr p'wasm_functype_delete
 
 -- | Creates a new function type with the parameter and result types of the
 -- Haskell function @f@.
+--
+-- For example the following:
+--
+-- @
+-- let funcType = 'newFuncType' $ 'Proxy' @(Int32 -> Float -> IO (Either 'Trap' (Word128, Double, Int64)))
+-- print funcType
+-- @
+--
+-- Prints: @Proxy @'[Int32, Float] '.->.' Proxy @'[Word128, Double, Int64]@
 newFuncType ::
   forall f (params :: [Type]) m r (results :: [Type]).
   ( Funcable f,
@@ -943,7 +1088,9 @@ newFuncType _proxy = Proxy @params .->. Proxy @results
 
 infixr 0 .->.
 
--- | Creates a new function type with the given parameter and result kinds.
+-- | Creates a new function type with the given parameter and result types.
+--
+-- See 'newFuncType' for creating a 'FuncType' from a Haskell function.
 (.->.) ::
   forall (params :: [Type]) (results :: [Type]).
   (Vals params, Vals results, Len params, Len results) =>
@@ -1357,68 +1504,402 @@ callFunc ctx typedFunc = curry callFuncOnParams
     n = max (len $ Proxy @params) (len $ Proxy @results)
 
 --------------------------------------------------------------------------------
--- Externs
+-- Globals
 --------------------------------------------------------------------------------
 
--- | Container for different kinds of extern items (like @'Func's@) that can be
--- imported into new @'Instance's@ using 'newInstance' and exported from
--- existing instances using 'getExport'.
-data Extern s where
-  Extern :: forall e s. (Externable e) => TypeRep e -> e s -> Extern s
+-- | The type of a global.
+newtype GlobalType = GlobalType {unGlobalType :: ForeignPtr C'wasm_globaltype_t}
 
--- | Class of types that can be imported and exported from @'Instance's@.
-class (Storable (CType e), Typeable e) => Externable (e :: Type -> Type) where
-  type CType e :: Type
-  toCExtern :: e s -> CType e
-  externKind :: Proxy e -> C'wasmtime_extern_kind_t
+instance Eq GlobalType where
+  gt1 == gt2 =
+    globalTypeValType gt1 == globalTypeValType gt2
+      && globalTypeMutability gt1 == globalTypeMutability gt2
 
-instance Externable Func where
-  type CType Func = C'wasmtime_func
-  toCExtern = getWasmtimeFunc
-  externKind _proxy = c'WASMTIME_EXTERN_FUNC
+instance Show GlobalType where
+  showsPrec p gt =
+    showParen (p > appPrec) $
+      showString "newGlobalType "
+        . showString ("(Proxy @" ++ ty ++ ") ")
+        . shows mut
+    where
+      appPrec = 10
 
-instance Externable Memory where
-  type CType Memory = C'wasmtime_memory_t
-  toCExtern = getWasmtimeMemory
-  externKind _proxy = c'WASMTIME_EXTERN_MEMORY
+      ty = kindToHaskellTypeStr $ globalTypeValType gt
+      mut = globalTypeMutability gt
 
-instance Externable Table where
-  type CType Table = C'wasmtime_table_t
-  toCExtern = getWasmtimeTable
-  externKind _proxy = c'WASMTIME_EXTERN_TABLE
+withGlobalType :: GlobalType -> (Ptr C'wasm_globaltype_t -> IO a) -> IO a
+withGlobalType = withForeignPtr . unGlobalType
 
-instance Externable Global where
-  type CType Global = C'wasmtime_global_t
-  toCExtern = getWasmtimeGlobal
-  externKind _proxy = c'WASMTIME_EXTERN_GLOBAL
+-- | Returns a new 'GlobalType' with the kind of the given Haskell type and the
+-- specified 'Mutability'.
+newGlobalType :: HasValType a => Proxy a -> Mutability -> GlobalType
+newGlobalType proxy mutability = unsafePerformIO $ do
+  globaltype_ptr <- newGlobalTypePtr proxy mutability
+  newGlobalTypeFromPtr globaltype_ptr
 
--- | Turn any externable value (like a 'Func') into the 'Extern' container.
-toExtern :: forall e s. Externable e => e s -> Extern s
-toExtern = Extern (typeRep :: TypeRep e)
+newGlobalTypeFromPtr :: Ptr C'wasm_globaltype_t -> IO GlobalType
+newGlobalTypeFromPtr globaltype_ptr =
+  GlobalType <$> newForeignPtr p'wasm_globaltype_delete globaltype_ptr
 
--- | Converts an 'Extern' object back into an ordinary Haskell value (like a 'Func')
--- of the correct type.
-fromExtern :: forall e s. Externable e => Extern s -> Maybe (e s)
-fromExtern (Extern t v)
-  | Just HRefl <- t `eqTypeRep` rep = Just v
-  | otherwise = Nothing
+newGlobalTypePtr :: forall a. HasValType a => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
+newGlobalTypePtr _proxy mutability = do
+  valtype_ptr <- c'wasm_valtype_new $ kind $ Proxy @a
+  c'wasm_globaltype_new valtype_ptr $ toWasmMutability mutability
+
+-- TODO: think about whether we should reflect Mutability on the type-level
+-- such that we can only use `globalSet` on mutable globals.
+
+-- | Specifies wether a global can be mutated or not.
+data Mutability
+  = -- | The global can not be mutated.
+    Immutable
+  | -- | The global can be mutated via 'globalSet'.
+    Mutable
+  deriving (Show, Eq)
+
+toWasmMutability :: Mutability -> C'wasm_mutability_t
+toWasmMutability Immutable = 0
+toWasmMutability Mutable = 1
+
+fromWasmMutability :: C'wasm_mutability_t -> Mutability
+fromWasmMutability 0 = Immutable
+fromWasmMutability 1 = Mutable
+fromWasmMutability m = error $ "Unknown wasm_mutability_t " ++ show m ++ "!"
+
+-- | Returns the 'ValType' of the given 'GlobalType'.
+globalTypeValType :: GlobalType -> ValType
+globalTypeValType globalType = unsafePerformIO $
+  withGlobalType globalType $ \globalType_ptr -> do
+    valtype_ptr <- c'wasm_globaltype_content globalType_ptr
+    fromWasmKind <$> c'wasm_valtype_kind valtype_ptr
+
+-- | Returns the 'Mutability' of the given 'GlobalType'.
+globalTypeMutability :: GlobalType -> Mutability
+globalTypeMutability globalType =
+  unsafePerformIO $
+    withGlobalType globalType $
+      fmap fromWasmMutability . c'wasm_globaltype_mutability
+
+-- | A WebAssembly global value which can be read and written to.
+--
+-- A global in WebAssembly is sort of like a global variable within an
+-- 'Instance'. The 'globalGet' and 'globalSet' instructions will modify and read
+-- global values in a wasm module. Globals can either be imported or exported
+-- from wasm modules.
+--
+-- A Global “belongs” to the store that it was originally created within (either
+-- via 'newGlobal' or via instantiating a 'Module'). Operations on a Global only
+-- work with the store it belongs to, and if another store is passed in by
+-- accident then methods will panic.
+newtype Global s = Global {getWasmtimeGlobal :: C'wasmtime_global_t}
+  deriving (Show, Typeable)
+
+withGlobal :: Global s -> (Ptr C'wasmtime_global_t -> IO a) -> IO a
+withGlobal = with . getWasmtimeGlobal
+
+-- | Returns the wasm type of the specified global.
+getGlobalType :: (MonadPrim s m) => Context s -> Global s -> m GlobalType
+getGlobalType ctx global =
+  unsafeIOToPrim $
+    withContext ctx $ \ctx_ptr ->
+      withGlobal global $ \global_ptr -> mask_ $ do
+        globaltype_ptr <- c'wasmtime_global_type ctx_ptr global_ptr
+        newGlobalTypeFromPtr globaltype_ptr
+
+-- | Retrieves the type of the given 'Global' from the 'Store' and checks if it
+-- matches the desired type @a@ of the returned 'TypedGlobal'.
+toTypedGlobal ::
+  forall s m a.
+  (MonadPrim s m, HasValType a) =>
+  Context s ->
+  Global s ->
+  m (Maybe (TypedGlobal s a))
+toTypedGlobal ctx global = do
+  globalType <- getGlobalType ctx global
+  let actualKind = toWasmKind $ globalTypeValType globalType
+      expectedKind = kind $ Proxy @a
+  if actualKind == expectedKind
+    then pure $ Just $ TypedGlobal global
+    else pure Nothing
+
+-- | A 'Global' with a phantom type of the value in the global.
+newtype TypedGlobal s a = TypedGlobal
+  { -- | Get the 'Global' out of a 'TypedGlobal'.
+    unTypedGlobal :: Global s
+  }
+
+withTypedGlobal :: TypedGlobal s a -> (Ptr C'wasmtime_global_t -> IO b) -> IO b
+withTypedGlobal = with . getWasmtimeGlobal . unTypedGlobal
+
+-- | Creates a new WebAssembly global value with the 'GlobalType' corresponding
+-- to the type of the given Haskell value and the specified 'Mutability'. The
+-- global will be initialised with the given Haskell value.
+--
+-- The 'Context' argument will be the owner of the 'Global' returned. Using the
+-- returned Global other items in the store may access this global. For example
+-- this could be provided as an argument to 'newInstance'.
+--
+-- Returns an error if the value comes from a different store than the specified
+-- store ('Context').
+newTypedGlobal ::
+  forall s m a.
+  (MonadPrim s m, HasValType a, Storable a) =>
+  Context s ->
+  -- | Specifies whether the global can be mutated or not.
+  Mutability ->
+  -- | Initialise the global with this Haskell value.
+  a ->
+  m (Either WasmtimeError (TypedGlobal s a))
+newTypedGlobal ctx mutability x =
+  unsafeIOToPrim $
+    try $
+      withContext ctx $ \ctx_ptr ->
+        withNewGlobalTypePtr $ \(globaltype_ptr :: Ptr C'wasm_globaltype_t) ->
+          alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
+            pokeVal val_ptr x
+            alloca $ \(global_ptr :: Ptr C'wasmtime_global_t) -> do
+              error_ptr <- c'wasmtime_global_new ctx_ptr globaltype_ptr val_ptr global_ptr
+              checkWasmtimeError error_ptr
+              TypedGlobal . Global <$> peek global_ptr
   where
-    rep = typeRep :: TypeRep e
+    withNewGlobalTypePtr =
+      bracket (newGlobalTypePtr (Proxy @a) mutability) c'wasm_globaltype_delete
 
-withExterns :: Vector (Extern s) -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
-withExterns externs f = allocaArray n $ \externs_ptr0 ->
-  let pokeExternsFrom ix
-        | ix == n = f externs_ptr0 $ fromIntegral n
-        | otherwise =
-            case V.unsafeIndex externs ix of
-              Extern _typeRep (e :: e s) -> do
-                let externs_ptr = advancePtr externs_ptr0 ix
-                poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
-                poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ toCExtern e
-                pokeExternsFrom (ix + 1)
-   in pokeExternsFrom 0
-  where
-    n = V.length externs
+-- | Returns the current value of the given typed global.
+typedGlobalGet ::
+  (MonadPrim s m, HasValType a, Storable a) =>
+  Context s ->
+  TypedGlobal s a ->
+  m a
+typedGlobalGet ctx typedGlobal =
+  unsafeIOToPrim $
+    withContext ctx $ \ctx_ptr ->
+      withTypedGlobal typedGlobal $ \global_ptr ->
+        alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
+          c'wasmtime_global_get ctx_ptr global_ptr val_ptr
+          uncheckedPeekVal val_ptr
+
+-- | Attempts to set the current value of this typed global.
+--
+-- Returns an error if it’s not a mutable global, or if value comes from a
+-- different store than the one provided.
+typedGlobalSet ::
+  (MonadPrim s m, HasValType a, Storable a) =>
+  Context s ->
+  TypedGlobal s a ->
+  a ->
+  m (Either WasmtimeError ())
+typedGlobalSet ctx typedGlobal x =
+  unsafeIOToPrim $
+    try $
+      withContext ctx $ \ctx_ptr ->
+        withTypedGlobal typedGlobal $ \global_ptr ->
+          alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
+            pokeVal val_ptr x
+            error_ptr <- c'wasmtime_global_set ctx_ptr global_ptr val_ptr
+            checkWasmtimeError error_ptr
+
+--------------------------------------------------------------------------------
+-- Tables
+--------------------------------------------------------------------------------
+
+-- | A descriptor for a table in a WebAssembly module.
+--
+-- Tables are contiguous chunks of a specific element, typically a funcref or an externref.
+-- The most common use for tables is a function table through which call_indirect can invoke other functions.
+newtype TableType = TableType {getWasmtimeTableType :: ForeignPtr C'wasm_tabletype_t}
+
+instance Eq TableType where
+  tt1 == tt2 =
+    tableTypeElement tt1 == tableTypeElement tt2
+      && tableTypeLimits tt1 == tableTypeLimits tt2
+
+instance Show TableType where
+  showsPrec p tt =
+    showParen (p > appPrec) $
+      showString "newTableType "
+        . showsArg tableRefType
+        . showString " "
+        . showsArg tableLimits
+    where
+      appPrec = 10
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (appPrec + 1)
+
+      tableRefType = tableTypeElement tt
+      tableLimits = tableTypeLimits tt
+
+withTableType :: TableType -> (Ptr C'wasm_tabletype_t -> IO a) -> IO a
+withTableType = withForeignPtr . getWasmtimeTableType
+
+newTableTypeFromPtr :: Ptr C'wasm_tabletype_t -> IO TableType
+newTableTypeFromPtr = fmap TableType . newForeignPtr p'wasm_tabletype_delete
+
+-- | The type of a table.
+data TableRefType = FuncRef | ExternRef
+  deriving (Show, Eq)
+
+-- TODO: make table limit maximum optional
+
+-- | Specifies a minimum and maximum size for a 'Table'
+data TableLimits = TableLimits {tableMin :: Int32, tableMax :: Int32}
+  deriving (Show, Eq)
+
+-- | Creates a new 'Table' descriptor which will contain the specified element type and have the limits applied to its length.
+newTableType ::
+  TableRefType ->
+  TableLimits ->
+  TableType
+newTableType tableRefType limits = unsafePerformIO $
+  alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> mask_ $ do
+    let (valkind :: C'wasm_valkind_t) = case tableRefType of
+          FuncRef -> c'WASMTIME_FUNCREF
+          ExternRef -> c'WASMTIME_EXTERNREF
+        limits' =
+          C'wasm_limits_t
+            { c'wasm_limits_t'min = fromIntegral $ tableMin limits,
+              c'wasm_limits_t'max = fromIntegral $ tableMax limits
+            }
+    valtype_ptr <- c'wasm_valtype_new valkind
+    poke limits_ptr limits'
+    c'wasm_tabletype_new valtype_ptr limits_ptr >>= newTableTypeFromPtr
+
+-- | Returns the element type of this table
+tableTypeElement :: TableType -> TableRefType
+tableTypeElement tt = unsafePerformIO $
+  withTableType tt $ \tt_ptr -> do
+    valtype_ptr <- c'wasm_tabletype_element tt_ptr
+    valkind <- c'wasm_valtype_kind valtype_ptr
+    if
+        | valkind == c'WASMTIME_FUNCREF -> pure FuncRef
+        | valkind == c'WASMTIME_EXTERNREF -> pure ExternRef
+        | otherwise -> error $ "Got invalid valkind " ++ show valkind ++ " from c'wasm_valtype_kind."
+
+-- | Returns the minimum and maximum size of this tabletype
+tableTypeLimits :: TableType -> TableLimits
+tableTypeLimits tt = unsafePerformIO $
+  withTableType tt $ \tt_ptr -> do
+    limits_ptr <- c'wasm_tabletype_limits tt_ptr
+    limits' <- peek limits_ptr
+    pure
+      TableLimits
+        { tableMin = fromIntegral (c'wasm_limits_t'min limits'),
+          tableMax = fromIntegral (c'wasm_limits_t'max limits')
+        }
+
+-- TODO: typed tables
+
+-- | A WebAssembly table, or an array of values.
+--
+-- For more information, see <https://docs.rs/wasmtime/latest/wasmtime/struct.Table.html>.
+newtype Table s = Table {getWasmtimeTable :: C'wasmtime_table_t}
+  deriving (Show, Typeable)
+
+withTable :: Table s -> (Ptr C'wasmtime_table_t -> IO a) -> IO a
+withTable = with . getWasmtimeTable
+
+-- | Tables can contain function references or extern references
+data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue (Ptr C'wasmtime_externref_t)
+
+withTableValue :: TableValue -> (Ptr C'wasmtime_val_t -> IO a) -> IO a
+withTableValue (FuncRefValue (Func (func_t :: C'wasmtime_func_t))) f =
+  alloca $ \val_ptr -> do
+    pokeVal val_ptr func_t
+    f val_ptr
+withTableValue (ExternRefValue _) _f = error "not implemented: ExternRefValue Tables"
+
+-- | Create a new table
+newTable ::
+  MonadPrim s m =>
+  Context s ->
+  TableType ->
+  -- | An optional initial value which will be used to fill in the table, if its initial size is > 0.
+  Maybe TableValue ->
+  m (Either WasmtimeError (Table s))
+newTable ctx tt mbVal = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withTableType tt $ \tt_ptr ->
+        alloca $ \table_ptr -> do
+          error_ptr <- case mbVal of
+            Nothing -> do
+              c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
+            (Just (FuncRefValue (Func func_t))) -> do
+              alloca $ \val_ptr -> do
+                pokeVal val_ptr func_t
+                c'wasmtime_table_new ctx_ptr tt_ptr val_ptr table_ptr
+            (Just (ExternRefValue _todo)) -> do
+              error "not implemented: ExternRefValue Tables"
+          checkWasmtimeError error_ptr
+          Table <$> peek table_ptr
+
+-- | Grow the table by delta elements.
+growTable ::
+  MonadPrim s m =>
+  Context s ->
+  Table s ->
+  -- | Delta
+  Word32 ->
+  -- | Optional element to fill in the new space.
+  Maybe TableValue ->
+  m (Either WasmtimeError Word32)
+growTable ctx table delta mbVal = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withTable table $ \table_ptr ->
+        alloca $ \prev_size_ptr -> do
+          error_ptr <- case mbVal of
+            Nothing -> do
+              c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) nullPtr prev_size_ptr
+            (Just val) ->
+              withTableValue val $ \val_ptr -> do
+                c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) val_ptr prev_size_ptr
+          checkWasmtimeError error_ptr
+          peek prev_size_ptr
+
+-- | Get value at index from table. If index > length table, Nothing is returned.
+tableGet ::
+  MonadPrim s m =>
+  Context s ->
+  Table s ->
+  -- | Index into table
+  Word32 ->
+  m (Maybe TableValue)
+tableGet ctx table ix = unsafeIOToPrim $
+  withContext ctx $ \ctx_ptr ->
+    withTable table $ \table_ptr ->
+      alloca $ \val_ptr -> do
+        success <- c'wasmtime_table_get ctx_ptr table_ptr ix val_ptr
+        if not success
+          then pure Nothing
+          else Just <$> peekTableVal val_ptr
+
+-- | Set an element at the given index. This function will return an error if the index is too large.
+tableSet ::
+  MonadPrim s m =>
+  Context s ->
+  Table s ->
+  -- | Index
+  Word32 ->
+  -- | The new value
+  TableValue ->
+  m (Either WasmtimeError ())
+tableSet ctx table ix val = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withTable table $ \table_ptr ->
+        withTableValue val $ \val_ptr -> do
+          error_ptr <- c'wasmtime_table_set ctx_ptr table_ptr ix val_ptr
+          checkWasmtimeError error_ptr
+
+-- | Return the 'TableType' with which this table was created.
+getTableType :: Context s -> Table s -> TableType
+getTableType ctx table = unsafePerformIO $
+  withContext ctx $ \ctx_ptr ->
+    withTable table $ \table_ptr ->
+      mask_ $
+        c'wasmtime_table_type ctx_ptr table_ptr >>= newTableTypeFromPtr
 
 --------------------------------------------------------------------------------
 -- Memory
@@ -1632,402 +2113,68 @@ data MemoryAccessError = MemoryAccessError deriving (Show)
 instance Exception MemoryAccessError
 
 --------------------------------------------------------------------------------
--- Tables
+-- Externs
 --------------------------------------------------------------------------------
 
--- | A descriptor for a table in a WebAssembly module.
---
--- Tables are contiguous chunks of a specific element, typically a funcref or an externref.
--- The most common use for tables is a function table through which call_indirect can invoke other functions.
-newtype TableType = TableType {getWasmtimeTableType :: ForeignPtr C'wasm_tabletype_t}
+-- | Container for different kinds of extern items (like @'Func's@) that can be
+-- imported into new @'Instance's@ using 'newInstance' and exported from
+-- existing instances using 'getExport'.
+data Extern s where
+  Extern :: forall e s. (Externable e) => TypeRep e -> e s -> Extern s
 
-instance Eq TableType where
-  tt1 == tt2 =
-    tableTypeElement tt1 == tableTypeElement tt2
-      && tableTypeLimits tt1 == tableTypeLimits tt2
+-- | Class of types that can be imported and exported from @'Instance's@.
+class (Storable (CType e), Typeable e) => Externable (e :: Type -> Type) where
+  type CType e :: Type
+  toCExtern :: e s -> CType e
+  externKind :: Proxy e -> C'wasmtime_extern_kind_t
 
-instance Show TableType where
-  showsPrec p tt =
-    showParen (p > appPrec) $
-      showString "newTableType "
-        . showsArg tableRefType
-        . showString " "
-        . showsArg tableLimits
-    where
-      appPrec = 10
+instance Externable Func where
+  type CType Func = C'wasmtime_func
+  toCExtern = getWasmtimeFunc
+  externKind _proxy = c'WASMTIME_EXTERN_FUNC
 
-      showsArg :: forall a. Show a => a -> ShowS
-      showsArg = showsPrec (appPrec + 1)
+instance Externable Memory where
+  type CType Memory = C'wasmtime_memory_t
+  toCExtern = getWasmtimeMemory
+  externKind _proxy = c'WASMTIME_EXTERN_MEMORY
 
-      tableRefType = tableTypeElement tt
-      tableLimits = tableTypeLimits tt
+instance Externable Table where
+  type CType Table = C'wasmtime_table_t
+  toCExtern = getWasmtimeTable
+  externKind _proxy = c'WASMTIME_EXTERN_TABLE
 
-withTableType :: TableType -> (Ptr C'wasm_tabletype_t -> IO a) -> IO a
-withTableType = withForeignPtr . getWasmtimeTableType
+instance Externable Global where
+  type CType Global = C'wasmtime_global_t
+  toCExtern = getWasmtimeGlobal
+  externKind _proxy = c'WASMTIME_EXTERN_GLOBAL
 
-newTableTypeFromPtr :: Ptr C'wasm_tabletype_t -> IO TableType
-newTableTypeFromPtr = fmap TableType . newForeignPtr p'wasm_tabletype_delete
+-- | Turn any externable value (like a 'Func') into the 'Extern' container.
+toExtern :: forall e s. Externable e => e s -> Extern s
+toExtern = Extern (typeRep :: TypeRep e)
 
--- | The type of a table.
-data TableRefType = FuncRef | ExternRef
-  deriving (Show, Eq)
-
--- TODO: make table limit maximum optional
-
--- | Specifies a minimum and maximum size for a 'Table'
-data TableLimits = TableLimits {tableMin :: Int32, tableMax :: Int32}
-  deriving (Show, Eq)
-
--- | Creates a new 'Table' descriptor which will contain the specified element type and have the limits applied to its length.
-newTableType ::
-  TableRefType ->
-  TableLimits ->
-  TableType
-newTableType tableRefType limits = unsafePerformIO $
-  alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> mask_ $ do
-    let (valkind :: C'wasm_valkind_t) = case tableRefType of
-          FuncRef -> c'WASMTIME_FUNCREF
-          ExternRef -> c'WASMTIME_EXTERNREF
-        limits' =
-          C'wasm_limits_t
-            { c'wasm_limits_t'min = fromIntegral $ tableMin limits,
-              c'wasm_limits_t'max = fromIntegral $ tableMax limits
-            }
-    valtype_ptr <- c'wasm_valtype_new valkind
-    poke limits_ptr limits'
-    c'wasm_tabletype_new valtype_ptr limits_ptr >>= newTableTypeFromPtr
-
--- | Returns the element type of this table
-tableTypeElement :: TableType -> TableRefType
-tableTypeElement tt = unsafePerformIO $
-  withTableType tt $ \tt_ptr -> do
-    valtype_ptr <- c'wasm_tabletype_element tt_ptr
-    valkind <- c'wasm_valtype_kind valtype_ptr
-    if
-        | valkind == c'WASMTIME_FUNCREF -> pure FuncRef
-        | valkind == c'WASMTIME_EXTERNREF -> pure ExternRef
-        | otherwise -> error $ "Got invalid valkind " ++ show valkind ++ " from c'wasm_valtype_kind."
-
--- | Returns the minimum and maximum size of this tabletype
-tableTypeLimits :: TableType -> TableLimits
-tableTypeLimits tt = unsafePerformIO $
-  withTableType tt $ \tt_ptr -> do
-    limits_ptr <- c'wasm_tabletype_limits tt_ptr
-    limits' <- peek limits_ptr
-    pure
-      TableLimits
-        { tableMin = fromIntegral (c'wasm_limits_t'min limits'),
-          tableMax = fromIntegral (c'wasm_limits_t'max limits')
-        }
-
--- TODO: typed tables
-
--- | A WebAssembly table, or an array of values.
---
--- For more information, see <https://docs.rs/wasmtime/latest/wasmtime/struct.Table.html>.
-newtype Table s = Table {getWasmtimeTable :: C'wasmtime_table_t}
-  deriving (Show, Typeable)
-
-withTable :: Table s -> (Ptr C'wasmtime_table_t -> IO a) -> IO a
-withTable = with . getWasmtimeTable
-
--- | Tables can contain function references or extern references
-data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue (Ptr C'wasmtime_externref_t)
-
-withTableValue :: TableValue -> (Ptr C'wasmtime_val_t -> IO a) -> IO a
-withTableValue (FuncRefValue (Func (func_t :: C'wasmtime_func_t))) f =
-  alloca $ \val_ptr -> do
-    pokeVal val_ptr func_t
-    f val_ptr
-withTableValue (ExternRefValue _) _f = error "not implemented: ExternRefValue Tables"
-
--- | Create a new table
-newTable ::
-  MonadPrim s m =>
-  Context s ->
-  TableType ->
-  -- | An optional initial value which will be used to fill in the table, if its initial size is > 0.
-  Maybe TableValue ->
-  m (Either WasmtimeError (Table s))
-newTable ctx tt mbVal = unsafeIOToPrim $
-  try $
-    withContext ctx $ \ctx_ptr ->
-      withTableType tt $ \tt_ptr ->
-        alloca $ \table_ptr -> do
-          error_ptr <- case mbVal of
-            Nothing -> do
-              c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
-            (Just (FuncRefValue (Func func_t))) -> do
-              alloca $ \val_ptr -> do
-                pokeVal val_ptr func_t
-                c'wasmtime_table_new ctx_ptr tt_ptr val_ptr table_ptr
-            (Just (ExternRefValue _todo)) -> do
-              error "not implemented: ExternRefValue Tables"
-          checkWasmtimeError error_ptr
-          Table <$> peek table_ptr
-
--- | Grow the table by delta elements.
-growTable ::
-  MonadPrim s m =>
-  Context s ->
-  Table s ->
-  -- | Delta
-  Word32 ->
-  -- | Optional element to fill in the new space.
-  Maybe TableValue ->
-  m (Either WasmtimeError Word32)
-growTable ctx table delta mbVal = unsafeIOToPrim $
-  try $
-    withContext ctx $ \ctx_ptr ->
-      withTable table $ \table_ptr ->
-        alloca $ \prev_size_ptr -> do
-          error_ptr <- case mbVal of
-            Nothing -> do
-              c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) nullPtr prev_size_ptr
-            (Just val) ->
-              withTableValue val $ \val_ptr -> do
-                c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) val_ptr prev_size_ptr
-          checkWasmtimeError error_ptr
-          peek prev_size_ptr
-
--- | Get value at index from table. If index > length table, Nothing is returned.
-tableGet ::
-  MonadPrim s m =>
-  Context s ->
-  Table s ->
-  -- | Index into table
-  Word32 ->
-  m (Maybe TableValue)
-tableGet ctx table ix = unsafeIOToPrim $
-  withContext ctx $ \ctx_ptr ->
-    withTable table $ \table_ptr ->
-      alloca $ \val_ptr -> do
-        success <- c'wasmtime_table_get ctx_ptr table_ptr ix val_ptr
-        if not success
-          then pure Nothing
-          else Just <$> peekTableVal val_ptr
-
--- | Set an element at the given index. This function will return an error if the index is too large.
-tableSet ::
-  MonadPrim s m =>
-  Context s ->
-  Table s ->
-  -- | Index
-  Word32 ->
-  -- | The new value
-  TableValue ->
-  m (Either WasmtimeError ())
-tableSet ctx table ix val = unsafeIOToPrim $
-  try $
-    withContext ctx $ \ctx_ptr ->
-      withTable table $ \table_ptr ->
-        withTableValue val $ \val_ptr -> do
-          error_ptr <- c'wasmtime_table_set ctx_ptr table_ptr ix val_ptr
-          checkWasmtimeError error_ptr
-
--- | Return the 'TableType' with which this table was created.
-getTableType :: Context s -> Table s -> TableType
-getTableType ctx table = unsafePerformIO $
-  withContext ctx $ \ctx_ptr ->
-    withTable table $ \table_ptr ->
-      mask_ $
-        c'wasmtime_table_type ctx_ptr table_ptr >>= newTableTypeFromPtr
-
---------------------------------------------------------------------------------
--- Globals
---------------------------------------------------------------------------------
-
--- | The type of a global.
-newtype GlobalType = GlobalType {unGlobalType :: ForeignPtr C'wasm_globaltype_t}
-
-instance Eq GlobalType where
-  gt1 == gt2 =
-    globalTypeValType gt1 == globalTypeValType gt2
-      && globalTypeMutability gt1 == globalTypeMutability gt2
-
-instance Show GlobalType where
-  showsPrec p gt =
-    showParen (p > appPrec) $
-      showString "newGlobalType "
-        . showString ("(Proxy @" ++ ty ++ ") ")
-        . shows mut
-    where
-      appPrec = 10
-
-      ty = kindToHaskellTypeStr $ globalTypeValType gt
-      mut = globalTypeMutability gt
-
-withGlobalType :: GlobalType -> (Ptr C'wasm_globaltype_t -> IO a) -> IO a
-withGlobalType = withForeignPtr . unGlobalType
-
--- | Returns a new 'GlobalType' with the kind of the given Haskell type and the
--- specified 'Mutability'.
-newGlobalType :: HasValType a => Proxy a -> Mutability -> GlobalType
-newGlobalType proxy mutability = unsafePerformIO $ do
-  globaltype_ptr <- newGlobalTypePtr proxy mutability
-  newGlobalTypeFromPtr globaltype_ptr
-
-newGlobalTypeFromPtr :: Ptr C'wasm_globaltype_t -> IO GlobalType
-newGlobalTypeFromPtr globaltype_ptr =
-  GlobalType <$> newForeignPtr p'wasm_globaltype_delete globaltype_ptr
-
-newGlobalTypePtr :: forall a. HasValType a => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
-newGlobalTypePtr _proxy mutability = do
-  valtype_ptr <- c'wasm_valtype_new $ kind $ Proxy @a
-  c'wasm_globaltype_new valtype_ptr $ toWasmMutability mutability
-
--- TODO: think about whether we should reflect Mutability on the type-level
--- such that we can only use `globalSet` on mutable globals.
-
--- | Specifies wether a global can be mutated or not.
-data Mutability
-  = -- | The global can not be mutated.
-    Immutable
-  | -- | The global can be mutated via 'globalSet'.
-    Mutable
-  deriving (Show, Eq)
-
-toWasmMutability :: Mutability -> C'wasm_mutability_t
-toWasmMutability Immutable = 0
-toWasmMutability Mutable = 1
-
-fromWasmMutability :: C'wasm_mutability_t -> Mutability
-fromWasmMutability 0 = Immutable
-fromWasmMutability 1 = Mutable
-fromWasmMutability m = error $ "Unknown wasm_mutability_t " ++ show m ++ "!"
-
--- | Returns the 'ValType' of the given 'GlobalType'.
-globalTypeValType :: GlobalType -> ValType
-globalTypeValType globalType = unsafePerformIO $
-  withGlobalType globalType $ \globalType_ptr -> do
-    valtype_ptr <- c'wasm_globaltype_content globalType_ptr
-    fromWasmKind <$> c'wasm_valtype_kind valtype_ptr
-
--- | Returns the 'Mutability' of the given 'GlobalType'.
-globalTypeMutability :: GlobalType -> Mutability
-globalTypeMutability globalType =
-  unsafePerformIO $
-    withGlobalType globalType $
-      fmap fromWasmMutability . c'wasm_globaltype_mutability
-
--- | A WebAssembly global value which can be read and written to.
---
--- A global in WebAssembly is sort of like a global variable within an
--- 'Instance'. The 'globalGet' and 'globalSet' instructions will modify and read
--- global values in a wasm module. Globals can either be imported or exported
--- from wasm modules.
---
--- A Global “belongs” to the store that it was originally created within (either
--- via 'newGlobal' or via instantiating a 'Module'). Operations on a Global only
--- work with the store it belongs to, and if another store is passed in by
--- accident then methods will panic.
-newtype Global s = Global {getWasmtimeGlobal :: C'wasmtime_global_t}
-  deriving (Show, Typeable)
-
-withGlobal :: Global s -> (Ptr C'wasmtime_global_t -> IO a) -> IO a
-withGlobal = with . getWasmtimeGlobal
-
--- | Returns the wasm type of the specified global.
-getGlobalType :: (MonadPrim s m) => Context s -> Global s -> m GlobalType
-getGlobalType ctx global =
-  unsafeIOToPrim $
-    withContext ctx $ \ctx_ptr ->
-      withGlobal global $ \global_ptr -> mask_ $ do
-        globaltype_ptr <- c'wasmtime_global_type ctx_ptr global_ptr
-        newGlobalTypeFromPtr globaltype_ptr
-
--- | Retrieves the type of the given 'Global' from the 'Store' and checks if it
--- matches the desired type @a@ of the returned 'TypedGlobal'.
-toTypedGlobal ::
-  forall s m a.
-  (MonadPrim s m, HasValType a) =>
-  Context s ->
-  Global s ->
-  m (Maybe (TypedGlobal s a))
-toTypedGlobal ctx global = do
-  globalType <- getGlobalType ctx global
-  let actualKind = toWasmKind $ globalTypeValType globalType
-      expectedKind = kind $ Proxy @a
-  if actualKind == expectedKind
-    then pure $ Just $ TypedGlobal global
-    else pure Nothing
-
--- | A 'Global' with a phantom type of the value in the global.
-newtype TypedGlobal s a = TypedGlobal
-  { -- | Get the 'Global' out of a 'TypedGlobal'.
-    unTypedGlobal :: Global s
-  }
-
-withTypedGlobal :: TypedGlobal s a -> (Ptr C'wasmtime_global_t -> IO b) -> IO b
-withTypedGlobal = with . getWasmtimeGlobal . unTypedGlobal
-
--- | Creates a new WebAssembly global value with the 'GlobalType' corresponding
--- to the type of the given Haskell value and the specified 'Mutability'. The
--- global will be initialised with the given Haskell value.
---
--- The 'Context' argument will be the owner of the 'Global' returned. Using the
--- returned Global other items in the store may access this global. For example
--- this could be provided as an argument to 'newInstance'.
---
--- Returns an error if the value comes from a different store than the specified
--- store ('Context').
-newTypedGlobal ::
-  forall s m a.
-  (MonadPrim s m, HasValType a, Storable a) =>
-  Context s ->
-  -- | Specifies whether the global can be mutated or not.
-  Mutability ->
-  -- | Initialise the global with this Haskell value.
-  a ->
-  m (Either WasmtimeError (TypedGlobal s a))
-newTypedGlobal ctx mutability x =
-  unsafeIOToPrim $
-    try $
-      withContext ctx $ \ctx_ptr ->
-        withNewGlobalTypePtr $ \(globaltype_ptr :: Ptr C'wasm_globaltype_t) ->
-          alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
-            pokeVal val_ptr x
-            alloca $ \(global_ptr :: Ptr C'wasmtime_global_t) -> do
-              error_ptr <- c'wasmtime_global_new ctx_ptr globaltype_ptr val_ptr global_ptr
-              checkWasmtimeError error_ptr
-              TypedGlobal . Global <$> peek global_ptr
+-- | Converts an 'Extern' object back into an ordinary Haskell value (like a 'Func')
+-- of the correct type.
+fromExtern :: forall e s. Externable e => Extern s -> Maybe (e s)
+fromExtern (Extern t v)
+  | Just HRefl <- t `eqTypeRep` rep = Just v
+  | otherwise = Nothing
   where
-    withNewGlobalTypePtr =
-      bracket (newGlobalTypePtr (Proxy @a) mutability) c'wasm_globaltype_delete
+    rep = typeRep :: TypeRep e
 
--- | Returns the current value of the given typed global.
-typedGlobalGet ::
-  (MonadPrim s m, HasValType a, Storable a) =>
-  Context s ->
-  TypedGlobal s a ->
-  m a
-typedGlobalGet ctx typedGlobal =
-  unsafeIOToPrim $
-    withContext ctx $ \ctx_ptr ->
-      withTypedGlobal typedGlobal $ \global_ptr ->
-        alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
-          c'wasmtime_global_get ctx_ptr global_ptr val_ptr
-          uncheckedPeekVal val_ptr
-
--- | Attempts to set the current value of this typed global.
---
--- Returns an error if it’s not a mutable global, or if value comes from a
--- different store than the one provided.
-typedGlobalSet ::
-  (MonadPrim s m, HasValType a, Storable a) =>
-  Context s ->
-  TypedGlobal s a ->
-  a ->
-  m (Either WasmtimeError ())
-typedGlobalSet ctx typedGlobal x =
-  unsafeIOToPrim $
-    try $
-      withContext ctx $ \ctx_ptr ->
-        withTypedGlobal typedGlobal $ \global_ptr ->
-          alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
-            pokeVal val_ptr x
-            error_ptr <- c'wasmtime_global_set ctx_ptr global_ptr val_ptr
-            checkWasmtimeError error_ptr
+withExterns :: Vector (Extern s) -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
+withExterns externs f = allocaArray n $ \externs_ptr0 ->
+  let pokeExternsFrom ix
+        | ix == n = f externs_ptr0 $ fromIntegral n
+        | otherwise =
+            case V.unsafeIndex externs ix of
+              Extern _typeRep (e :: e s) -> do
+                let externs_ptr = advancePtr externs_ptr0 ix
+                poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
+                poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ toCExtern e
+                pokeExternsFrom (ix + 1)
+   in pokeExternsFrom 0
+  where
+    n = V.length externs
 
 --------------------------------------------------------------------------------
 -- Instances
@@ -2141,6 +2288,7 @@ getExportedTypedFunc ::
   ) =>
   Context s ->
   Instance s ->
+  -- | Name of the export.
   String ->
   m (Maybe (TypedFunc s f))
 getExportedTypedFunc ctx inst name = runMaybeT $ do
@@ -2155,6 +2303,7 @@ getExportedMemory ::
   (MonadPrim s m) =>
   Context s ->
   Instance s ->
+  -- | Name of the export.
   String ->
   m (Maybe (Memory s))
 getExportedMemory ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
@@ -2166,6 +2315,7 @@ getExportedTable ::
   (MonadPrim s m) =>
   Context s ->
   Instance s ->
+  -- | Name of the export.
   String ->
   m (Maybe (Table s))
 getExportedTable ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
@@ -2178,6 +2328,7 @@ getExportedTypedGlobal ::
   (MonadPrim s m, HasValType a) =>
   Context s ->
   Instance s ->
+  -- | Name of the export.
   String ->
   m (Maybe (TypedGlobal s a))
 getExportedTypedGlobal ctx inst name = runMaybeT $ do
@@ -2190,6 +2341,7 @@ getExportAtIndex ::
   MonadPrim s m =>
   Context s ->
   Instance s ->
+  -- | Index of the export within the module.
   Word64 ->
   m (Maybe (String, Extern s))
 getExportAtIndex ctx inst ix =
@@ -2474,12 +2626,15 @@ instance Ord (List '[]) where
 instance (Ord a, Ord (List as)) => Ord (List (a ': as)) where
   (x :. xs) `compare` (y :. ys) = x `compare` y <> xs `compare` ys
 
-type family Foldr f z (xs :: [Type]) where
+-- | Fold a type constructor through a list of types.
+type family Foldr (f :: Type -> Type -> Type) (z :: Type) (xs :: [Type]) where
   Foldr f z '[] = z
   Foldr f z (x ': xs) = f x (Foldr f z xs)
 
+-- | Curry and uncurry Haskell functions with arbitrary number of arguments to
+-- and from functions on heterogeneous lists.
 class Curry (as :: [Type]) where
-  uncurry :: Foldr (->) b as -> List as -> b
+  uncurry :: Foldr (->) b as -> (List as -> b)
   curry :: (List as -> b) -> Foldr (->) b as
 
 instance Curry '[] where
@@ -2490,6 +2645,7 @@ instance Curry as => Curry (a ': as) where
   uncurry f (x :. xs) = uncurry (f x) xs
   curry f x = curry $ f . (x :.)
 
+-- | The length of a type of kind list of types.
 class Len (l :: [Type]) where
   len :: Proxy l -> Int
 
