@@ -103,7 +103,6 @@ module Wasmtime
     -- * ValTypes
     ValType (..),
     HasValType,
-    ValTypes,
     List (..),
     Foldr,
     Curry (..),
@@ -929,8 +928,8 @@ newFuncType ::
   ( Funcable f,
     Params f ~ params,
     Result f ~ m (Either Trap (List results)),
-    ValTypes params,
-    ValTypes results,
+    Vals params,
+    Vals results,
     Len params,
     Len results
   ) =>
@@ -944,7 +943,7 @@ infixr 0 .->.
 -- | Creates a new function type with the given parameter and result kinds.
 (.->.) ::
   forall (params :: [Type]) (results :: [Type]).
-  (ValTypes params, ValTypes results, Len params, Len results) =>
+  (Vals params, Vals results, Len params, Len results) =>
   -- | Parameter kinds
   Proxy params ->
   -- | Result kinds
@@ -958,7 +957,7 @@ params .->. results = unsafePerformIO $
 
 withValTypeVec ::
   forall types a.
-  (ValTypes types, Len types) =>
+  (Vals types, Len types) =>
   Proxy types ->
   (Ptr C'wasm_valtype_vec_t -> IO a) ->
   IO a
@@ -1055,33 +1054,26 @@ instance HasValType (Ptr C'wasmtime_externref_t) where kind _proxy = c'WASMTIME_
 
 -- | Class of types (of kind list of types) that can be passed and returned from
 -- WASM functions.
-class ValTypes (v :: [Type]) where
+class Vals (v :: [Type]) where
   pokeValTypes :: Ptr (Ptr C'wasm_valtype_t) -> Proxy v -> IO ()
-
-instance ValTypes '[] where
-  pokeValTypes _valtypes_ptr_ptr _proxy = pure ()
-
-instance (HasValType v, Vals vs) => ValTypes (v ': vs) where
-  pokeValTypes valtypes_ptr_ptr _proxy = do
-    valtype_ptr <- c'wasm_valtype_new $ kind $ Proxy @v
-    poke valtypes_ptr_ptr valtype_ptr
-    pokeValTypes (advancePtr valtypes_ptr_ptr 1) (Proxy @vs)
-
--- | Class of types (of kind list of types) that can be passed and returned from
--- WASM functions.
-class ValTypes v => Vals (v :: [Type]) where
   pokeVals :: Ptr C'wasmtime_val_t -> List v -> IO ()
   peekVals :: Ptr C'wasmtime_val_t -> MaybeT IO (List v)
   pokeRawVals :: Ptr C'wasmtime_val_raw_t -> List v -> IO ()
   peekRawVals :: Ptr C'wasmtime_val_raw_t -> IO (List v)
 
 instance Vals '[] where
+  pokeValTypes _valtypes_ptr_ptr _proxy = pure ()
   pokeVals _vals_ptr Nil = pure ()
   peekVals _vals_ptr = pure Nil
   pokeRawVals _raw_vals_ptr Nil = pure ()
   peekRawVals _raw_vals_ptr = pure Nil
 
 instance (HasValType v, Storable v, Vals vs) => Vals (v ': vs) where
+  pokeValTypes valtypes_ptr_ptr _proxy = do
+    valtype_ptr <- c'wasm_valtype_new $ kind $ Proxy @v
+    poke valtypes_ptr_ptr valtype_ptr
+    pokeValTypes (advancePtr valtypes_ptr_ptr 1) (Proxy @vs)
+
   pokeVals vals_ptr (v :. vs) = do
     pokeVal vals_ptr v
     pokeVals (advancePtr vals_ptr 1) vs
@@ -1289,8 +1281,8 @@ toTypedFunc ::
   ( Funcable f,
     Params f ~ params,
     Result f ~ m (Either Trap (List results)),
-    ValTypes params,
-    ValTypes results,
+    Vals params,
+    Vals results,
     Len params,
     Len results,
     MonadPrim s m
@@ -2128,8 +2120,8 @@ getExportedTypedFunc ::
   ( Funcable f,
     Params f ~ params,
     Result f ~ m (Either Trap (List results)),
-    ValTypes params,
-    ValTypes results,
+    Vals params,
+    Vals results,
     Len params,
     Len results,
     MonadPrim s m
