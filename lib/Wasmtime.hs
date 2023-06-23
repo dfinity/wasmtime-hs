@@ -1,9 +1,11 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE PolyKinds #-}
@@ -104,9 +106,11 @@ module Wasmtime
     ValType (..),
     HasValType,
     List (..),
+    headH,
     Foldr,
     Curry (..),
     Len (..),
+    FromHList (..),
 
     -- * Functions
     FuncType,
@@ -924,10 +928,11 @@ newFuncTypeFromPtr = fmap FuncType . newForeignPtr p'wasm_functype_delete
 -- | Creates a new function type with the parameter and result types of the
 -- Haskell function @f@.
 newFuncType ::
-  forall f (params :: [Type]) m (results :: [Type]).
+  forall f (params :: [Type]) m r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    Result f ~ m (Either Trap (List results)),
+    FromHList r results,
+    Result f ~ m (Either Trap r),
     Vals params,
     Vals results,
     Len params,
@@ -1167,11 +1172,12 @@ type FuncCallback =
 
 -- | Insert a new function into the 'Store'.
 newFunc ::
-  forall f (params :: [Type]) m s (results :: [Type]).
+  forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    Result f ~ m (Either Trap (List results)),
-    Foldr (->) (m (Either Trap (List results))) params ~ f,
+    FromHList r results,
+    Result f ~ m (Either Trap r),
+    Foldr (->) (m (Either Trap r)) params ~ f,
     Curry params,
     Vals params,
     Vals results,
@@ -1206,8 +1212,8 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
           case mbParams of
             Nothing -> error "ValType mismatch!"
             Just (params :: List params) -> do
-              r <- unsafePrimToIO $ (uncurry f :: List params -> m (Either Trap (List results))) params
-              case r of
+              e <- unsafePrimToIO $ (uncurry f :: List params -> m (Either Trap r)) params
+              case e of
                 Left trap ->
                   -- As the docs of <wasmtime_func_callback_t> mention:
                   --
@@ -1219,10 +1225,10 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
                   -- Since trap is a ForeignPtr which will be garbage collected
                   -- later we need to copy the trap to safely hand it to the engine.
                   withTrap trap c'wasm_trap_copy
-                Right results -> do
+                Right r -> do
                   let n = fromIntegral nresults
                   if n == expectedNrOfResults
-                    then pokeVals result_ptr results $> nullPtr
+                    then pokeVals result_ptr (toHList r) $> nullPtr
                     else do
                       -- TODO: use throwIO or trap!
                       error $
@@ -1245,13 +1251,13 @@ instance Funcable b => Funcable (a -> b) where
   type Params (a -> b) = a ': Params b
   type Result (a -> b) = Result b
 
-instance Vals results => Funcable (IO (Either Trap (List results))) where
-  type Params (IO (Either Trap (List results))) = '[]
-  type Result (IO (Either Trap (List results))) = IO (Either Trap (List results))
+instance (FromHList r results, Vals results) => Funcable (IO (Either Trap r)) where
+  type Params (IO (Either Trap r)) = '[]
+  type Result (IO (Either Trap r)) = IO (Either Trap r)
 
-instance Vals results => Funcable (ST s (Either Trap (List results))) where
-  type Params (ST s (Either Trap (List results))) = '[]
-  type Result (ST s (Either Trap (List results))) = ST s (Either Trap (List results))
+instance (FromHList r results, Vals results) => Funcable (ST s (Either Trap r)) where
+  type Params (ST s (Either Trap r)) = '[]
+  type Result (ST s (Either Trap r)) = ST s (Either Trap r)
 
 -- | A 'Func' annotated with its type.
 newtype TypedFunc s f = TypedFunc
@@ -1277,10 +1283,11 @@ newtype TypedFunc s f = TypedFunc
 --     print r -- prints "3"
 -- @
 toTypedFunc ::
-  forall f (params :: [Type]) m s (results :: [Type]).
+  forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    Result f ~ m (Either Trap (List results)),
+    FromHList r results,
+    Result f ~ m (Either Trap r),
     Vals params,
     Vals results,
     Len params,
@@ -1302,11 +1309,12 @@ toTypedFunc ctx func = do
 
 -- | Call an exported 'TypedFunc'.
 callFunc ::
-  forall f (params :: [Type]) m s (results :: [Type]).
+  forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    Result f ~ m (Either Trap (List results)),
-    Foldr (->) (m (Either Trap (List results))) params ~ f,
+    FromHList r results,
+    Result f ~ m (Either Trap r),
+    Foldr (->) (m (Either Trap r)) params ~ f,
     Curry params,
     Vals params,
     Vals results,
@@ -1321,7 +1329,7 @@ callFunc ::
   f
 callFunc ctx typedFunc = curry callFuncOnParams
   where
-    callFuncOnParams :: List params -> m (Either Trap (List results))
+    callFuncOnParams :: List params -> m (Either Trap r)
     callFuncOnParams params =
       unsafeIOToPrim $
         withContext ctx $ \ctx_ptr ->
@@ -1339,7 +1347,7 @@ callFunc ctx typedFunc = curry callFuncOnParams
                 checkWasmtimeError error_ptr
                 trap_ptr <- peek trap_ptr_ptr
                 if trap_ptr == nullPtr
-                  then Right <$> (peekRawVals args_and_results_ptr :: IO (List results))
+                  then Right . fromHList <$> (peekRawVals args_and_results_ptr :: IO (List results))
                   else Left <$> newTrapFromPtr trap_ptr
 
     n :: Int
@@ -2116,10 +2124,11 @@ fromExternPtr extern_ptr = do
 -- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally checks if
 -- the type of the function matches the desired type @f@ ('toTypedFunc').
 getExportedTypedFunc ::
-  forall f (params :: [Type]) m s (results :: [Type]).
+  forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
-    Result f ~ m (Either Trap (List results)),
+    FromHList r results,
+    Result f ~ m (Either Trap r),
     Vals params,
     Vals results,
     Len params,
@@ -2449,6 +2458,9 @@ data List (as :: [Type]) where
   Nil :: List '[]
   (:.) :: a -> List as -> List (a ': as)
 
+headH :: List (a ': as) -> a
+headH (x :. _) = x
+
 instance Eq (List '[]) where
   Nil == Nil = True
 
@@ -2485,3 +2497,55 @@ instance Len '[] where
 
 instance Len as => Len (a ': as) where
   len _proxy = 1 + len (Proxy @as)
+
+class FromHList a (rs :: [Type]) | a -> rs, rs -> a where
+  fromHList :: List rs -> a
+  toHList :: a -> List rs
+
+-- instance FromHList (List as) as where
+--   fromHList = id
+--   toHList = id
+
+instance FromHList () '[] where
+  fromHList Nil = ()
+  toHList () = Nil
+
+instance FromHList Int32 '[Int32] where
+  fromHList (x :. Nil) = x
+  toHList x = (x :. Nil)
+
+instance FromHList Int64 '[Int64] where
+  fromHList (x :. Nil) = x
+  toHList x = (x :. Nil)
+
+instance FromHList Float '[Float] where
+  fromHList (x :. Nil) = x
+  toHList x = (x :. Nil)
+
+instance FromHList Double '[Double] where
+  fromHList (x :. Nil) = x
+  toHList x = (x :. Nil)
+
+instance FromHList Word128 '[Word128] where
+  fromHList (x :. Nil) = x
+  toHList x = (x :. Nil)
+
+instance FromHList (Func s) '[Func s] where
+  fromHList (x :. Nil) = x
+  toHList x = (x :. Nil)
+
+instance FromHList (Ptr C'wasmtime_externref_t) '[Ptr C'wasmtime_externref_t] where
+  fromHList (x :. Nil) = x
+  toHList x = (x :. Nil)
+
+instance FromHList (a, b) '[a, b] where
+  fromHList (x :. y :. Nil) = (x, y)
+  toHList (x, y) = (x :. y :. Nil)
+
+instance FromHList (a, b, c) '[a, b, c] where
+  fromHList (a :. b :. c :. Nil) = (a, b, c)
+  toHList (a, b, c) = (a :. b :. c :. Nil)
+
+instance FromHList (a, b, c, d) '[a, b, c, d] where
+  fromHList (a :. b :. c :. d :. Nil) = (a, b, c, d)
+  toHList (a, b, c, d) = (a :. b :. c :. d :. Nil)

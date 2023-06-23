@@ -1,5 +1,3 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -36,9 +34,9 @@ main = do
 
   putStrLn "Extracting exports..."
   Just memory <- getExportedMemory ctx inst "memory"
-  Just (sizeFun :: TypedFunc RealWorld (IO (Either Trap (List '[Int32])))) <- getExportedTypedFunc ctx inst "size"
-  Just (loadFun :: TypedFunc RealWorld (Int32 -> IO (Either Trap (List '[Int32])))) <- getExportedTypedFunc ctx inst "load"
-  Just (storeFun :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap (List '[])))) <- getExportedTypedFunc ctx inst "store"
+  Just (sizeFun :: TypedFunc RealWorld (IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "size"
+  Just (loadFun :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "load"
+  Just (storeFun :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
 
   putStrLn "Checking memory..."
   2 <- getMemorySizePages ctx memory
@@ -47,31 +45,31 @@ main = do
   B.head mem_bs @?= 0
   B.index mem_bs 0x1000 @?= 1
   B.index mem_bs 0x1003 @?= 4
-  Right (2 :. Nil) <- callFunc ctx sizeFun
-  Right (0 :. Nil) <- callFunc ctx loadFun 0
-  Right (1 :. Nil) <- callFunc ctx loadFun 0x1000
-  Right (4 :. Nil) <- callFunc ctx loadFun 0x1003
-  Right (0 :. Nil) <- callFunc ctx loadFun 0x1ffff
+  Right 2 <- callFunc ctx sizeFun
+  Right 0 <- callFunc ctx loadFun 0
+  Right 1 <- callFunc ctx loadFun 0x1000
+  Right 4 <- callFunc ctx loadFun 0x1003
+  Right 0 <- callFunc ctx loadFun 0x1ffff
   Left trap_res <- callFunc ctx loadFun 0x20000
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
 
   putStrLn "Mutating memory..."
   Right () <- writeByte ctx memory 0x1003 5
-  Right Nil <- callFunc ctx storeFun 0x1002 6
+  Right _ <- callFunc ctx storeFun 0x1002 6
   Left trap_res <- callFunc ctx storeFun 0x20000 0
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
   mem_bs <- readMemory ctx memory
   B.index mem_bs 0x1002 @?= 6
   B.index mem_bs 0x1003 @?= 5
-  Right (6 :. Nil) <- callFunc ctx loadFun 0x1002
-  Right (5 :. Nil) <- callFunc ctx loadFun 0x1003
+  Right 6 <- callFunc ctx loadFun 0x1002
+  Right 5 <- callFunc ctx loadFun 0x1003
 
   putStrLn "Growing memory..."
   Right 2 <- growMemory ctx memory 1
   3 <- getMemorySizePages ctx memory
   0x30000 <- getMemorySizeBytes ctx memory
-  Right (0 :. Nil) <- callFunc ctx loadFun 0x20000
-  Right Nil <- callFunc ctx storeFun 0x20000 0
+  Right 0 <- callFunc ctx loadFun 0x20000
+  Right () <- callFunc ctx storeFun 0x20000 0
   Left trap_res <- callFunc ctx loadFun 0x30000
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
   Left trap_res <- callFunc ctx storeFun 0x30000 0
