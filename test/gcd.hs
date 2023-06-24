@@ -10,14 +10,11 @@ import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
 import Paths_wasmtime (getDataFileName)
-import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Text.Printf (printf)
 import Wasmtime
 
 main :: IO ()
 main = do
-  hSetBuffering stdout NoBuffering
-
   engine <- newEngine
 
   store <- newStore engine

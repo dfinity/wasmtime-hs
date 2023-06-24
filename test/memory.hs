@@ -12,14 +12,11 @@ import qualified Data.ByteString as B
 import Data.Int (Int32)
 import Data.Word (Word8)
 import Paths_wasmtime (getDataFileName)
-import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 
 main :: IO ()
 main = do
-  hSetBuffering stdout NoBuffering
-
   putStrLn "Initializing..."
   engine <- newEngine
   store <- newStore engine
@@ -34,9 +31,12 @@ main = do
 
   putStrLn "Extracting exports..."
   Just memory <- getExportedMemory ctx inst "memory"
-  Just (sizeFun :: TypedFunc RealWorld (IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "size"
-  Just (loadFun :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "load"
-  Just (storeFun :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
+  Just (sizeFun :: TypedFunc RealWorld (IO (Either Trap Int32))) <-
+    getExportedTypedFunc ctx inst "size"
+  Just (loadFun :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <-
+    getExportedTypedFunc ctx inst "load"
+  Just (storeFun :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <-
+    getExportedTypedFunc ctx inst "store"
 
   putStrLn "Checking memory..."
   2 <- getMemorySizePages ctx memory
@@ -96,5 +96,11 @@ wasmFromPath path = do
   bytes <- getDataFileName path >>= B.readFile
   handleWasmtimeError $ wat2wasm bytes
 
-writeByte :: MonadPrim s m => Context s -> Memory s -> Int -> Word8 -> m (Either MemoryAccessError ())
+writeByte ::
+  MonadPrim s m =>
+  Context s ->
+  Memory s ->
+  Int ->
+  Word8 ->
+  m (Either MemoryAccessError ())
 writeByte ctx mem offset byte = writeMemory ctx mem offset $ B.singleton byte

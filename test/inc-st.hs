@@ -10,13 +10,10 @@ import Control.Monad.ST (ST, runST)
 import qualified Data.ByteString as B
 import Data.STRef
 import Paths_wasmtime (getDataFileName)
-import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Wasmtime
 
 main :: IO ()
 main = do
-  hSetBuffering stdout NoBuffering
-
   putStrLn "Initializing..."
   engine <- newEngine
 

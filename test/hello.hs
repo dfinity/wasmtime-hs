@@ -9,13 +9,10 @@ import Control.Exception (Exception, throwIO)
 import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Paths_wasmtime (getDataFileName)
-import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Wasmtime
 
 main :: IO ()
 main = do
-  hSetBuffering stdout NoBuffering
-
   putStrLn "Initializing..."
   engine <- newEngine
 
