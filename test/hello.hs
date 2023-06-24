@@ -34,7 +34,7 @@ main = do
   inst <- newInstance ctx myModule [toExtern func] >>= handleException
 
   putStrLn "Extracting export..."
-  Just (run :: (IO (Either Trap ()))) <-
+  Just (run :: IO (Either Trap ())) <-
     getExportedTypedFunc ctx inst "run"
 
   putStrLn "Calling export..."
