@@ -221,8 +221,6 @@ module Bindings.Wasm where
 
 #ccall wasm_functype_new , Ptr <wasm_valtype_vec_t> -> Ptr <wasm_valtype_vec_t> -> IO (Ptr <wasm_functype_t>)
 
-#cinline wasm_functype_new_0_0 , IO (Ptr <wasm_functype_t>)
-
 #ccall wasm_functype_copy , Ptr <wasm_functype_t> -> IO (Ptr <wasm_functype_t>)
 
 #ccall wasm_functype_params , Ptr <wasm_functype_t> -> IO (Ptr <wasm_valtype_vec_t)
