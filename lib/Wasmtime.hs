@@ -2312,8 +2312,9 @@ fromExternPtr extern_ptr = do
     of_ptr = p'wasmtime_extern'of extern_ptr
 
 -- | Convenience function which gets the named export from the store
--- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally checks if
--- the type of the function matches the desired type @f@ ('toTypedFunc').
+-- ('getExport'), checks if it's a 'Func' ('fromExtern'), checks if the type of
+-- the function matches the desired type @f@ ('toTypedFunc') and finally
+-- converts the 'TypedFunc' to a normal Haskell function @f@ ('callFunc').
 getExportedTypedFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
@@ -2321,21 +2322,25 @@ getExportedTypedFunc ::
     HListable r,
     Types r ~ results,
     Result f ~ m (Either Trap r),
+    Foldr (->) (m (Either Trap r)) params ~ f,
+    Curry params,
     Vals params,
     Vals results,
     Len params,
     Len results,
-    MonadPrim s m
+    MonadPrim s m,
+    PrimBase m
   ) =>
   Context s ->
   Instance s ->
   -- | Name of the export.
   String ->
-  m (Maybe (TypedFunc s f))
+  m (Maybe f)
 getExportedTypedFunc ctx inst name = runMaybeT $ do
   extern <- MaybeT $ getExport ctx inst name
   (func :: Func s) <- MaybeT $ pure $ fromExtern extern
-  MaybeT $ toTypedFunc ctx func
+  typedFunc <- MaybeT $ toTypedFunc ctx func
+  pure $ callFunc ctx typedFunc
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport') and checks if it's a 'Memory' ('fromExtern').

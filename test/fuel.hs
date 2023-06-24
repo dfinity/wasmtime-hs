@@ -7,7 +7,6 @@
 module Main (main) where
 
 import Control.Exception (Exception, throwIO, try)
-import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Data.Foldable (for_)
 import Data.Int (Int32)
@@ -32,11 +31,11 @@ main = do
   inst <- newInstance ctx myModule [] >>= handleException
 
   putStrLn "Extracting exports..."
-  Just (fib :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <-
+  Just (fib :: Int32 -> IO (Either Trap Int32)) <-
     getExportedTypedFunc ctx inst "fibonacci"
   (Left trap :: Either Trap ()) <- try $ for_ ([1 ..] :: [Int32]) $ \i -> do
     Just fuel_before <- fuelConsumed ctx
-    res <- callFunc ctx fib i
+    res <- fib i
     case res of
       Left trap -> putStrLn ("Exhausted fuel computing fib " ++ show i) >> throwIO trap
       Right m -> do

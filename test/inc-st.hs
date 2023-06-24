@@ -41,10 +41,10 @@ st engine myModule = do
 
   Right (inst :: Instance s) <- newInstance ctx myModule [toExtern func]
 
-  Just (runTypedFunc :: TypedFunc s (ST s (Either Trap ()))) <-
+  Just (run :: ST s (Either Trap ())) <-
     getExportedTypedFunc ctx inst "run"
 
-  Right () <- callFunc ctx runTypedFunc
+  Right () <- run
 
   readSTRef stRef
 
