@@ -55,7 +55,7 @@ main = do
 
   putStrLn "Mutating memory..."
   Right () <- writeByte ctx memory 0x1003 5
-  Right () <- callFunc ctx storeFun 0x1002 6
+  Right _ <- callFunc ctx storeFun 0x1002 6
   Left trap_res <- callFunc ctx storeFun 0x20000 0
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
   mem_bs <- readMemory ctx memory
