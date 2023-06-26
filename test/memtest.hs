@@ -11,8 +11,8 @@ import Data.Int (Int32)
 import Data.Word (Word8)
 import Paths_wasmtime (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
-import Test.Tasty.HUnit ((@?=))
 import System.Mem (performGC)
+import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 import Wasmtime (callFunc)
 
@@ -24,8 +24,8 @@ main = do
 
   putStrLn "Initializing..."
   engine <- newEngine
-  for_ ([1 ..] :: [Int32]) $ \j -> do
-    print ("j", j)
+  for_ ([1 .. 100] :: [Int32]) $ \j -> do
+    print ("j", j) -- FIXME: currently fails after 13107 iterations
     store <- newStore engine
     ctx <- storeContext store
     wasm <- wasmFromPath "test/memtest.wat"
@@ -42,11 +42,9 @@ main = do
       inst <- newInstance ctx myModule [toExtern fIo, toExtern fPure]
       inst <- case inst of
         Left trap -> do
-          print ("trap", trapCode trap)
+          print ("trapped while creating instance: ", trapCode trap)
           error "nok"
-        Right inst -> do
-          -- putStrLn "ok got inst"
-          pure inst
+        Right inst -> pure inst
 
       -- putStrLn "Extracting exports..."
       Just memory <- getExportedMemory ctx inst "memory"
@@ -66,10 +64,8 @@ main = do
       -- Right () <- callFunc ctx callImportedIo
       -- putStrLn "--------------"
       pure ()
-    performGC
-    putStrLn "=================="
-  -- x <- readLn
-  -- putStrLn x
+  -- performGC
+  -- putStrLn "=================="
   putStrLn "end"
 
 io_imp :: IO (Either Trap ())

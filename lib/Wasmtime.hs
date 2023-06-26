@@ -514,9 +514,7 @@ newStore :: MonadPrim s m => Engine -> m (Store s)
 newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
   wasmtime_store_ptr <- c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
   checkAllocation wasmtime_store_ptr
-  fmap Store $ Foreign.Concurrent.newForeignPtr wasmtime_store_ptr $ do
-    putStrLn "deleting Store"
-    c'wasmtime_store_delete wasmtime_store_ptr
+  fmap Store $ Foreign.Concurrent.newForeignPtr wasmtime_store_ptr $ c'wasmtime_store_delete wasmtime_store_ptr
 
 withStore :: Store s -> (Ptr C'wasmtime_store_t -> IO a) -> IO a
 withStore = withForeignPtr . unStore
