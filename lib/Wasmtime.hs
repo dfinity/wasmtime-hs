@@ -902,8 +902,8 @@ newExternTypeFromPtr externtype_ptr = do
 -- computation.
 --
 -- All (mutable) objects ('Store', 'Context', 'Func', 'TypedFunc', 'Global',
--- 'TypedGlobal', 'Table' and 'Memory') have a phantom type @s@ that ensures
--- that when executed within:
+-- 'Table' and 'Memory') have a phantom type @s@ that ensures that when executed
+-- within:
 --
 -- @
 -- 'runST' :: (forall s. 'ST' s a) -> a
