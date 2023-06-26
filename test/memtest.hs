@@ -14,7 +14,6 @@ import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import System.Mem (performGC)
 import Test.Tasty.HUnit ((@?=))
 import Wasmtime
-import Wasmtime (callFunc)
 
 -- TODO: cmd line args for num iterations
 
@@ -44,20 +43,20 @@ main = do
         Right inst -> pure inst
 
       Just memory <- getExportedMemory ctx inst "memory"
-      Just (size :: TypedFunc RealWorld (IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "size"
-      Just (load :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "load"
-      Just (store :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
-      Just (callImportedPure :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "call_imported_pure"
-      Just (callImportedIo :: TypedFunc RealWorld (IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "call_imported_io"
+      Just (size :: IO (Either Trap Int32)) <- getExportedFunction ctx inst "size"
+      Just (load :: Int32 -> IO (Either Trap Int32)) <- getExportedFunction ctx inst "load"
+      Just (store :: Int32 -> Int32 -> IO (Either Trap ())) <- getExportedFunction ctx inst "store"
+      Just (callImportedPure :: Int32 -> IO (Either Trap Int32)) <- getExportedFunction ctx inst "call_imported_pure"
+      Just (callImportedIo :: IO (Either Trap ())) <- getExportedFunction ctx inst "call_imported_io"
 
-      Right res <- callFunc ctx size
+      Right res <- size
       -- print ("size", res)
-      Right () <- callFunc ctx store i i
-      Right res <- callFunc ctx load i
+      Right () <- store i i
+      Right res <- load i
       -- print ("load", res)
-      Right res <- callFunc ctx callImportedPure i
+      Right res <- callImportedPure i
       -- print ("pure", res)
-      -- Right () <- callFunc ctx callImportedIo
+      -- Right () <- callImportedIo
       -- putStrLn "--------------"
       pure ()
   -- performGC
