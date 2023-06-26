@@ -76,8 +76,3 @@ wasmFromPath :: FilePath -> IO Wasm
 wasmFromPath path = do
   bytes <- getDataFileName path >>= B.readFile
   handleWasmtimeError $ wat2wasm bytes
-
-wasmFromPath' :: FilePath -> IO Wasm
-wasmFromPath' path = do
-  bytes <- getDataFileName path >>= B.readFile
-  pure $ unsafeWasmFromBytes bytes
