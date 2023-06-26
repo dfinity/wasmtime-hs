@@ -652,9 +652,8 @@ serializeModule m =
   unsafePerformIO $
     try $
       withModule m $ \module_ptr ->
-        withByteVecToByteString $ \byte_vec_ptr ->
-          c'wasmtime_module_serialize module_ptr byte_vec_ptr
-            >>= checkWasmtimeError
+        withByteVecToByteString $
+          c'wasmtime_module_serialize module_ptr >=> checkWasmtimeError
 
 -- | Build a module from serialized data.
 --
