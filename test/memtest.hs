@@ -25,20 +25,17 @@ main = do
   putStrLn "Initializing..."
   engine <- newEngine
   for_ ([1 .. 100] :: [Int32]) $ \j -> do
-    print ("j", j) -- FIXME: currently fails after 13107 iterations
+    -- print ("j", j) -- FIXME: currently fails after 13107 iterations
     store <- newStore engine
     ctx <- storeContext store
     wasm <- wasmFromPath "test/memtest.wat"
 
-    -- putStrLn "Compiling module..."
     myModule <- handleWasmtimeError $ newModule engine wasm
 
     for_ ([1 .. 10] :: [Int32]) $ \i -> do
-      -- print ("i", i)
       fIo <- newFunc ctx io_imp
       fPure <- newFunc ctx pure_imp
 
-      -- putStrLn "Instantiating module..."
       inst <- newInstance ctx myModule [toExtern fIo, toExtern fPure]
       inst <- case inst of
         Left trap -> do
@@ -46,7 +43,6 @@ main = do
           error "nok"
         Right inst -> pure inst
 
-      -- putStrLn "Extracting exports..."
       Just memory <- getExportedMemory ctx inst "memory"
       Just (size :: TypedFunc RealWorld (IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "size"
       Just (load :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "load"
