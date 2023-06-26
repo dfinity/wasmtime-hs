@@ -32,7 +32,7 @@ main = do
 
   putStrLn "Extracting exports..."
   Just (fib :: Int32 -> IO (Either Trap Int32)) <-
-    getExportedTypedFunc ctx inst "fibonacci"
+    getExportedFunction ctx inst "fibonacci"
   (Left trap :: Either Trap ()) <- try $ for_ ([1 ..] :: [Int32]) $ \i -> do
     Just fuel_before <- fuelConsumed ctx
     res <- fib i

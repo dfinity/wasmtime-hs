@@ -131,12 +131,7 @@ module Wasmtime
     newFunc,
     Funcable (..),
     Vals,
-
-    -- ** TypedFuncs
-    TypedFunc,
-    toTypedFunc,
-    fromTypedFunc,
-    callFunc,
+    funcToFunction,
 
     -- * Globals
 
@@ -222,7 +217,7 @@ module Wasmtime
 
     -- ** Exports
     getExport,
-    getExportedTypedFunc,
+    getExportedFunction,
     getExportedMemory,
     getExportedTable,
     getExportedTypedGlobal,
@@ -1046,6 +1041,8 @@ consumeFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
 -- WebAssembly functions can have 0 or more parameters and results.
 newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
 
+-- | Two @'FuncType's@ are considered equal if their 'funcTypeParams' and
+-- 'funcTypeResults' are equal.
 instance Eq FuncType where
   ft1 == ft2 =
     funcTypeParams ft1 == funcTypeParams ft2
@@ -1424,58 +1421,51 @@ instance (HListable r, Types r ~ results, Vals results) => Funcable (ST s (Eithe
   type Params (ST s (Either Trap r)) = '[]
   type Result (ST s (Either Trap r)) = ST s (Either Trap r)
 
--- | A 'Func' annotated with its type.
-newtype TypedFunc s f = TypedFunc
-  { -- | Extract the untyped 'Func' from the typed 'TypedFunc'.
-    fromTypedFunc :: Func s
-  }
-  deriving (Show)
-
--- | Retrieves the type of the given 'Func' from the 'Store' and checks if it
--- matches the desired type @f@ of the returned 'TypedFunc'.
+-- | Converts a 'Func' into the Haskell function @f@.
 --
--- You can then call this 'TypedFunc' using 'callFunc' for example:
+-- 'Nothing' will be returned if the type of the 'Func' ('getFuncType') doesn't
+-- match the type of @f@ (@'newFuncType' $ Proxy \@f@).
+--
+-- Example:
 --
 -- @
--- mbTypedFunc <- 'toTypedFunc' ctx someExportedGcdFunc
+-- mbGCD <- 'funcToFunction' ctx someExportedGcdFunc
 -- case mbTypedFunc of
 --   Nothing -> error "gcd did not have the expected type!"
---   Just (gcdTypedFunc :: 'TypedFunc' RealWorld (Int32 -> Int32 -> IO (Either Trap Int32))) -> do
---     let wasmGCD :: Int32 -> Int32 -> IO (Either 'Trap' Int32)
---         wasmGCD = 'callFunc' ctx gcdTypedFunc
+--   Just (wasmGCD :: Int32 -> Int32 -> IO (Either Trap Int32)) -> do
 --     -- Call gcd on its two Int32 arguments:
 --     r <- wasmGCD 6 27
 --     print r -- prints "Right 3"
 -- @
-toTypedFunc ::
+funcToFunction ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
     HListable r,
     Types r ~ results,
     Result f ~ m (Either Trap r),
+    Foldr (->) (m (Either Trap r)) params ~ f,
+    Curry params,
     Vals params,
     Vals results,
     Len params,
     Len results,
-    MonadPrim s m
+    MonadPrim s m,
+    PrimBase m
   ) =>
   Context s ->
   -- | WASM function.
   Func s ->
-  m (Maybe (TypedFunc s f))
-toTypedFunc ctx func = do
+  m (Maybe f)
+funcToFunction ctx func = do
   actualFuncType <- getFuncType ctx func
   pure $
     if actualFuncType == expectedFuncType
-      then Just $ TypedFunc func
+      then Just $ callFunc ctx func
       else Nothing
   where
     expectedFuncType = newFuncType $ Proxy @f
 
--- | Call an exported 'TypedFunc'.
---
--- See 'toTypedFunc' for an example.
 callFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
@@ -1493,16 +1483,16 @@ callFunc ::
     PrimBase m
   ) =>
   Context s ->
-  -- | See 'toTypedFunc'.
-  TypedFunc s f ->
+  -- | See 'funcToFunction'.
+  Func s ->
   f
-callFunc ctx typedFunc = curry callFuncOnParams
+callFunc ctx func = curry callFuncOnParams
   where
     callFuncOnParams :: List params -> m (Either Trap r)
     callFuncOnParams params =
       unsafeIOToPrim $
         withContext ctx $ \ctx_ptr ->
-          withFunc (fromTypedFunc typedFunc) $ \func_ptr ->
+          withFunc func $ \func_ptr ->
             allocaArray n $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
               pokeRawVals args_and_results_ptr params
               allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> mask_ $ do
@@ -2313,9 +2303,9 @@ fromExternPtr extern_ptr = do
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport'), checks if it's a 'Func' ('fromExtern'), checks if the type of
--- the function matches the desired type @f@ ('toTypedFunc') and finally
+-- the function matches the desired type @f@ ('funcToFunction') and finally
 -- converts the 'TypedFunc' to a normal Haskell function @f@ ('callFunc').
-getExportedTypedFunc ::
+getExportedFunction ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
@@ -2336,11 +2326,10 @@ getExportedTypedFunc ::
   -- | Name of the export.
   String ->
   m (Maybe f)
-getExportedTypedFunc ctx inst name = runMaybeT $ do
+getExportedFunction ctx inst name = runMaybeT $ do
   extern <- MaybeT $ getExport ctx inst name
   (func :: Func s) <- MaybeT $ pure $ fromExtern extern
-  typedFunc <- MaybeT $ toTypedFunc ctx func
-  pure $ callFunc ctx typedFunc
+  MaybeT $ funcToFunction ctx func
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport') and checks if it's a 'Memory' ('fromExtern').
@@ -2655,7 +2644,7 @@ infixr 5 :.
 -- | Heterogeneous list that is used to return results from WASM functions.
 -- (Internally it's also used to pass parameters to WASM functions).
 --
--- See the documentation of 'toTypedFunc' for an example.
+-- See the documentation of 'funcToFunction' for an example.
 data List (as :: [Type]) where
   Nil :: List '[]
   (:.) :: a -> List as -> List (a ': as)

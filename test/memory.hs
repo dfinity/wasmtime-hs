@@ -32,11 +32,11 @@ main = do
   putStrLn "Extracting exports..."
   Just memory <- getExportedMemory ctx inst "memory"
   Just (sizeFun :: IO (Either Trap Int32)) <-
-    getExportedTypedFunc ctx inst "size"
+    getExportedFunction ctx inst "size"
   Just (loadFun :: Int32 -> IO (Either Trap Int32)) <-
-    getExportedTypedFunc ctx inst "load"
+    getExportedFunction ctx inst "load"
   Just (storeFun :: Int32 -> Int32 -> IO (Either Trap ())) <-
-    getExportedTypedFunc ctx inst "store"
+    getExportedFunction ctx inst "store"
 
   putStrLn "Checking memory..."
   2 <- getMemorySizePages ctx memory

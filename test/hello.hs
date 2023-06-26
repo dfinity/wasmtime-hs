@@ -35,7 +35,7 @@ main = do
 
   putStrLn "Extracting export..."
   Just (run :: IO (Either Trap ())) <-
-    getExportedTypedFunc ctx inst "run"
+    getExportedFunction ctx inst "run"
 
   putStrLn "Calling export..."
   run >>= handleException

@@ -30,7 +30,7 @@ main = do
   inst <- newInstance ctx myModule [] >>= handleException
 
   Just (wasmGCD :: Int32 -> Int32 -> IO (Either Trap Int32)) <-
-    getExportedTypedFunc ctx inst "gcd"
+    getExportedFunction ctx inst "gcd"
 
   let a = 6
       b = 27

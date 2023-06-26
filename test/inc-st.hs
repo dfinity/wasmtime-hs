@@ -42,7 +42,7 @@ st engine myModule = do
   Right (inst :: Instance s) <- newInstance ctx myModule [toExtern func]
 
   Just (run :: ST s (Either Trap ())) <-
-    getExportedTypedFunc ctx inst "run"
+    getExportedFunction ctx inst "run"
 
   Right () <- run
 
