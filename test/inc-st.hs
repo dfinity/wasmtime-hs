@@ -10,13 +10,10 @@ import Control.Monad.ST (ST, runST)
 import qualified Data.ByteString as B
 import Data.STRef
 import Paths_wasmtime (getDataFileName)
-import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Wasmtime
 
 main :: IO ()
 main = do
-  hSetBuffering stdout NoBuffering
-
   putStrLn "Initializing..."
   engine <- newEngine
 
@@ -44,10 +41,10 @@ st engine myModule = do
 
   Right (inst :: Instance s) <- newInstance ctx myModule [toExtern func]
 
-  Just (runTypedFunc :: TypedFunc s (ST s (Either Trap ()))) <-
-    getExportedTypedFunc ctx inst "run"
+  Just (run :: ST s (Either Trap ())) <-
+    getExportedFunction ctx inst "run"
 
-  Right () <- callFunc ctx runTypedFunc
+  Right () <- run
 
   readSTRef stRef
 

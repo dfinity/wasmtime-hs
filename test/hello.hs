@@ -6,16 +6,12 @@
 module Main (main) where
 
 import Control.Exception (Exception, throwIO)
-import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Paths_wasmtime (getDataFileName)
-import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Wasmtime
 
 main :: IO ()
 main = do
-  hSetBuffering stdout NoBuffering
-
   putStrLn "Initializing..."
   engine <- newEngine
 
@@ -38,11 +34,11 @@ main = do
   inst <- newInstance ctx myModule [toExtern func] >>= handleException
 
   putStrLn "Extracting export..."
-  Just ((runTypedFunc :: TypedFunc RealWorld (IO (Either Trap ())))) <-
-    getExportedTypedFunc ctx inst "run"
+  Just (run :: IO (Either Trap ())) <-
+    getExportedFunction ctx inst "run"
 
   putStrLn "Calling export..."
-  callFunc ctx runTypedFunc >>= handleException
+  run >>= handleException
 
   putStrLn "All finished!"
 

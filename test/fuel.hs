@@ -7,19 +7,15 @@
 module Main (main) where
 
 import Control.Exception (Exception, throwIO, try)
-import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Data.Foldable (for_)
 import Data.Int (Int32)
 import Paths_wasmtime (getDataFileName)
-import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 
 main :: IO ()
 main = do
-  hSetBuffering stdout NoBuffering
-
   putStrLn "Initializing..."
   engine <- newEngineWithConfig $ setConsumeFuel True
   store <- newStore engine
@@ -35,10 +31,11 @@ main = do
   inst <- newInstance ctx myModule [] >>= handleException
 
   putStrLn "Extracting exports..."
-  Just (fib :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "fibonacci"
+  Just (fib :: Int32 -> IO (Either Trap Int32)) <-
+    getExportedFunction ctx inst "fibonacci"
   (Left trap :: Either Trap ()) <- try $ for_ ([1 ..] :: [Int32]) $ \i -> do
     Just fuel_before <- fuelConsumed ctx
-    res <- callFunc ctx fib i
+    res <- fib i
     case res of
       Left trap -> putStrLn ("Exhausted fuel computing fib " ++ show i) >> throwIO trap
       Right m -> do
