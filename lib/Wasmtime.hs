@@ -119,18 +119,18 @@ module Wasmtime
     (.->.),
     funcTypeParams,
     funcTypeResults,
+    Vals,
+    Funcable (..),
+    HListable (..),
     List (..),
     Foldr,
     Curry (..),
     Len (..),
-    HListable (..),
 
     -- ** Funcs
     Func,
     getFuncType,
     newFunc,
-    Funcable (..),
-    Vals,
     funcToFunction,
 
     -- * Globals
@@ -1150,6 +1150,24 @@ unmarshalValTypeVec valtype_vec_ptr = do
     cur_valtype_ptr <- peekElemOff dt ix
     fromWasmKind <$> c'wasm_valtype_kind cur_valtype_ptr
 
+-- | Class of Haskell functions / actions that can be imported into and exported
+-- from WASM modules.
+class Funcable f where
+  type Params f :: [Type]
+  type Result f :: Type
+
+instance Funcable b => Funcable (a -> b) where
+  type Params (a -> b) = a ': Params b
+  type Result (a -> b) = Result b
+
+instance (HListable r, Types r ~ results, Vals results) => Funcable (IO (Either Trap r)) where
+  type Params (IO (Either Trap r)) = '[]
+  type Result (IO (Either Trap r)) = IO (Either Trap r)
+
+instance (HListable r, Types r ~ results, Vals results) => Funcable (ST s (Either Trap r)) where
+  type Params (ST s (Either Trap r)) = '[]
+  type Result (ST s (Either Trap r)) = ST s (Either Trap r)
+
 -- | Type of values that:
 --
 -- * WASM @'Func'tions@ can take as parameters or return as results.
@@ -1402,24 +1420,6 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
 
     expectedNrOfArgs = len $ Proxy @params
     expectedNrOfResults = len $ Proxy @results
-
--- | Class of Haskell functions / actions that can be imported into and exported
--- from WASM modules.
-class Funcable f where
-  type Params f :: [Type]
-  type Result f :: Type
-
-instance Funcable b => Funcable (a -> b) where
-  type Params (a -> b) = a ': Params b
-  type Result (a -> b) = Result b
-
-instance (HListable r, Types r ~ results, Vals results) => Funcable (IO (Either Trap r)) where
-  type Params (IO (Either Trap r)) = '[]
-  type Result (IO (Either Trap r)) = IO (Either Trap r)
-
-instance (HListable r, Types r ~ results, Vals results) => Funcable (ST s (Either Trap r)) where
-  type Params (ST s (Either Trap r)) = '[]
-  type Result (ST s (Either Trap r)) = ST s (Either Trap r)
 
 -- | Converts a 'Func' into the Haskell function @f@.
 --
@@ -2696,9 +2696,10 @@ instance Len as => Len (a ': as) where
 -- Working with @'List's@ can be cumbersome because you need to enable the
 -- @DataKinds@ and @GADTs@ language extensions.
 --
--- For this reason functions like 'newFunc' and `callFunc` use this 'HListable'
--- type class to automatically convert @'List's@ to \"normal\" Haskell types
--- like @()@, primitive types like @Int32@ or to tuples of primitive types.
+-- For this reason functions like 'newFunc' and `funcToFunction` use this
+-- 'HListable' type class to automatically convert @'List's@ to \"normal\"
+-- Haskell types like @()@, primitive types like @Int32@ or to tuples of
+-- primitive types.
 --
 -- Note there also exists an identity instance for @'List's@ themselves so if
 -- you want to use heterogeneous lists you can.
