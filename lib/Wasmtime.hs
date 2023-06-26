@@ -2302,9 +2302,9 @@ fromExternPtr extern_ptr = do
     of_ptr = p'wasmtime_extern'of extern_ptr
 
 -- | Convenience function which gets the named export from the store
--- ('getExport'), checks if it's a 'Func' ('fromExtern'), checks if the type of
--- the function matches the desired type @f@ ('funcToFunction') and finally
--- converts the 'TypedFunc' to a normal Haskell function @f@ ('callFunc').
+-- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally converts
+-- the 'Func' to the Haskell function @f@ in case their types match
+-- ('funcToFunction').
 getExportedFunction ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
