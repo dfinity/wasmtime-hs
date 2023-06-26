@@ -901,7 +901,7 @@ newExternTypeFromPtr externtype_ptr = do
 -- pure code as long as the side-effects are contained within the 'ST'
 -- computation.
 --
--- All (mutable) objects ('Store', 'Context', 'Func', 'TypedFunc', 'Global',
+-- All (mutable) objects ('Store', 'Context', 'Func', 'Global', 'TypedGlobal',
 -- 'Table' and 'Memory') have a phantom type @s@ that ensures that when executed
 -- within:
 --
@@ -1430,7 +1430,7 @@ instance (HListable r, Types r ~ results, Vals results) => Funcable (ST s (Eithe
 --
 -- @
 -- mbGCD <- 'funcToFunction' ctx someExportedGcdFunc
--- case mbTypedFunc of
+-- case mbGCD of
 --   Nothing -> error "gcd did not have the expected type!"
 --   Just (wasmGCD :: Int32 -> Int32 -> IO (Either Trap Int32)) -> do
 --     -- Call gcd on its two Int32 arguments:
