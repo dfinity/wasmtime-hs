@@ -7,19 +7,16 @@
 module Main (main) where
 
 import Control.Exception (Exception, throwIO)
-import Control.Monad.Primitive (MonadPrim, RealWorld)
+import Control.Monad.Primitive (MonadPrim)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
 import Data.Word (Word8)
 import Paths_wasmtime (getDataFileName)
-import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 
 main :: IO ()
 main = do
-  hSetBuffering stdout NoBuffering
-
   putStrLn "Initializing..."
   engine <- newEngine
   store <- newStore engine
@@ -34,9 +31,12 @@ main = do
 
   putStrLn "Extracting exports..."
   Just memory <- getExportedMemory ctx inst "memory"
-  Just (sizeFun :: TypedFunc RealWorld (IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "size"
-  Just (loadFun :: TypedFunc RealWorld (Int32 -> IO (Either Trap Int32))) <- getExportedTypedFunc ctx inst "load"
-  Just (storeFun :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap ()))) <- getExportedTypedFunc ctx inst "store"
+  Just (sizeFun :: IO (Either Trap Int32)) <-
+    getExportedFunction ctx inst "size"
+  Just (loadFun :: Int32 -> IO (Either Trap Int32)) <-
+    getExportedFunction ctx inst "load"
+  Just (storeFun :: Int32 -> Int32 -> IO (Either Trap ())) <-
+    getExportedFunction ctx inst "store"
 
   putStrLn "Checking memory..."
   2 <- getMemorySizePages ctx memory
@@ -45,34 +45,34 @@ main = do
   B.head mem_bs @?= 0
   B.index mem_bs 0x1000 @?= 1
   B.index mem_bs 0x1003 @?= 4
-  Right 2 <- callFunc ctx sizeFun
-  Right 0 <- callFunc ctx loadFun 0
-  Right 1 <- callFunc ctx loadFun 0x1000
-  Right 4 <- callFunc ctx loadFun 0x1003
-  Right 0 <- callFunc ctx loadFun 0x1ffff
-  Left trap_res <- callFunc ctx loadFun 0x20000
+  Right 2 <- sizeFun
+  Right 0 <- loadFun 0
+  Right 1 <- loadFun 0x1000
+  Right 4 <- loadFun 0x1003
+  Right 0 <- loadFun 0x1ffff
+  Left trap_res <- loadFun 0x20000
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
 
   putStrLn "Mutating memory..."
   Right () <- writeByte ctx memory 0x1003 5
-  Right _ <- callFunc ctx storeFun 0x1002 6
-  Left trap_res <- callFunc ctx storeFun 0x20000 0
+  Right _ <- storeFun 0x1002 6
+  Left trap_res <- storeFun 0x20000 0
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
   mem_bs <- readMemory ctx memory
   B.index mem_bs 0x1002 @?= 6
   B.index mem_bs 0x1003 @?= 5
-  Right 6 <- callFunc ctx loadFun 0x1002
-  Right 5 <- callFunc ctx loadFun 0x1003
+  Right 6 <- loadFun 0x1002
+  Right 5 <- loadFun 0x1003
 
   putStrLn "Growing memory..."
   Right 2 <- growMemory ctx memory 1
   3 <- getMemorySizePages ctx memory
   0x30000 <- getMemorySizeBytes ctx memory
-  Right 0 <- callFunc ctx loadFun 0x20000
-  Right () <- callFunc ctx storeFun 0x20000 0
-  Left trap_res <- callFunc ctx loadFun 0x30000
+  Right 0 <- loadFun 0x20000
+  Right () <- storeFun 0x20000 0
+  Left trap_res <- loadFun 0x30000
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
-  Left trap_res <- callFunc ctx storeFun 0x30000 0
+  Left trap_res <- storeFun 0x30000 0
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
   Left _ <- growMemory ctx memory 1
   Right 3 <- growMemory ctx memory 0
@@ -96,5 +96,11 @@ wasmFromPath path = do
   bytes <- getDataFileName path >>= B.readFile
   handleWasmtimeError $ wat2wasm bytes
 
-writeByte :: MonadPrim s m => Context s -> Memory s -> Int -> Word8 -> m (Either MemoryAccessError ())
+writeByte ::
+  MonadPrim s m =>
+  Context s ->
+  Memory s ->
+  Int ->
+  Word8 ->
+  m (Either MemoryAccessError ())
 writeByte ctx mem offset byte = writeMemory ctx mem offset $ B.singleton byte

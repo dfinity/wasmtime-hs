@@ -2,10 +2,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
-{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
@@ -38,47 +36,44 @@ module Wasmtime
     setWasmMultiValue,
     setWasmMultiMemory,
     setWasmMemory64,
-    setStrategy,
     setParallelCompilation,
     setCraneliftDebugVerifier,
     setCaneliftNanCanonicalization,
-    setCraneliftOptLevel,
-    setProfilerSet,
     -- setStaticMemoryForced, -- seems absent
     setStaticMemoryMaximumSize,
     setStaticMemoryGuardSize,
     setDynamicMemoryGuardSize,
     loadCacheConfig,
+
+    -- ** Compilation Strategy
+    setStrategy,
     Strategy,
     autoStrategy,
     craneliftStrategy,
+
+    -- ** Optimization Level
+    setCraneliftOptLevel,
     OptLevel,
     noneOptLevel,
     speedOptLevel,
     speedAndSizeOptLevel,
+
+    -- ** Profiling Strategy
+    setProfiler,
     ProfilingStrategy,
     noneProfilingStrategy,
     jitDumpProfilingStrategy,
     vTuneProfilingStrategy,
     perfMapProfilingStrategy,
 
-    -- * Store
-    Store,
-    newStore,
-    Context,
-    storeContext,
-    addFuel,
-    fuelConsumed,
-    consumeFuel,
-
-    -- * Conversion
+    -- * WASM Conversion
     Wasm,
     wasmToBytes,
     wasmFromBytes,
     unsafeWasmFromBytes,
     wat2wasm,
 
-    -- * Module
+    -- * Modules
     Module,
     newModule,
 
@@ -100,32 +95,91 @@ module Wasmtime
     -- ** Extern Types
     ExternType (..),
 
-    -- * ValTypes
+    -- * Monads (IO & ST)
+    -- $monads
+
+    -- * Stores
+    Store,
+    newStore,
+    Context,
+    storeContext,
+    addFuel,
+    fuelConsumed,
+    consumeFuel,
+
+    -- * Types of WASM values
     ValType (..),
     HasValType,
-    List (..),
-    Foldr,
-    Curry (..),
-    Len (..),
-    HListable (..),
 
     -- * Functions
+
+    -- ** FuncTypes
     FuncType,
     newFuncType,
     (.->.),
     funcTypeParams,
     funcTypeResults,
+    Vals,
+    Funcable (..),
+    HListable (..),
+    List (..),
+    Foldr,
+    Curry (..),
+    Len (..),
+
+    -- ** Funcs
     Func,
     getFuncType,
     newFunc,
-    Funcable (..),
-    Vals,
-    TypedFunc,
-    toTypedFunc,
-    fromTypedFunc,
-    callFunc,
+    funcToFunction,
+
+    -- * Globals
+
+    -- ** GlobalType
+    GlobalType,
+    newGlobalType,
+    Mutability (..),
+    globalTypeValType,
+    globalTypeMutability,
+
+    -- ** Global
+    Global,
+    getGlobalType,
+
+    -- ** TypedGlobal
+    TypedGlobal,
+    toTypedGlobal,
+    unTypedGlobal,
+    newTypedGlobal,
+
+    -- ** Global Operations
+    typedGlobalGet,
+    typedGlobalSet,
+
+    -- * Tables
+
+    -- ** TableType
+    TableType,
+    TableRefType (..),
+    TableLimits (..),
+    newTableType,
+    tableTypeElement,
+    tableTypeLimits,
+
+    -- ** Table
+    Table,
+    TableValue (..),
+    newTable,
+
+    -- ** Table operations
+    growTable,
+    tableGet,
+    tableSet,
+    getTableType,
 
     -- * Memory
+
+    -- ** MemoryType
     WordLength (..),
     MemoryType,
     newMemoryType,
@@ -133,11 +187,15 @@ module Wasmtime
     getMax,
     is64Memory,
     wordLength,
+
+    -- ** Memory
     Memory,
     newMemory,
     getMemoryType,
     getMemorySizeBytes,
     getMemorySizePages,
+
+    -- ** Memory Operations
     growMemory,
     Size,
     Offset,
@@ -146,36 +204,6 @@ module Wasmtime
     readMemoryAt,
     writeMemory,
     MemoryAccessError (..),
-
-    -- * Tables
-    TableType,
-    TableRefType (..),
-    TableLimits (..),
-    newTableType,
-    tableTypeElement,
-    tableTypeLimits,
-    Table,
-    TableValue (..),
-    newTable,
-    growTable,
-    tableGet,
-    tableSet,
-    getTableType,
-
-    -- * Globals
-    GlobalType,
-    newGlobalType,
-    Mutability (..),
-    globalTypeValType,
-    globalTypeMutability,
-    Global,
-    getGlobalType,
-    TypedGlobal,
-    toTypedGlobal,
-    unTypedGlobal,
-    newTypedGlobal,
-    typedGlobalGet,
-    typedGlobalSet,
 
     -- * Externs
     Extern,
@@ -186,8 +214,10 @@ module Wasmtime
     -- * Instances
     Instance,
     newInstance,
+
+    -- ** Exports
     getExport,
-    getExportedTypedFunc,
+    getExportedFunction,
     getExportedMemory,
     getExportedTable,
     getExportedTypedGlobal,
@@ -255,7 +285,7 @@ import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
 import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
 import Foreign.Marshal.Alloc (alloca)
-import Foreign.Marshal.Array
+import Foreign.Marshal.Array (advancePtr, allocaArray)
 import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable, peek, peekElemOff, poke)
@@ -339,7 +369,8 @@ setConfig f x = Config $ \cfg_ptr -> f cfg_ptr x
 setDebugInfo :: Bool -> Config
 setDebugInfo = setConfig c'wasmtime_config_debug_info_set
 
--- | Configures whether execution of WebAssembly will “consume fuel” to either halt or yield execution as desired.
+-- | Configures whether execution of WebAssembly will “consume fuel” to either
+-- halt or yield execution as desired.
 setConsumeFuel :: Bool -> Config
 setConsumeFuel = setConfig c'wasmtime_config_consume_fuel_set
 
@@ -377,7 +408,8 @@ setWasmRelaxedSimd = setConfig c'wasmtime_config_wasm_relaxed_simd_set
 setWasmRelaxedSimdDeterministic :: Bool -> Config
 setWasmRelaxedSimdDeterministic = setConfig c'wasmtime_config_wasm_relaxed_simd_deterministic_set
 
--- | Configures whether the WebAssembly bulk memory operations proposal will be enabled for compilation.
+-- | Configures whether the WebAssembly bulk memory operations proposal will be
+-- enabled for compilation.
 --
 -- Defaults to True.
 setWasmBulkMemory :: Bool -> Config
@@ -397,12 +429,6 @@ setWasmMultiMemory = setConfig c'wasmtime_config_wasm_multi_memory_set
 setWasmMemory64 :: Bool -> Config
 setWasmMemory64 = setConfig c'wasmtime_config_wasm_memory64_set
 
--- | Configures which compilation strategy will be used for wasm modules.
---
--- Defaults to 'autoStrategy'
-setStrategy :: Strategy -> Config
-setStrategy (Strategy s) = setConfig c'wasmtime_config_strategy_set s
-
 -- | Configure wether wasmtime should compile a module using multiple threads.
 --
 -- Defaults to True.
@@ -417,36 +443,39 @@ setCraneliftDebugVerifier = setConfig c'wasmtime_config_cranelift_debug_verifier
 setCaneliftNanCanonicalization :: Bool -> Config
 setCaneliftNanCanonicalization = setConfig c'wasmtime_config_cranelift_nan_canonicalization_set
 
--- | Configures the Cranelift code generator optimization level.
---
--- Defaults to 'noneOptLevel'
-setCraneliftOptLevel :: OptLevel -> Config
-setCraneliftOptLevel (OptLevel ol) = setConfig c'wasmtime_config_cranelift_opt_level_set ol
-
--- | Creates a default profiler based on the profiling strategy chosen.
-setProfilerSet :: ProfilingStrategy -> Config
-setProfilerSet (ProfilingStrategy ps) = setConfig c'wasmtime_config_profiler_set ps
-
 -- Seems absent
 
 -- | Indicates that the “static” style of memory should always be used.
 -- setStaticMemoryForced :: Bool -> Config -> Config
 -- setStaticMemoryForced = setConfig c'wasmtime_config_static_memory_forced_set
 
--- | Configures the maximum size, in bytes, where a linear memory is considered static, above which it’ll be considered dynamic.
+-- | Configures the maximum size, in bytes, where a linear memory is considered
+-- static, above which it’ll be considered dynamic.
 --
--- The default value for this property depends on the host platform. For 64-bit platforms there’s lots of address space available, so the default configured here is 4GB. WebAssembly linear memories currently max out at 4GB which means that on 64-bit platforms Wasmtime by default always uses a static memory. This, coupled with a sufficiently sized guard region, should produce the fastest JIT code on 64-bit platforms, but does require a large address space reservation for each wasm memory.
--- For 32-bit platforms this value defaults to 1GB. This means that wasm memories whose maximum size is less than 1GB will be allocated statically, otherwise they’ll be considered dynamic.
+-- The default value for this property depends on the host platform. For 64-bit
+-- platforms there’s lots of address space available, so the default configured
+-- here is 4GB. WebAssembly linear memories currently max out at 4GB which means
+-- that on 64-bit platforms Wasmtime by default always uses a static
+-- memory. This, coupled with a sufficiently sized guard region, should produce
+-- the fastest JIT code on 64-bit platforms, but does require a large address
+-- space reservation for each wasm memory.  For 32-bit platforms this value
+-- defaults to 1GB. This means that wasm memories whose maximum size is less
+-- than 1GB will be allocated statically, otherwise they’ll be considered
+-- dynamic.
 setStaticMemoryMaximumSize :: Word64 -> Config
 setStaticMemoryMaximumSize = setConfig c'wasmtime_config_static_memory_maximum_size_set
 
--- | Configures the size, in bytes, of the guard region used at the end of a static memory’s address space reservation.
+-- | Configures the size, in bytes, of the guard region used at the end of a
+-- static memory’s address space reservation.
 --
--- The default value for this property is 2GB on 64-bit platforms. This allows eliminating almost all bounds checks on loads/stores with an immediate offset of less than 2GB. On 32-bit platforms this defaults to 64KB.
+-- The default value for this property is 2GB on 64-bit platforms. This allows
+-- eliminating almost all bounds checks on loads/stores with an immediate offset
+-- of less than 2GB. On 32-bit platforms this defaults to 64KB.
 setStaticMemoryGuardSize :: Word64 -> Config
 setStaticMemoryGuardSize = setConfig c'wasmtime_config_static_memory_guard_size_set
 
--- | Configures the size, in bytes, of the guard region used at the end of a dynamic memory’s address space reservation.
+-- | Configures the size, in bytes, of the guard region used at the end of a
+-- dynamic memory’s address space reservation.
 --
 -- Defaults to 64KB
 setDynamicMemoryGuardSize :: Word64 -> Config
@@ -464,7 +493,15 @@ loadCacheConfig = setConfig $ \cfg_ptr filePath -> withCString filePath $ \str_p
   error_ptr <- c'wasmtime_config_cache_config_load cfg_ptr str_ptr
   checkWasmtimeError error_ptr
 
--- Config Enums
+--------------------------------------------------------------------------------
+-- Compilation Strategy
+--------------------------------------------------------------------------------
+
+-- | Configures which compilation strategy will be used for wasm modules.
+--
+-- Defaults to 'autoStrategy'
+setStrategy :: Strategy -> Config
+setStrategy (Strategy s) = setConfig c'wasmtime_config_strategy_set s
 
 -- | Configures which compilation strategy will be used for wasm modules.
 newtype Strategy = Strategy C'wasmtime_strategy_t
@@ -473,9 +510,20 @@ newtype Strategy = Strategy C'wasmtime_strategy_t
 autoStrategy :: Strategy
 autoStrategy = Strategy c'WASMTIME_STRATEGY_AUTO
 
--- | Cranelift aims to be a reasonably fast code generator which generates high quality machine code
+-- | Cranelift aims to be a reasonably fast code generator which generates high
+-- quality machine code
 craneliftStrategy :: Strategy
 craneliftStrategy = Strategy c'WASMTIME_STRATEGY_CRANELIFT
+
+--------------------------------------------------------------------------------
+-- Optimization Level
+--------------------------------------------------------------------------------
+
+-- | Configures the Cranelift code generator optimization level.
+--
+-- Defaults to 'noneOptLevel'
+setCraneliftOptLevel :: OptLevel -> Config
+setCraneliftOptLevel (OptLevel ol) = setConfig c'wasmtime_config_cranelift_opt_level_set ol
 
 -- | Configures the Cranelift code generator optimization level.
 newtype OptLevel = OptLevel C'wasmtime_opt_level_t
@@ -491,6 +539,14 @@ speedOptLevel = OptLevel c'WASMTIME_OPT_LEVEL_SPEED
 -- | Similar to speed, but also performs transformations aimed at reducing code size.
 speedAndSizeOptLevel :: OptLevel
 speedAndSizeOptLevel = OptLevel c'WASMTIME_OPT_LEVEL_SPEED_AND_SIZE
+
+--------------------------------------------------------------------------------
+-- Profiling Strategy
+--------------------------------------------------------------------------------
+
+-- | Creates a default profiler based on the profiling strategy chosen.
+setProfiler :: ProfilingStrategy -> Config
+setProfiler (ProfilingStrategy ps) = setConfig c'wasmtime_config_profiler_set ps
 
 -- | Select which profiling technique to support.
 newtype ProfilingStrategy = ProfilingStrategy C'wasmtime_profiling_strategy_t
@@ -512,64 +568,7 @@ perfMapProfilingStrategy :: ProfilingStrategy
 perfMapProfilingStrategy = ProfilingStrategy c'WASMTIME_PROFILING_STRATEGY_PERFMAP
 
 --------------------------------------------------------------------------------
--- Store
---------------------------------------------------------------------------------
-
--- | A collection of instances and wasm global items.
-newtype Store s = Store {unStore :: ForeignPtr C'wasmtime_store_t}
-
-newStore :: MonadPrim s m => Engine -> m (Store s)
-newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
-  wasmtime_store_ptr <- c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
-  checkAllocation wasmtime_store_ptr
-  fmap Store $ Foreign.Concurrent.newForeignPtr wasmtime_store_ptr $ c'wasmtime_store_delete wasmtime_store_ptr
-
-withStore :: Store s -> (Ptr C'wasmtime_store_t -> IO a) -> IO a
-withStore = withForeignPtr . unStore
-
-data Context s = Context
-  { -- | Usage of a @wasmtime_context_t@ must not outlive the original @wasmtime_store_t@
-    -- so we keep a reference to a 'Store' to ensure it's not garbage collected.
-    storeContextStore :: !(Store s),
-    storeContextPtr :: !(Ptr C'wasmtime_context_t)
-  }
-
-storeContext :: MonadPrim s m => Store s -> m (Context s)
-storeContext store =
-  unsafeIOToPrim $ withStore store $ \wasmtime_store_ptr -> do
-    wasmtime_ctx_ptr <- c'wasmtime_store_context wasmtime_store_ptr
-    pure
-      Context
-        { storeContextStore = store,
-          storeContextPtr = wasmtime_ctx_ptr
-        }
-
-withContext :: Context s -> (Ptr C'wasmtime_context_t -> IO a) -> IO a
-withContext ctx f = withStore (storeContextStore ctx) $ \_store_ptr ->
-  f $ storeContextPtr ctx
-
-addFuel :: MonadPrim s m => Context s -> Word64 -> m (Either WasmtimeError ())
-addFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> try $ do
-  error_ptr <- c'wasmtime_context_add_fuel ctx_ptr amount
-  checkWasmtimeError error_ptr
-
-fuelConsumed :: MonadPrim s m => Context s -> m (Maybe Word64)
-fuelConsumed ctx = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
-  alloca $ \amount_ptr -> do
-    res <- c'wasmtime_context_fuel_consumed ctx_ptr amount_ptr
-    if not res
-      then pure Nothing
-      else Just <$> peek amount_ptr
-
-consumeFuel :: MonadPrim s m => Context s -> Word64 -> m (Either WasmtimeError Word64)
-consumeFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
-  alloca $ \remaining_ptr -> try $ do
-    error_ptr <- c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
-    checkWasmtimeError error_ptr
-    peek remaining_ptr
-
---------------------------------------------------------------------------------
--- Conversion
+-- WASM Conversion
 --------------------------------------------------------------------------------
 
 -- | WebAssembly binary code.
@@ -888,6 +887,152 @@ newExternTypeFromPtr externtype_ptr = do
     asSubType as_sub copy new = mask_ $ as_sub externtype_ptr >>= (copy >=> new)
 
 --------------------------------------------------------------------------------
+-- Monads (IO & ST)
+--------------------------------------------------------------------------------
+
+-- $monads
+--
+-- All side-effectful operations below happen in the Monad @m@ for all @m@ which
+-- have an instance for @'MonadPrim' s m@. This means they can be executed in
+-- both 'IO' and 'ST'.
+--
+-- The former allows you to import WASM functions that can do I/O like firing
+-- the missles. The latter allows you to run side-effectful WASM operations in
+-- pure code as long as the side-effects are contained within the 'ST'
+-- computation.
+--
+-- All (mutable) objects ('Store', 'Context', 'Func', 'Global', 'TypedGlobal',
+-- 'Table' and 'Memory') have a phantom type @s@ that ensures that when executed
+-- within:
+--
+-- @
+-- 'runST' :: (forall s. 'ST' s a) -> a
+-- @
+--
+-- The (mutable) object can't leak outside the 'ST' computation and thus can't
+-- violate referential transparency.
+--
+-- In 'IO' the @s@ phantom type will be set to 'RealWorld'.
+
+--------------------------------------------------------------------------------
+-- Stores
+--------------------------------------------------------------------------------
+
+-- | A collection of instances and wasm global items.
+--
+-- All WebAssembly instances and items will be attached to and refer to a
+-- 'Store'. For example @'Instance's@, @'Func'tions@, @'Global's@, and
+-- @'Table's@ are all attached to a 'Store'. @'Instance's@ are created by
+-- instantiating a 'Module' within a 'Store' ('newInstance').
+--
+-- A 'Store' is intended to be a short-lived object in a program. No form of GC
+-- is implemented at this time within the 'Store' so once an instance is created
+-- within a 'Store' it will not be deallocated until the 'Store' itself is
+-- garbage collected. This makes 'Store' unsuitable for creating an unbounded
+-- number of instances in it because 'Store' will never release this
+-- memory. It’s recommended to have a 'Store' correspond roughly to the lifetime
+-- of a “main instance” that an embedding is interested in executing.
+newtype Store s = Store {unStore :: ForeignPtr C'wasmtime_store_t}
+
+-- | Creates a new store within the specified engine.
+newStore :: MonadPrim s m => Engine -> m (Store s)
+newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
+  wasmtime_store_ptr <- c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
+  checkAllocation wasmtime_store_ptr
+  Store <$> newForeignPtr p'wasmtime_store_delete wasmtime_store_ptr
+
+withStore :: Store s -> (Ptr C'wasmtime_store_t -> IO a) -> IO a
+withStore = withForeignPtr . unStore
+
+-- | A context is basically the same as a 'Store'. All functions in @wasmtime@
+-- that require a 'Store' will actually require a 'Context' instead.
+--
+-- We might fold 'Store' and 'Context' into a single type in the future.
+data Context s = Context
+  { -- | Usage of a @wasmtime_context_t@ must not outlive the original @wasmtime_store_t@
+    -- so we keep a reference to a 'Store' to ensure it's not garbage collected.
+    storeContextStore :: !(Store s),
+    storeContextPtr :: !(Ptr C'wasmtime_context_t)
+  }
+
+-- | Get a 'Context' from a 'Store'.
+storeContext :: MonadPrim s m => Store s -> m (Context s)
+storeContext store =
+  unsafeIOToPrim $ withStore store $ \wasmtime_store_ptr -> do
+    wasmtime_ctx_ptr <- c'wasmtime_store_context wasmtime_store_ptr
+    pure
+      Context
+        { storeContextStore = store,
+          storeContextPtr = wasmtime_ctx_ptr
+        }
+
+withContext :: Context s -> (Ptr C'wasmtime_context_t -> IO a) -> IO a
+withContext ctx f = withStore (storeContextStore ctx) $ \_store_ptr ->
+  f $ storeContextPtr ctx
+
+-- | Adds fuel to this 'Store' for wasm to consume while executing.
+--
+-- For this method to work fuel consumption must be enabled via
+-- 'setConsumeFuel'. By default a 'Store' starts with 0 fuel for wasm to execute
+-- with (meaning it will immediately 'Trap'). This function must be called for
+-- the store to have some fuel to allow WebAssembly to execute.
+--
+-- Most WebAssembly instructions consume 1 unit of fuel. Some instructions, such
+-- as @nop@, @drop@, @block@, and @loop@, consume 0 units, as any execution cost
+-- associated with them involves other instructions which do consume fuel.
+--
+-- Note that at this time when fuel is entirely consumed it will cause wasm to
+-- trap. More usages of fuel are planned for the future.
+--
+-- This function will return an error if fuel consumption is not enabled via
+-- 'setConsumeFuel'.
+addFuel :: MonadPrim s m => Context s -> Word64 -> m (Either WasmtimeError ())
+addFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> try $ do
+  error_ptr <- c'wasmtime_context_add_fuel ctx_ptr amount
+  checkWasmtimeError error_ptr
+
+-- | Returns the amount of fuel consumed by this store’s execution so far.
+--
+-- If fuel consumption is not enabled via 'setConsumeFuel' then this function
+-- will return 'Nothing'. Also note that fuel, if enabled, must be originally
+-- configured via 'addFuel'.
+fuelConsumed :: MonadPrim s m => Context s -> m (Maybe Word64)
+fuelConsumed ctx = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
+  alloca $ \amount_ptr -> do
+    res <- c'wasmtime_context_fuel_consumed ctx_ptr amount_ptr
+    if not res
+      then pure Nothing
+      else Just <$> peek amount_ptr
+
+-- | Synthetically consumes fuel from this 'Store'.
+--
+-- For this method to work fuel consumption must be enabled via 'setConsumeFuel'.
+--
+-- WebAssembly execution will automatically consume fuel but if so desired the
+-- embedder can also consume fuel manually to account for relative costs of host
+-- functions, for example.
+--
+-- This function will attempt to consume @fuel@ units of fuel from within this
+-- store. If the remaining amount of fuel allows this then @'Just' n@ is
+-- returned where @n@ is the amount of remaining fuel. Otherwise an error is
+-- returned and no fuel is consumed.
+--
+-- This function will return an error either if fuel consumption is not enabled
+-- via 'setConsumeFuel' or if fuel exceeds the amount of remaining fuel within
+-- this store.
+consumeFuel ::
+  MonadPrim s m =>
+  Context s ->
+  -- | Amount of @fuel@ to consume.
+  Word64 ->
+  m (Either WasmtimeError Word64)
+consumeFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
+  alloca $ \remaining_ptr -> try $ do
+    error_ptr <- c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
+    checkWasmtimeError error_ptr
+    peek remaining_ptr
+
+--------------------------------------------------------------------------------
 -- Function Types
 --------------------------------------------------------------------------------
 
@@ -896,6 +1041,8 @@ newExternTypeFromPtr externtype_ptr = do
 -- WebAssembly functions can have 0 or more parameters and results.
 newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
 
+-- | Two @'FuncType's@ are considered equal if their 'funcTypeParams' and
+-- 'funcTypeResults' are equal.
 instance Eq FuncType where
   ft1 == ft2 =
     funcTypeParams ft1 == funcTypeParams ft2
@@ -924,6 +1071,16 @@ newFuncTypeFromPtr = fmap FuncType . newForeignPtr p'wasm_functype_delete
 
 -- | Creates a new function type with the parameter and result types of the
 -- Haskell function @f@.
+--
+-- For example the following:
+--
+-- @
+-- let funcType = 'newFuncType' $
+--       'Proxy' @(Int32 -> Float -> IO (Either 'Trap' (Word128, Double, Int64)))
+-- print funcType
+-- @
+--
+-- Prints: @Proxy @'[Int32, Float] '.->.' Proxy @'[Word128, Double, Int64]@
 newFuncType ::
   forall f (params :: [Type]) m r (results :: [Type]).
   ( Funcable f,
@@ -943,7 +1100,9 @@ newFuncType _proxy = Proxy @params .->. Proxy @results
 
 infixr 0 .->.
 
--- | Creates a new function type with the given parameter and result kinds.
+-- | Creates a new function type with the given parameter and result types.
+--
+-- See 'newFuncType' for creating a 'FuncType' from a Haskell function.
 (.->.) ::
   forall (params :: [Type]) (results :: [Type]).
   (Vals params, Vals results, Len params, Len results) =>
@@ -990,6 +1149,24 @@ unmarshalValTypeVec valtype_vec_ptr = do
   V.generateM (fromIntegral sz) $ \ix -> do
     cur_valtype_ptr <- peekElemOff dt ix
     fromWasmKind <$> c'wasm_valtype_kind cur_valtype_ptr
+
+-- | Class of Haskell functions / actions that can be imported into and exported
+-- from WASM modules.
+class Funcable f where
+  type Params f :: [Type]
+  type Result f :: Type
+
+instance Funcable b => Funcable (a -> b) where
+  type Params (a -> b) = a ': Params b
+  type Result (a -> b) = Result b
+
+instance (HListable r, Types r ~ results, Vals results) => Funcable (IO (Either Trap r)) where
+  type Params (IO (Either Trap r)) = '[]
+  type Result (IO (Either Trap r)) = IO (Either Trap r)
+
+instance (HListable r, Types r ~ results, Vals results) => Funcable (ST s (Either Trap r)) where
+  type Params (ST s (Either Trap r)) = '[]
+  type Result (ST s (Either Trap r)) = ST s (Either Trap r)
 
 -- | Type of values that:
 --
@@ -1096,12 +1273,12 @@ instance (HasValType v, Storable v, Vals vs) => Vals (v ': vs) where
       <*> peekVals (advancePtr vals_ptr 1)
 
   pokeRawVals raw_vals_ptr (v :. vs) = do
-    pokeRawVal raw_vals_ptr v
+    poke (castPtr raw_vals_ptr) v
     pokeRawVals (advancePtr raw_vals_ptr 1) vs
 
   peekRawVals raw_vals_ptr =
     (:.)
-      <$> peekRawVal raw_vals_ptr
+      <$> peek (castPtr raw_vals_ptr)
       <*> peekRawVals (advancePtr raw_vals_ptr 1)
 
 pokeVal :: forall r. (HasValType r, Storable r) => Ptr C'wasmtime_val_t -> r -> IO ()
@@ -1111,28 +1288,26 @@ pokeVal vals_ptr r = do
       p = p'wasmtime_val'of vals_ptr
   poke (castPtr p) r
 
-peekTableVal :: Ptr C'wasmtime_val_t -> IO TableValue
-peekTableVal val_ptr = do
-  k <- peek kind_ptr
-  if
-      | k == c'WASMTIME_FUNCREF -> FuncRefValue . Func <$> peek (castPtr of_ptr :: Ptr C'wasmtime_func_t)
-      | k == c'WASMTIME_EXTERNREF -> ExternRefValue <$> peek (castPtr of_ptr :: Ptr (Ptr C'wasmtime_externref_t))
-      | otherwise -> error $ "unsupported valkind " ++ show k
-  where
-    kind_ptr = p'wasmtime_val'kind val_ptr
-    of_ptr = p'wasmtime_val'of val_ptr
-
 uncheckedPeekVal :: forall r. (HasValType r, Storable r) => Ptr C'wasmtime_val_t -> IO r
 uncheckedPeekVal val_ptr = peek (castPtr of_ptr :: Ptr r)
   where
     of_ptr :: Ptr C'wasmtime_valunion_t
     of_ptr = p'wasmtime_val'of val_ptr
 
-pokeRawVal :: Storable r => Ptr C'wasmtime_val_raw_t -> r -> IO ()
-pokeRawVal = poke . castPtr
-
-peekRawVal :: Storable r => Ptr C'wasmtime_val_raw_t -> IO r
-peekRawVal = peek . castPtr
+peekTableVal :: Ptr C'wasmtime_val_t -> IO TableValue
+peekTableVal val_ptr = do
+  k <- peek kind_ptr
+  if
+      | k == c'WASMTIME_FUNCREF ->
+          FuncRefValue . Func
+            <$> peek (castPtr of_ptr :: Ptr C'wasmtime_func_t)
+      | k == c'WASMTIME_EXTERNREF ->
+          ExternRefValue
+            <$> peek (castPtr of_ptr :: Ptr (Ptr C'wasmtime_externref_t))
+      | otherwise -> error $ "unsupported valkind " ++ show k
+  where
+    kind_ptr = p'wasmtime_val'kind val_ptr
+    of_ptr = p'wasmtime_val'of val_ptr
 
 --------------------------------------------------------------------------------
 -- Functions
@@ -1205,7 +1380,13 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
     callback _env _caller params_ptr nargs result_ptr nresults = do
       let actualNrOfArgs = fromIntegral nargs
       if actualNrOfArgs /= expectedNrOfArgs
-        then error $ "Expected " ++ show expectedNrOfArgs ++ " number of arguments but got " ++ show actualNrOfArgs ++ "!"
+        then
+          error $
+            "Expected "
+              ++ show expectedNrOfArgs
+              ++ " number of arguments but got "
+              ++ show actualNrOfArgs
+              ++ "!"
         else do
           mbParams <- runMaybeT $ peekVals params_ptr
           case mbParams of
@@ -1240,76 +1421,51 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
     expectedNrOfArgs = len $ Proxy @params
     expectedNrOfResults = len $ Proxy @results
 
--- | Class of Haskell functions / actions that can be imported into and exported
--- from WASM modules.
-class Funcable f where
-  type Params f :: [Type]
-  type Result f :: Type
-
-instance Funcable b => Funcable (a -> b) where
-  type Params (a -> b) = a ': Params b
-  type Result (a -> b) = Result b
-
-instance (HListable r, Types r ~ results, Vals results) => Funcable (IO (Either Trap r)) where
-  type Params (IO (Either Trap r)) = '[]
-  type Result (IO (Either Trap r)) = IO (Either Trap r)
-
-instance (HListable r, Types r ~ results, Vals results) => Funcable (ST s (Either Trap r)) where
-  type Params (ST s (Either Trap r)) = '[]
-  type Result (ST s (Either Trap r)) = ST s (Either Trap r)
-
--- | A 'Func' annotated with its type.
-newtype TypedFunc s f = TypedFunc
-  { -- | Extract the untyped 'Func' from the typed 'TypedFunc'.
-    fromTypedFunc :: Func s
-  }
-  deriving (Show)
-
--- | Retrieves the type of the given 'Func' from the 'Store' and checks if it
--- matches the desired type @f@ of the returned 'TypedFunc'.
+-- | Converts a 'Func' into the Haskell function @f@.
 --
--- You can then call this 'TypedFunc' using 'callFunc' for example:
+-- 'Nothing' will be returned if the type of the 'Func' ('getFuncType') doesn't
+-- match the type of @f@ (@'newFuncType' $ Proxy \@f@).
+--
+-- Example:
 --
 -- @
--- mbTypedFunc <- 'toTypedFunc' ctx someExportedGcdFunc
--- case mbTypedFunc of
+-- mbGCD <- 'funcToFunction' ctx someExportedGcdFunc
+-- case mbGCD of
 --   Nothing -> error "gcd did not have the expected type!"
---   Just (gcdTypedFunc :: 'TypedFunc' RealWorld (Int32 -> Int32 -> IO (Either Trap Int32))) -> do
---     let wasmGCD :: Int32 -> Int32 -> IO (Either 'Trap' Int32)
---         wasmGCD = 'callFunc' ctx gcdTypedFunc
+--   Just (wasmGCD :: Int32 -> Int32 -> IO (Either Trap Int32)) -> do
 --     -- Call gcd on its two Int32 arguments:
 --     r <- wasmGCD 6 27
 --     print r -- prints "Right 3"
 -- @
-toTypedFunc ::
+funcToFunction ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
     HListable r,
     Types r ~ results,
     Result f ~ m (Either Trap r),
+    Foldr (->) (m (Either Trap r)) params ~ f,
+    Curry params,
     Vals params,
     Vals results,
     Len params,
     Len results,
-    MonadPrim s m
+    MonadPrim s m,
+    PrimBase m
   ) =>
   Context s ->
   -- | WASM function.
   Func s ->
-  m (Maybe (TypedFunc s f))
-toTypedFunc ctx func = do
+  m (Maybe f)
+funcToFunction ctx func = do
   actualFuncType <- getFuncType ctx func
   pure $
     if actualFuncType == expectedFuncType
-      then Just $ TypedFunc func
+      then Just $ callFunc ctx func
       else Nothing
   where
     expectedFuncType = newFuncType $ Proxy @f
 
--- | Call an exported 'TypedFunc'.
---
--- See 'toTypedFunc' for an example.
 callFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
@@ -1327,16 +1483,16 @@ callFunc ::
     PrimBase m
   ) =>
   Context s ->
-  -- | See 'toTypedFunc'.
-  TypedFunc s f ->
+  -- | See 'funcToFunction'.
+  Func s ->
   f
-callFunc ctx typedFunc = curry callFuncOnParams
+callFunc ctx func = curry callFuncOnParams
   where
     callFuncOnParams :: List params -> m (Either Trap r)
     callFuncOnParams params =
       unsafeIOToPrim $
         withContext ctx $ \ctx_ptr ->
-          withFunc (fromTypedFunc typedFunc) $ \func_ptr ->
+          withFunc func $ \func_ptr ->
             allocaArray n $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
               pokeRawVals args_and_results_ptr params
               allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> mask_ $ do
@@ -1350,488 +1506,14 @@ callFunc ctx typedFunc = curry callFuncOnParams
                 checkWasmtimeError error_ptr
                 trap_ptr <- peek trap_ptr_ptr
                 if trap_ptr == nullPtr
-                  then Right . fromHList <$> (peekRawVals args_and_results_ptr :: IO (List results))
+                  then do
+                    results :: List results <- peekRawVals args_and_results_ptr
+                    let r = fromHList results :: r
+                    pure $ Right r
                   else Left <$> newTrapFromPtr trap_ptr
 
     n :: Int
     n = max (len $ Proxy @params) (len $ Proxy @results)
-
---------------------------------------------------------------------------------
--- Externs
---------------------------------------------------------------------------------
-
--- | Container for different kinds of extern items (like @'Func's@) that can be
--- imported into new @'Instance's@ using 'newInstance' and exported from
--- existing instances using 'getExport'.
-data Extern s where
-  Extern :: forall e s. (Externable e) => TypeRep e -> e s -> Extern s
-
--- | Class of types that can be imported and exported from @'Instance's@.
-class (Storable (CType e), Typeable e) => Externable (e :: Type -> Type) where
-  type CType e :: Type
-  toCExtern :: e s -> CType e
-  externKind :: Proxy e -> C'wasmtime_extern_kind_t
-
-instance Externable Func where
-  type CType Func = C'wasmtime_func
-  toCExtern = getWasmtimeFunc
-  externKind _proxy = c'WASMTIME_EXTERN_FUNC
-
-instance Externable Memory where
-  type CType Memory = C'wasmtime_memory_t
-  toCExtern = getWasmtimeMemory
-  externKind _proxy = c'WASMTIME_EXTERN_MEMORY
-
-instance Externable Table where
-  type CType Table = C'wasmtime_table_t
-  toCExtern = getWasmtimeTable
-  externKind _proxy = c'WASMTIME_EXTERN_TABLE
-
-instance Externable Global where
-  type CType Global = C'wasmtime_global_t
-  toCExtern = getWasmtimeGlobal
-  externKind _proxy = c'WASMTIME_EXTERN_GLOBAL
-
--- | Turn any externable value (like a 'Func') into the 'Extern' container.
-toExtern :: forall e s. Externable e => e s -> Extern s
-toExtern = Extern (typeRep :: TypeRep e)
-
--- | Converts an 'Extern' object back into an ordinary Haskell value (like a 'Func')
--- of the correct type.
-fromExtern :: forall e s. Externable e => Extern s -> Maybe (e s)
-fromExtern (Extern t v)
-  | Just HRefl <- t `eqTypeRep` rep = Just v
-  | otherwise = Nothing
-  where
-    rep = typeRep :: TypeRep e
-
-withExterns :: Vector (Extern s) -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
-withExterns externs f = allocaArray n $ \externs_ptr0 ->
-  let pokeExternsFrom ix
-        | ix == n = f externs_ptr0 $ fromIntegral n
-        | otherwise =
-            case V.unsafeIndex externs ix of
-              Extern _typeRep (e :: e s) -> do
-                let externs_ptr = advancePtr externs_ptr0 ix
-                poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
-                poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ toCExtern e
-                pokeExternsFrom (ix + 1)
-   in pokeExternsFrom 0
-  where
-    n = V.length externs
-
---------------------------------------------------------------------------------
--- Memory
---------------------------------------------------------------------------------
-
--- | A descriptor for a WebAssembly memory type.
---
--- Memories are described in units of pages (64KB) and represent contiguous chunks of addressable memory.
-newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
-
-instance Eq MemoryType where
-  mt1 == mt2 =
-    getMin mt1 == getMin mt2
-      && getMax mt1 == getMax mt2
-      && wordLength mt1 == wordLength mt2
-
-instance Show MemoryType where
-  showsPrec p mt =
-    showParen (p > appPrec) $
-      showString "newMemoryType "
-        . showsArg mini
-        . showString " "
-        . showsArg mbMax
-        . showString " "
-        . showsArg wordLen
-    where
-      appPrec = 10
-
-      showsArg :: forall a. Show a => a -> ShowS
-      showsArg = showsPrec (appPrec + 1)
-
-      mini = getMin mt
-      mbMax = getMax mt
-      wordLen = wordLength mt
-
-newMemoryTypeFromPtr :: Ptr C'wasm_memorytype_t -> IO MemoryType
-newMemoryTypeFromPtr = fmap MemoryType . newForeignPtr p'wasm_memorytype_delete
-
--- | Creates a descriptor for a WebAssembly 'Memory' with the specified minimum number of memory pages,
--- an optional maximum of memory pages, and a 64 bit flag, where false defaults to 32 bit memory.
-newMemoryType ::
-  -- | Minimum number of memory pages.
-  Word64 ->
-  -- | Optional maximum of memory pages.
-  Maybe Word64 ->
-  -- | 'WordLength', either Bit32 or Bit64
-  WordLength ->
-  MemoryType
-newMemoryType mini mbMax wordLen = unsafePerformIO $ mask_ $ do
-  mem_type_ptr <- c'wasmtime_memorytype_new mini max_present maxi is64
-  newMemoryTypeFromPtr mem_type_ptr
-  where
-    (max_present, maxi) = maybe (False, 0) (True,) mbMax
-    is64 = wordLen == Bit64
-
-withMemoryType :: MemoryType -> (Ptr C'wasm_memorytype_t -> IO a) -> IO a
-withMemoryType = withForeignPtr . unMemoryType
-
--- | Returns the minimum number of pages of this memory descriptor.
-getMin :: MemoryType -> Word64
-getMin mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_minimum
-
--- | Returns the maximum number of pages of this memory descriptor, if one was set.
-getMax :: MemoryType -> Maybe Word64
-getMax mt = unsafePerformIO $
-  withMemoryType mt $ \mem_type_ptr ->
-    alloca $ \(max_ptr :: Ptr Word64) -> do
-      maxPresent <- c'wasmtime_memorytype_maximum mem_type_ptr max_ptr
-      if not maxPresent
-        then pure Nothing
-        else Just <$> peek max_ptr
-
--- | Returns false if the memory is 32 bit and true if it is 64 bit.
-is64Memory :: MemoryType -> Bool
-is64Memory mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
-
--- | Returns Bit32 or Bit64 :: 'WordLength'
-wordLength :: MemoryType -> WordLength
-wordLength mt = if is64Memory mt then Bit64 else Bit32
-
--- | A WebAssembly linear memory.
---
--- WebAssembly memories represent a contiguous array of bytes that have a size
--- that is always a multiple of the WebAssembly page size, currently 64 kilobytes.
---
--- WebAssembly memory is used for global data (not to be confused with
--- wasm global items), statics in C/C++/Rust, shadow stack memory, etc.
--- Accessing wasm memory is generally quite fast.
---
--- Memories, like other wasm items, are owned by a 'Store'.
-newtype Memory s = Memory {getWasmtimeMemory :: C'wasmtime_memory_t}
-  deriving (Show)
-
--- | Create new memory with the properties described in the 'MemoryType' argument.
-newMemory :: MonadPrim s m => Context s -> MemoryType -> m (Either WasmtimeError (Memory s))
-newMemory ctx memtype = unsafeIOToPrim $
-  try $
-    withContext ctx $ \ctx_ptr ->
-      withMemoryType memtype $ \memtype_ptr ->
-        alloca $ \mem_ptr -> do
-          error_ptr <- c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
-          checkWasmtimeError error_ptr
-          Memory <$> peek mem_ptr
-
-withMemory :: Memory s -> (Ptr C'wasmtime_memory_t -> IO a) -> IO a
-withMemory = with . getWasmtimeMemory
-
--- | Returns the 'MemoryType' descriptor for this memory.
-getMemoryType :: Context s -> Memory s -> MemoryType
-getMemoryType ctx mem = unsafePerformIO $
-  withContext ctx $ \ctx_ptr ->
-    withMemory mem $ \mem_ptr -> mask_ $ do
-      memtype_ptr <- c'wasmtime_memory_type ctx_ptr mem_ptr
-      MemoryType <$> newForeignPtr p'wasm_memorytype_delete memtype_ptr
-
--- | Returns the linear memory size in bytes. Always a multiple of 64KB (65536).
-getMemorySizeBytes :: MonadPrim s m => Context s -> Memory s -> m Word64
-getMemorySizeBytes ctx mem = unsafeIOToPrim $
-  withContext ctx $ \ctx_ptr ->
-    withMemory mem (fmap fromIntegral . c'wasmtime_memory_data_size ctx_ptr)
-
--- | Returns the length of the linear memory in WebAssembly pages
-getMemorySizePages :: MonadPrim s m => Context s -> Memory s -> m Word64
-getMemorySizePages ctx mem = unsafeIOToPrim $
-  withContext ctx $ \ctx_ptr ->
-    withMemory mem $ \mem_ptr ->
-      c'wasmtime_memory_size ctx_ptr mem_ptr
-
--- | Grow the linar memory by delta number of pages. Return the size before.
-growMemory ::
-  MonadPrim s m =>
-  Context s ->
-  Memory s ->
-  -- | Delta
-  Word64 ->
-  m (Either WasmtimeError Word64)
-growMemory ctx mem delta = unsafeIOToPrim $
-  try $
-    withContext ctx $ \ctx_ptr ->
-      withMemory mem $ \mem_ptr ->
-        alloca $ \before_size_ptr -> do
-          error_ptr <- c'wasmtime_memory_grow ctx_ptr mem_ptr delta before_size_ptr
-          checkWasmtimeError error_ptr
-          peek before_size_ptr
-
--- | Takes a continuation which can mutate the linear memory. The continuation is provided with
--- a pointer to the beginning of the memory and its maximum length. Do not write outside the bounds!
---
--- This function is unsafe, because we do not restrict the continuation in any way.
--- DO NOT call exported wasm functions, grow the memory or do anything similar in the continuation!
-unsafeWithMemory :: Context s -> Memory s -> (Ptr Word8 -> Size -> IO a) -> IO a
-unsafeWithMemory ctx mem f =
-  withContext ctx $ \ctx_ptr ->
-    withMemory mem $ \mem_ptr -> do
-      mem_size <- fromIntegral <$> c'wasmtime_memory_data_size ctx_ptr mem_ptr
-      mem_data_ptr <- c'wasmtime_memory_data ctx_ptr mem_ptr
-      f mem_data_ptr mem_size
-
--- | Returns a copy of the whole linear memory as a bytestring.
-readMemory :: MonadPrim s m => Context s -> Memory s -> m B.ByteString
-readMemory ctx mem = unsafeIOToPrim $
-  unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
-    BI.create (fromIntegral mem_size) $ \dst_ptr ->
-      BI.memcpy dst_ptr mem_data_ptr (fromIntegral mem_size)
-
--- | Takes an offset and a length, and returns a copy of the memory starting at offset until offset + length.
--- Returns @Left MemoryAccessError@ if offset + length exceeds the length of the memory.
-readMemoryAt ::
-  MonadPrim s m =>
-  Context s ->
-  Memory s ->
-  -- | Offset
-  Offset ->
-  -- | Number of bytes to read
-  Size ->
-  m (Either MemoryAccessError B.ByteString)
-readMemoryAt ctx mem offset sz = do
-  max_sz <- getMemorySizeBytes ctx mem
-  unsafeIOToPrim $ do
-    if offset + sz > max_sz
-      then pure $ Left MemoryAccessError
-      else do
-        res <- unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
-          BI.create (fromIntegral mem_size) $ \dst_ptr ->
-            BI.memcpy dst_ptr (advancePtr mem_data_ptr (fromIntegral offset)) (fromIntegral mem_size)
-        pure $ Right res
-
--- | Safely writes a 'ByteString' to this memory at the given offset.
---
--- If the @offset@ + the length of the @ByteString@ exceeds the
--- current memory capacity, then none of the @ByteString@ is written
--- to memory and @'Left' 'MemoryAccessError'@ is returned.
-writeMemory ::
-  MonadPrim s m =>
-  Context s ->
-  Memory s ->
-  -- | Offset
-  Int ->
-  B.ByteString ->
-  m (Either MemoryAccessError ())
-writeMemory ctx mem offset (BI.BS fp n) =
-  unsafeIOToPrim $ unsafeWithMemory ctx mem $ \dst sz ->
-    if offset + n > fromIntegral sz
-      then pure $ Left MemoryAccessError
-      else withForeignPtr fp $ \src ->
-        Right <$> BI.memcpy (advancePtr dst offset) src n
-
--- | Error for out of bounds 'Memory' access.
-data MemoryAccessError = MemoryAccessError deriving (Show)
-
-instance Exception MemoryAccessError
-
---------------------------------------------------------------------------------
--- Tables
---------------------------------------------------------------------------------
-
--- | A descriptor for a table in a WebAssembly module.
---
--- Tables are contiguous chunks of a specific element, typically a funcref or an externref.
--- The most common use for tables is a function table through which call_indirect can invoke other functions.
-newtype TableType = TableType {getWasmtimeTableType :: ForeignPtr C'wasm_tabletype_t}
-
-instance Eq TableType where
-  tt1 == tt2 =
-    tableTypeElement tt1 == tableTypeElement tt2
-      && tableTypeLimits tt1 == tableTypeLimits tt2
-
-instance Show TableType where
-  showsPrec p tt =
-    showParen (p > appPrec) $
-      showString "newTableType "
-        . showsArg tableRefType
-        . showString " "
-        . showsArg tableLimits
-    where
-      appPrec = 10
-
-      showsArg :: forall a. Show a => a -> ShowS
-      showsArg = showsPrec (appPrec + 1)
-
-      tableRefType = tableTypeElement tt
-      tableLimits = tableTypeLimits tt
-
-withTableType :: TableType -> (Ptr C'wasm_tabletype_t -> IO a) -> IO a
-withTableType = withForeignPtr . getWasmtimeTableType
-
-newTableTypeFromPtr :: Ptr C'wasm_tabletype_t -> IO TableType
-newTableTypeFromPtr = fmap TableType . newForeignPtr p'wasm_tabletype_delete
-
--- | The type of a table.
-data TableRefType = FuncRef | ExternRef
-  deriving (Show, Eq)
-
--- TODO: make table limit maximum optional
-
--- | Specifies a minimum and maximum size for a 'Table'
-data TableLimits = TableLimits {tableMin :: Int32, tableMax :: Int32}
-  deriving (Show, Eq)
-
--- | Creates a new 'Table' descriptor which will contain the specified element type and have the limits applied to its length.
-newTableType ::
-  TableRefType ->
-  TableLimits ->
-  TableType
-newTableType tableRefType limits = unsafePerformIO $
-  alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> mask_ $ do
-    let (valkind :: C'wasm_valkind_t) = case tableRefType of
-          FuncRef -> c'WASMTIME_FUNCREF
-          ExternRef -> c'WASMTIME_EXTERNREF
-        limits' =
-          C'wasm_limits_t
-            { c'wasm_limits_t'min = fromIntegral $ tableMin limits,
-              c'wasm_limits_t'max = fromIntegral $ tableMax limits
-            }
-    valtype_ptr <- c'wasm_valtype_new valkind
-    poke limits_ptr limits'
-    c'wasm_tabletype_new valtype_ptr limits_ptr >>= newTableTypeFromPtr
-
--- | Returns the element type of this table
-tableTypeElement :: TableType -> TableRefType
-tableTypeElement tt = unsafePerformIO $
-  withTableType tt $ \tt_ptr -> do
-    valtype_ptr <- c'wasm_tabletype_element tt_ptr
-    valkind <- c'wasm_valtype_kind valtype_ptr
-    if
-        | valkind == c'WASMTIME_FUNCREF -> pure FuncRef
-        | valkind == c'WASMTIME_EXTERNREF -> pure ExternRef
-        | otherwise -> error $ "Got invalid valkind " ++ show valkind ++ " from c'wasm_valtype_kind."
-
--- | Returns the minimum and maximum size of this tabletype
-tableTypeLimits :: TableType -> TableLimits
-tableTypeLimits tt = unsafePerformIO $
-  withTableType tt $ \tt_ptr -> do
-    limits_ptr <- c'wasm_tabletype_limits tt_ptr
-    limits' <- peek limits_ptr
-    pure
-      TableLimits
-        { tableMin = fromIntegral (c'wasm_limits_t'min limits'),
-          tableMax = fromIntegral (c'wasm_limits_t'max limits')
-        }
-
--- TODO: typed tables
-
--- | A WebAssembly table, or an array of values.
---
--- For more information, see <https://docs.rs/wasmtime/latest/wasmtime/struct.Table.html>.
-newtype Table s = Table {getWasmtimeTable :: C'wasmtime_table_t}
-  deriving (Show, Typeable)
-
-withTable :: Table s -> (Ptr C'wasmtime_table_t -> IO a) -> IO a
-withTable = with . getWasmtimeTable
-
--- | Tables can contain function references or extern references
-data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue (Ptr C'wasmtime_externref_t)
-
-withTableValue :: TableValue -> (Ptr C'wasmtime_val_t -> IO a) -> IO a
-withTableValue (FuncRefValue (Func (func_t :: C'wasmtime_func_t))) f =
-  alloca $ \val_ptr -> do
-    pokeVal val_ptr func_t
-    f val_ptr
-withTableValue (ExternRefValue _) _f = error "not implemented: ExternRefValue Tables"
-
--- | Create a new table
-newTable ::
-  MonadPrim s m =>
-  Context s ->
-  TableType ->
-  -- | An optional initial value which will be used to fill in the table, if its initial size is > 0.
-  Maybe TableValue ->
-  m (Either WasmtimeError (Table s))
-newTable ctx tt mbVal = unsafeIOToPrim $
-  try $
-    withContext ctx $ \ctx_ptr ->
-      withTableType tt $ \tt_ptr ->
-        alloca $ \table_ptr -> do
-          error_ptr <- case mbVal of
-            Nothing -> do
-              c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
-            (Just (FuncRefValue (Func func_t))) -> do
-              alloca $ \val_ptr -> do
-                pokeVal val_ptr func_t
-                c'wasmtime_table_new ctx_ptr tt_ptr val_ptr table_ptr
-            (Just (ExternRefValue _todo)) -> do
-              error "not implemented: ExternRefValue Tables"
-          checkWasmtimeError error_ptr
-          Table <$> peek table_ptr
-
--- | Grow the table by delta elements.
-growTable ::
-  MonadPrim s m =>
-  Context s ->
-  Table s ->
-  -- | Delta
-  Word32 ->
-  -- | Optional element to fill in the new space.
-  Maybe TableValue ->
-  m (Either WasmtimeError Word32)
-growTable ctx table delta mbVal = unsafeIOToPrim $
-  try $
-    withContext ctx $ \ctx_ptr ->
-      withTable table $ \table_ptr ->
-        alloca $ \prev_size_ptr -> do
-          error_ptr <- case mbVal of
-            Nothing -> do
-              c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) nullPtr prev_size_ptr
-            (Just val) ->
-              withTableValue val $ \val_ptr -> do
-                c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) val_ptr prev_size_ptr
-          checkWasmtimeError error_ptr
-          peek prev_size_ptr
-
--- | Get value at index from table. If index > length table, Nothing is returned.
-tableGet ::
-  MonadPrim s m =>
-  Context s ->
-  Table s ->
-  -- | Index into table
-  Word32 ->
-  m (Maybe TableValue)
-tableGet ctx table ix = unsafeIOToPrim $
-  withContext ctx $ \ctx_ptr ->
-    withTable table $ \table_ptr ->
-      alloca $ \val_ptr -> do
-        success <- c'wasmtime_table_get ctx_ptr table_ptr ix val_ptr
-        if not success
-          then pure Nothing
-          else Just <$> peekTableVal val_ptr
-
--- | Set an element at the given index. This function will return an error if the index is too large.
-tableSet ::
-  MonadPrim s m =>
-  Context s ->
-  Table s ->
-  -- | Index
-  Word32 ->
-  -- | The new value
-  TableValue ->
-  m (Either WasmtimeError ())
-tableSet ctx table ix val = unsafeIOToPrim $
-  try $
-    withContext ctx $ \ctx_ptr ->
-      withTable table $ \table_ptr ->
-        withTableValue val $ \val_ptr -> do
-          error_ptr <- c'wasmtime_table_set ctx_ptr table_ptr ix val_ptr
-          checkWasmtimeError error_ptr
-
--- | Return the 'TableType' with which this table was created.
-getTableType :: Context s -> Table s -> TableType
-getTableType ctx table = unsafePerformIO $
-  withContext ctx $ \ctx_ptr ->
-    withTable table $ \table_ptr ->
-      mask_ $
-        c'wasmtime_table_type ctx_ptr table_ptr >>= newTableTypeFromPtr
 
 --------------------------------------------------------------------------------
 -- Globals
@@ -2030,6 +1712,502 @@ typedGlobalSet ctx typedGlobal x =
             checkWasmtimeError error_ptr
 
 --------------------------------------------------------------------------------
+-- Tables
+--------------------------------------------------------------------------------
+
+-- | A descriptor for a table in a WebAssembly module.
+--
+-- Tables are contiguous chunks of a specific element, typically a funcref or an
+-- externref.  The most common use for tables is a function table through which
+-- call_indirect can invoke other functions.
+newtype TableType = TableType {getWasmtimeTableType :: ForeignPtr C'wasm_tabletype_t}
+
+instance Eq TableType where
+  tt1 == tt2 =
+    tableTypeElement tt1 == tableTypeElement tt2
+      && tableTypeLimits tt1 == tableTypeLimits tt2
+
+instance Show TableType where
+  showsPrec p tt =
+    showParen (p > appPrec) $
+      showString "newTableType "
+        . showsArg tableRefType
+        . showString " "
+        . showsArg tableLimits
+    where
+      appPrec = 10
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (appPrec + 1)
+
+      tableRefType = tableTypeElement tt
+      tableLimits = tableTypeLimits tt
+
+withTableType :: TableType -> (Ptr C'wasm_tabletype_t -> IO a) -> IO a
+withTableType = withForeignPtr . getWasmtimeTableType
+
+newTableTypeFromPtr :: Ptr C'wasm_tabletype_t -> IO TableType
+newTableTypeFromPtr = fmap TableType . newForeignPtr p'wasm_tabletype_delete
+
+-- | The type of a table.
+data TableRefType = FuncRef | ExternRef
+  deriving (Show, Eq)
+
+-- TODO: make table limit maximum optional
+
+-- | Specifies a minimum and maximum size for a 'Table'
+data TableLimits = TableLimits {tableMin :: Int32, tableMax :: Int32}
+  deriving (Show, Eq)
+
+-- | Creates a new 'Table' descriptor which will contain the specified element
+-- type and have the limits applied to its length.
+newTableType ::
+  TableRefType ->
+  TableLimits ->
+  TableType
+newTableType tableRefType limits = unsafePerformIO $
+  alloca $ \(limits_ptr :: Ptr C'wasm_limits_t) -> mask_ $ do
+    let (valkind :: C'wasm_valkind_t) = case tableRefType of
+          FuncRef -> c'WASMTIME_FUNCREF
+          ExternRef -> c'WASMTIME_EXTERNREF
+        limits' =
+          C'wasm_limits_t
+            { c'wasm_limits_t'min = fromIntegral $ tableMin limits,
+              c'wasm_limits_t'max = fromIntegral $ tableMax limits
+            }
+    valtype_ptr <- c'wasm_valtype_new valkind
+    poke limits_ptr limits'
+    c'wasm_tabletype_new valtype_ptr limits_ptr >>= newTableTypeFromPtr
+
+-- | Returns the element type of this table
+tableTypeElement :: TableType -> TableRefType
+tableTypeElement tt = unsafePerformIO $
+  withTableType tt $ \tt_ptr -> do
+    valtype_ptr <- c'wasm_tabletype_element tt_ptr
+    valkind <- c'wasm_valtype_kind valtype_ptr
+    if
+        | valkind == c'WASMTIME_FUNCREF -> pure FuncRef
+        | valkind == c'WASMTIME_EXTERNREF -> pure ExternRef
+        | otherwise ->
+            error $
+              "Got invalid valkind "
+                ++ show valkind
+                ++ " from c'wasm_valtype_kind."
+
+-- | Returns the minimum and maximum size of this tabletype
+tableTypeLimits :: TableType -> TableLimits
+tableTypeLimits tt = unsafePerformIO $
+  withTableType tt $ \tt_ptr -> do
+    limits_ptr <- c'wasm_tabletype_limits tt_ptr
+    limits' <- peek limits_ptr
+    pure
+      TableLimits
+        { tableMin = fromIntegral (c'wasm_limits_t'min limits'),
+          tableMax = fromIntegral (c'wasm_limits_t'max limits')
+        }
+
+-- TODO: typed tables
+
+-- | A WebAssembly table, or an array of values.
+--
+-- For more information, see <https://docs.rs/wasmtime/latest/wasmtime/struct.Table.html>.
+newtype Table s = Table {getWasmtimeTable :: C'wasmtime_table_t}
+  deriving (Show, Typeable)
+
+withTable :: Table s -> (Ptr C'wasmtime_table_t -> IO a) -> IO a
+withTable = with . getWasmtimeTable
+
+-- | Tables can contain function references or extern references
+data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue (Ptr C'wasmtime_externref_t)
+
+withTableValue :: TableValue -> (Ptr C'wasmtime_val_t -> IO a) -> IO a
+withTableValue (FuncRefValue (Func (func_t :: C'wasmtime_func_t))) f =
+  alloca $ \val_ptr -> do
+    pokeVal val_ptr func_t
+    f val_ptr
+withTableValue (ExternRefValue _) _f = error "not implemented: ExternRefValue Tables"
+
+-- | Create a new table
+newTable ::
+  MonadPrim s m =>
+  Context s ->
+  TableType ->
+  -- | An optional initial value which will be used to fill in the table,
+  -- if its initial size is > 0.
+  Maybe TableValue ->
+  m (Either WasmtimeError (Table s))
+newTable ctx tt mbVal = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withTableType tt $ \tt_ptr ->
+        alloca $ \table_ptr -> do
+          error_ptr <- case mbVal of
+            Nothing -> do
+              c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
+            Just (FuncRefValue (Func func_t)) -> do
+              alloca $ \val_ptr -> do
+                pokeVal val_ptr func_t
+                c'wasmtime_table_new ctx_ptr tt_ptr val_ptr table_ptr
+            Just (ExternRefValue _todo) -> do
+              error "not implemented: ExternRefValue Tables"
+          checkWasmtimeError error_ptr
+          Table <$> peek table_ptr
+
+-- | Grow the table by delta elements.
+growTable ::
+  MonadPrim s m =>
+  Context s ->
+  Table s ->
+  -- | Delta
+  Word32 ->
+  -- | Optional element to fill in the new space.
+  Maybe TableValue ->
+  m (Either WasmtimeError Word32)
+growTable ctx table delta mbVal = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withTable table $ \table_ptr ->
+        alloca $ \prev_size_ptr -> do
+          error_ptr <- case mbVal of
+            Nothing ->
+              c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) nullPtr prev_size_ptr
+            Just val ->
+              withTableValue val $ \val_ptr ->
+                c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) val_ptr prev_size_ptr
+          checkWasmtimeError error_ptr
+          peek prev_size_ptr
+
+-- | Get value at index from table. If index > length table, Nothing is returned.
+tableGet ::
+  MonadPrim s m =>
+  Context s ->
+  Table s ->
+  -- | Index into table
+  Word32 ->
+  m (Maybe TableValue)
+tableGet ctx table ix = unsafeIOToPrim $
+  withContext ctx $ \ctx_ptr ->
+    withTable table $ \table_ptr ->
+      alloca $ \val_ptr -> do
+        success <- c'wasmtime_table_get ctx_ptr table_ptr ix val_ptr
+        if not success
+          then pure Nothing
+          else Just <$> peekTableVal val_ptr
+
+-- | Set an element at the given index.
+--
+-- This function will return an error if the index is too large.
+tableSet ::
+  MonadPrim s m =>
+  Context s ->
+  Table s ->
+  -- | Index
+  Word32 ->
+  -- | The new value
+  TableValue ->
+  m (Either WasmtimeError ())
+tableSet ctx table ix val = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withTable table $ \table_ptr ->
+        withTableValue val $ \val_ptr -> do
+          error_ptr <- c'wasmtime_table_set ctx_ptr table_ptr ix val_ptr
+          checkWasmtimeError error_ptr
+
+-- | Return the 'TableType' with which this table was created.
+getTableType :: Context s -> Table s -> TableType
+getTableType ctx table = unsafePerformIO $
+  withContext ctx $ \ctx_ptr ->
+    withTable table $ \table_ptr ->
+      mask_ $
+        c'wasmtime_table_type ctx_ptr table_ptr >>= newTableTypeFromPtr
+
+--------------------------------------------------------------------------------
+-- Memory
+--------------------------------------------------------------------------------
+
+-- | A descriptor for a WebAssembly memory type.
+--
+-- Memories are described in units of pages (64KB) and represent contiguous
+-- chunks of addressable memory.
+newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
+
+instance Eq MemoryType where
+  mt1 == mt2 =
+    getMin mt1 == getMin mt2
+      && getMax mt1 == getMax mt2
+      && wordLength mt1 == wordLength mt2
+
+instance Show MemoryType where
+  showsPrec p mt =
+    showParen (p > appPrec) $
+      showString "newMemoryType "
+        . showsArg mini
+        . showString " "
+        . showsArg mbMax
+        . showString " "
+        . showsArg wordLen
+    where
+      appPrec = 10
+
+      showsArg :: forall a. Show a => a -> ShowS
+      showsArg = showsPrec (appPrec + 1)
+
+      mini = getMin mt
+      mbMax = getMax mt
+      wordLen = wordLength mt
+
+newMemoryTypeFromPtr :: Ptr C'wasm_memorytype_t -> IO MemoryType
+newMemoryTypeFromPtr = fmap MemoryType . newForeignPtr p'wasm_memorytype_delete
+
+-- | Creates a descriptor for a WebAssembly 'Memory' with the specified minimum
+-- number of memory pages, an optional maximum of memory pages, and a specifier
+-- for the 'WordLength' (32 bit / 64 bit memory).
+newMemoryType ::
+  -- | Minimum number of memory pages.
+  Word64 ->
+  -- | Optional maximum of memory pages.
+  Maybe Word64 ->
+  -- | 'WordLength', either Bit32 or Bit64
+  WordLength ->
+  MemoryType
+newMemoryType mini mbMax wordLen = unsafePerformIO $ mask_ $ do
+  mem_type_ptr <- c'wasmtime_memorytype_new mini max_present maxi is64
+  newMemoryTypeFromPtr mem_type_ptr
+  where
+    (max_present, maxi) = maybe (False, 0) (True,) mbMax
+    is64 = wordLen == Bit64
+
+withMemoryType :: MemoryType -> (Ptr C'wasm_memorytype_t -> IO a) -> IO a
+withMemoryType = withForeignPtr . unMemoryType
+
+-- | Returns the minimum number of pages of this memory descriptor.
+getMin :: MemoryType -> Word64
+getMin mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_minimum
+
+-- | Returns the maximum number of pages of this memory descriptor, if one was set.
+getMax :: MemoryType -> Maybe Word64
+getMax mt = unsafePerformIO $
+  withMemoryType mt $ \mem_type_ptr ->
+    alloca $ \(max_ptr :: Ptr Word64) -> do
+      maxPresent <- c'wasmtime_memorytype_maximum mem_type_ptr max_ptr
+      if not maxPresent
+        then pure Nothing
+        else Just <$> peek max_ptr
+
+-- | Returns false if the memory is 32 bit and true if it is 64 bit.
+is64Memory :: MemoryType -> Bool
+is64Memory mt = unsafePerformIO $ withMemoryType mt c'wasmtime_memorytype_is64
+
+-- | Returns Bit32 or Bit64 :: 'WordLength'
+wordLength :: MemoryType -> WordLength
+wordLength mt = if is64Memory mt then Bit64 else Bit32
+
+-- | A WebAssembly linear memory.
+--
+-- WebAssembly memories represent a contiguous array of bytes that have a size
+-- that is always a multiple of the WebAssembly page size, currently 64 kilobytes.
+--
+-- WebAssembly memory is used for global data (not to be confused with
+-- wasm global items), statics in C/C++/Rust, shadow stack memory, etc.
+-- Accessing wasm memory is generally quite fast.
+--
+-- Memories, like other wasm items, are owned by a 'Store'.
+newtype Memory s = Memory {getWasmtimeMemory :: C'wasmtime_memory_t}
+  deriving (Show)
+
+-- | Create new memory with the properties described in the 'MemoryType' argument.
+newMemory :: MonadPrim s m => Context s -> MemoryType -> m (Either WasmtimeError (Memory s))
+newMemory ctx memtype = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withMemoryType memtype $ \memtype_ptr ->
+        alloca $ \mem_ptr -> do
+          error_ptr <- c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
+          checkWasmtimeError error_ptr
+          Memory <$> peek mem_ptr
+
+withMemory :: Memory s -> (Ptr C'wasmtime_memory_t -> IO a) -> IO a
+withMemory = with . getWasmtimeMemory
+
+-- | Returns the 'MemoryType' descriptor for this memory.
+getMemoryType :: Context s -> Memory s -> MemoryType
+getMemoryType ctx mem = unsafePerformIO $
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem $ \mem_ptr -> mask_ $ do
+      memtype_ptr <- c'wasmtime_memory_type ctx_ptr mem_ptr
+      MemoryType <$> newForeignPtr p'wasm_memorytype_delete memtype_ptr
+
+-- | Returns the linear memory size in bytes. Always a multiple of 64KB (65536).
+getMemorySizeBytes :: MonadPrim s m => Context s -> Memory s -> m Word64
+getMemorySizeBytes ctx mem = unsafeIOToPrim $
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem (fmap fromIntegral . c'wasmtime_memory_data_size ctx_ptr)
+
+-- | Returns the length of the linear memory in WebAssembly pages
+getMemorySizePages :: MonadPrim s m => Context s -> Memory s -> m Word64
+getMemorySizePages ctx mem = unsafeIOToPrim $
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem $ \mem_ptr ->
+      c'wasmtime_memory_size ctx_ptr mem_ptr
+
+-- | Grow the linar memory by delta number of pages. Return the size before.
+growMemory ::
+  MonadPrim s m =>
+  Context s ->
+  Memory s ->
+  -- | Delta
+  Word64 ->
+  m (Either WasmtimeError Word64)
+growMemory ctx mem delta = unsafeIOToPrim $
+  try $
+    withContext ctx $ \ctx_ptr ->
+      withMemory mem $ \mem_ptr ->
+        alloca $ \before_size_ptr -> do
+          error_ptr <- c'wasmtime_memory_grow ctx_ptr mem_ptr delta before_size_ptr
+          checkWasmtimeError error_ptr
+          peek before_size_ptr
+
+-- | Takes a continuation which can mutate the linear memory. The continuation
+-- is provided with a pointer to the beginning of the memory and its maximum
+-- length. Do not write outside the bounds!
+--
+-- This function is unsafe, because we do not restrict the continuation in any
+-- way.  DO NOT call exported wasm functions, grow the memory or do anything
+-- similar in the continuation!
+unsafeWithMemory :: Context s -> Memory s -> (Ptr Word8 -> Size -> IO a) -> IO a
+unsafeWithMemory ctx mem f =
+  withContext ctx $ \ctx_ptr ->
+    withMemory mem $ \mem_ptr -> do
+      mem_size <- fromIntegral <$> c'wasmtime_memory_data_size ctx_ptr mem_ptr
+      mem_data_ptr <- c'wasmtime_memory_data ctx_ptr mem_ptr
+      f mem_data_ptr mem_size
+
+-- | Returns a copy of the whole linear memory as a bytestring.
+readMemory :: MonadPrim s m => Context s -> Memory s -> m B.ByteString
+readMemory ctx mem = unsafeIOToPrim $
+  unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
+    BI.create (fromIntegral mem_size) $ \dst_ptr ->
+      BI.memcpy dst_ptr mem_data_ptr (fromIntegral mem_size)
+
+-- | Takes an offset and a length, and returns a copy of the memory starting at
+-- offset until offset + length.
+--
+-- Returns @Left MemoryAccessError@ if offset + length exceeds the length of the
+-- memory.
+readMemoryAt ::
+  MonadPrim s m =>
+  Context s ->
+  Memory s ->
+  -- | Offset
+  Offset ->
+  -- | Number of bytes to read
+  Size ->
+  m (Either MemoryAccessError B.ByteString)
+readMemoryAt ctx mem offset sz = do
+  max_sz <- getMemorySizeBytes ctx mem
+  unsafeIOToPrim $ do
+    if offset + sz > max_sz
+      then pure $ Left MemoryAccessError
+      else do
+        res <- unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
+          BI.create (fromIntegral mem_size) $ \dst_ptr ->
+            BI.memcpy
+              dst_ptr
+              (advancePtr mem_data_ptr (fromIntegral offset))
+              (fromIntegral mem_size)
+        pure $ Right res
+
+-- | Safely writes a 'ByteString' to this memory at the given offset.
+--
+-- If the @offset@ + the length of the @ByteString@ exceeds the
+-- current memory capacity, then none of the @ByteString@ is written
+-- to memory and @'Left' 'MemoryAccessError'@ is returned.
+writeMemory ::
+  MonadPrim s m =>
+  Context s ->
+  Memory s ->
+  -- | Offset
+  Int ->
+  B.ByteString ->
+  m (Either MemoryAccessError ())
+writeMemory ctx mem offset (BI.BS fp n) =
+  unsafeIOToPrim $ unsafeWithMemory ctx mem $ \dst sz ->
+    if offset + n > fromIntegral sz
+      then pure $ Left MemoryAccessError
+      else withForeignPtr fp $ \src ->
+        Right <$> BI.memcpy (advancePtr dst offset) src n
+
+-- | Error for out of bounds 'Memory' access.
+data MemoryAccessError = MemoryAccessError deriving (Show)
+
+instance Exception MemoryAccessError
+
+--------------------------------------------------------------------------------
+-- Externs
+--------------------------------------------------------------------------------
+
+-- | Container for different kinds of extern items (like @'Func's@) that can be
+-- imported into new @'Instance's@ using 'newInstance' and exported from
+-- existing instances using 'getExport'.
+data Extern s where
+  Extern :: forall e s. (Externable e) => TypeRep e -> e s -> Extern s
+
+-- | Class of types that can be imported and exported from @'Instance's@.
+class (Storable (CType e), Typeable e) => Externable (e :: Type -> Type) where
+  type CType e :: Type
+  toCExtern :: e s -> CType e
+  externKind :: Proxy e -> C'wasmtime_extern_kind_t
+
+instance Externable Func where
+  type CType Func = C'wasmtime_func
+  toCExtern = getWasmtimeFunc
+  externKind _proxy = c'WASMTIME_EXTERN_FUNC
+
+instance Externable Memory where
+  type CType Memory = C'wasmtime_memory_t
+  toCExtern = getWasmtimeMemory
+  externKind _proxy = c'WASMTIME_EXTERN_MEMORY
+
+instance Externable Table where
+  type CType Table = C'wasmtime_table_t
+  toCExtern = getWasmtimeTable
+  externKind _proxy = c'WASMTIME_EXTERN_TABLE
+
+instance Externable Global where
+  type CType Global = C'wasmtime_global_t
+  toCExtern = getWasmtimeGlobal
+  externKind _proxy = c'WASMTIME_EXTERN_GLOBAL
+
+-- | Turn any externable value (like a 'Func') into the 'Extern' container.
+toExtern :: forall e s. Externable e => e s -> Extern s
+toExtern = Extern (typeRep :: TypeRep e)
+
+-- | Converts an 'Extern' object back into an ordinary Haskell value (like a 'Func')
+-- of the correct type.
+fromExtern :: forall e s. Externable e => Extern s -> Maybe (e s)
+fromExtern (Extern t v)
+  | Just HRefl <- t `eqTypeRep` rep = Just v
+  | otherwise = Nothing
+  where
+    rep = typeRep :: TypeRep e
+
+withExterns :: Vector (Extern s) -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
+withExterns externs f = allocaArray n $ \externs_ptr0 ->
+  let pokeExternsFrom ix
+        | ix == n = f externs_ptr0 $ fromIntegral n
+        | otherwise =
+            case V.unsafeIndex externs ix of
+              Extern _typeRep (e :: e s) -> do
+                let externs_ptr = advancePtr externs_ptr0 ix
+                poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
+                poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ toCExtern e
+                pokeExternsFrom (ix + 1)
+   in pokeExternsFrom 0
+  where
+    n = V.length externs
+
+--------------------------------------------------------------------------------
 -- Instances
 --------------------------------------------------------------------------------
 
@@ -2124,29 +2302,34 @@ fromExternPtr extern_ptr = do
     of_ptr = p'wasmtime_extern'of extern_ptr
 
 -- | Convenience function which gets the named export from the store
--- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally checks if
--- the type of the function matches the desired type @f@ ('toTypedFunc').
-getExportedTypedFunc ::
+-- ('getExport'), checks if it's a 'Func' ('fromExtern') and finally converts
+-- the 'Func' to the Haskell function @f@ in case their types match
+-- ('funcToFunction').
+getExportedFunction ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
     HListable r,
     Types r ~ results,
     Result f ~ m (Either Trap r),
+    Foldr (->) (m (Either Trap r)) params ~ f,
+    Curry params,
     Vals params,
     Vals results,
     Len params,
     Len results,
-    MonadPrim s m
+    MonadPrim s m,
+    PrimBase m
   ) =>
   Context s ->
   Instance s ->
+  -- | Name of the export.
   String ->
-  m (Maybe (TypedFunc s f))
-getExportedTypedFunc ctx inst name = runMaybeT $ do
+  m (Maybe f)
+getExportedFunction ctx inst name = runMaybeT $ do
   extern <- MaybeT $ getExport ctx inst name
   (func :: Func s) <- MaybeT $ pure $ fromExtern extern
-  MaybeT $ toTypedFunc ctx func
+  MaybeT $ funcToFunction ctx func
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport') and checks if it's a 'Memory' ('fromExtern').
@@ -2155,6 +2338,7 @@ getExportedMemory ::
   (MonadPrim s m) =>
   Context s ->
   Instance s ->
+  -- | Name of the export.
   String ->
   m (Maybe (Memory s))
 getExportedMemory ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
@@ -2166,6 +2350,7 @@ getExportedTable ::
   (MonadPrim s m) =>
   Context s ->
   Instance s ->
+  -- | Name of the export.
   String ->
   m (Maybe (Table s))
 getExportedTable ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
@@ -2178,6 +2363,7 @@ getExportedTypedGlobal ::
   (MonadPrim s m, HasValType a) =>
   Context s ->
   Instance s ->
+  -- | Name of the export.
   String ->
   m (Maybe (TypedGlobal s a))
 getExportedTypedGlobal ctx inst name = runMaybeT $ do
@@ -2190,6 +2376,7 @@ getExportAtIndex ::
   MonadPrim s m =>
   Context s ->
   Instance s ->
+  -- | Index of the export within the module.
   Word64 ->
   m (Maybe (String, Extern s))
 getExportAtIndex ctx inst ix =
@@ -2457,7 +2644,7 @@ infixr 5 :.
 -- | Heterogeneous list that is used to return results from WASM functions.
 -- (Internally it's also used to pass parameters to WASM functions).
 --
--- See the documentation of 'toTypedFunc' for an example.
+-- See the documentation of 'funcToFunction' for an example.
 data List (as :: [Type]) where
   Nil :: List '[]
   (:.) :: a -> List as -> List (a ': as)
@@ -2474,12 +2661,15 @@ instance Ord (List '[]) where
 instance (Ord a, Ord (List as)) => Ord (List (a ': as)) where
   (x :. xs) `compare` (y :. ys) = x `compare` y <> xs `compare` ys
 
-type family Foldr f z (xs :: [Type]) where
+-- | Fold a type constructor through a list of types.
+type family Foldr (f :: Type -> Type -> Type) (z :: Type) (xs :: [Type]) where
   Foldr f z '[] = z
   Foldr f z (x ': xs) = f x (Foldr f z xs)
 
+-- | Curry and uncurry Haskell functions with arbitrary number of arguments to
+-- and from functions on heterogeneous lists.
 class Curry (as :: [Type]) where
-  uncurry :: Foldr (->) b as -> List as -> b
+  uncurry :: Foldr (->) b as -> (List as -> b)
   curry :: (List as -> b) -> Foldr (->) b as
 
 instance Curry '[] where
@@ -2490,6 +2680,7 @@ instance Curry as => Curry (a ': as) where
   uncurry f (x :. xs) = uncurry (f x) xs
   curry f x = curry $ f . (x :.)
 
+-- | The length of a type of kind list of types.
 class Len (l :: [Type]) where
   len :: Proxy l -> Int
 
@@ -2505,9 +2696,10 @@ instance Len as => Len (a ': as) where
 -- Working with @'List's@ can be cumbersome because you need to enable the
 -- @DataKinds@ and @GADTs@ language extensions.
 --
--- For this reason functions like 'newFunc' and `callFunc` use this 'HListable'
--- type class to automatically convert @'List's@ to \"normal\" Haskell types
--- like @()@, primitive types like @Int32@ or to tuples of primitive types.
+-- For this reason functions like 'newFunc' and `funcToFunction` use this
+-- 'HListable' type class to automatically convert @'List's@ to \"normal\"
+-- Haskell types like @()@, primitive types like @Int32@ or to tuples of
+-- primitive types.
 --
 -- Note there also exists an identity instance for @'List's@ themselves so if
 -- you want to use heterogeneous lists you can.
@@ -2529,104 +2721,160 @@ instance HListable () where
 instance HListable Int32 where
   type Types Int32 = '[Int32]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable Int64 where
   type Types Int64 = '[Int64]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable Float where
   type Types Float = '[Float]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable Double where
   type Types Double = '[Double]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable Word128 where
   type Types Word128 = '[Word128]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable (Func s) where
   type Types (Func s) = '[Func s]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable (Ptr C'wasmtime_externref_t) where
   type Types (Ptr C'wasmtime_externref_t) = '[Ptr C'wasmtime_externref_t]
   fromHList (x :. Nil) = x
-  toHList x = (x :. Nil)
+  toHList x = x :. Nil
 
 instance HListable (a, b) where
-  type Types (a, b) = '[a, b]
-  fromHList (x :. y :. Nil) = (x, y)
-  toHList (x, y) = (x :. y :. Nil)
+  type
+    Types (a, b) =
+      '[a, b]
+  fromHList (x :. y :. Nil) =
+    (x, y)
+  toHList (x, y) =
+    x :. y :. Nil
 
 instance HListable (a, b, c) where
-  type Types (a, b, c) = '[a, b, c]
-  fromHList (a :. b :. c :. Nil) = (a, b, c)
-  toHList (a, b, c) = (a :. b :. c :. Nil)
+  type
+    Types (a, b, c) =
+      '[a, b, c]
+  fromHList (a :. b :. c :. Nil) =
+    (a, b, c)
+  toHList (a, b, c) =
+    a :. b :. c :. Nil
 
 instance HListable (a, b, c, d) where
-  type Types (a, b, c, d) = '[a, b, c, d]
-  fromHList (a :. b :. c :. d :. Nil) = (a, b, c, d)
-  toHList (a, b, c, d) = (a :. b :. c :. d :. Nil)
+  type
+    Types (a, b, c, d) =
+      '[a, b, c, d]
+  fromHList (a :. b :. c :. d :. Nil) =
+    (a, b, c, d)
+  toHList (a, b, c, d) =
+    a :. b :. c :. d :. Nil
 
 instance HListable (a, b, c, d, e) where
-  type Types (a, b, c, d, e) = '[a, b, c, d, e]
-  fromHList (a :. b :. c :. d :. e :. Nil) = (a, b, c, d, e)
-  toHList (a, b, c, d, e) = (a :. b :. c :. d :. e :. Nil)
+  type
+    Types (a, b, c, d, e) =
+      '[a, b, c, d, e]
+  fromHList (a :. b :. c :. d :. e :. Nil) =
+    (a, b, c, d, e)
+  toHList (a, b, c, d, e) =
+    a :. b :. c :. d :. e :. Nil
 
 instance HListable (a, b, c, d, e, f) where
-  type Types (a, b, c, d, e, f) = '[a, b, c, d, e, f]
-  fromHList (a :. b :. c :. d :. e :. f :. Nil) = (a, b, c, d, e, f)
-  toHList (a, b, c, d, e, f) = (a :. b :. c :. d :. e :. f :. Nil)
+  type
+    Types (a, b, c, d, e, f) =
+      '[a, b, c, d, e, f]
+  fromHList (a :. b :. c :. d :. e :. f :. Nil) =
+    (a, b, c, d, e, f)
+  toHList (a, b, c, d, e, f) =
+    a :. b :. c :. d :. e :. f :. Nil
 
 instance HListable (a, b, c, d, e, f, g) where
-  type Types (a, b, c, d, e, f, g) = '[a, b, c, d, e, f, g]
-  fromHList (a :. b :. c :. d :. e :. f :. g :. Nil) = (a, b, c, d, e, f, g)
-  toHList (a, b, c, d, e, f, g) = (a :. b :. c :. d :. e :. f :. g :. Nil)
+  type
+    Types (a, b, c, d, e, f, g) =
+      '[a, b, c, d, e, f, g]
+  fromHList (a :. b :. c :. d :. e :. f :. g :. Nil) =
+    (a, b, c, d, e, f, g)
+  toHList (a, b, c, d, e, f, g) =
+    a :. b :. c :. d :. e :. f :. g :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h) where
-  type Types (a, b, c, d, e, f, g, h) = '[a, b, c, d, e, f, g, h]
-  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. Nil) = (a, b, c, d, e, f, g, h)
-  toHList (a, b, c, d, e, f, g, h) = (a :. b :. c :. d :. e :. f :. g :. h :. Nil)
+  type
+    Types (a, b, c, d, e, f, g, h) =
+      '[a, b, c, d, e, f, g, h]
+  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. Nil) =
+    (a, b, c, d, e, f, g, h)
+  toHList (a, b, c, d, e, f, g, h) =
+    a :. b :. c :. d :. e :. f :. g :. h :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i) where
-  type Types (a, b, c, d, e, f, g, h, i) = '[a, b, c, d, e, f, g, h, i]
-  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. Nil) = (a, b, c, d, e, f, g, h, i)
-  toHList (a, b, c, d, e, f, g, h, i) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. Nil)
+  type
+    Types (a, b, c, d, e, f, g, h, i) =
+      '[a, b, c, d, e, f, g, h, i]
+  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. Nil) =
+    (a, b, c, d, e, f, g, h, i)
+  toHList (a, b, c, d, e, f, g, h, i) =
+    a :. b :. c :. d :. e :. f :. g :. h :. i :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j) where
-  type Types (a, b, c, d, e, f, g, h, i, j) = '[a, b, c, d, e, f, g, h, i, j]
-  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. Nil) = (a, b, c, d, e, f, g, h, i, j)
-  toHList (a, b, c, d, e, f, g, h, i, j) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. Nil)
+  type
+    Types (a, b, c, d, e, f, g, h, i, j) =
+      '[a, b, c, d, e, f, g, h, i, j]
+  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. Nil) =
+    (a, b, c, d, e, f, g, h, i, j)
+  toHList (a, b, c, d, e, f, g, h, i, j) =
+    a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j, k) where
-  type Types (a, b, c, d, e, f, g, h, i, j, k) = '[a, b, c, d, e, f, g, h, i, j, k]
-  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. Nil) = (a, b, c, d, e, f, g, h, i, j, k)
-  toHList (a, b, c, d, e, f, g, h, i, j, k) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. Nil)
+  type
+    Types (a, b, c, d, e, f, g, h, i, j, k) =
+      '[a, b, c, d, e, f, g, h, i, j, k]
+  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. Nil) =
+    (a, b, c, d, e, f, g, h, i, j, k)
+  toHList (a, b, c, d, e, f, g, h, i, j, k) =
+    a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j, k, l) where
-  type Types (a, b, c, d, e, f, g, h, i, j, k, l) = '[a, b, c, d, e, f, g, h, i, j, k, l]
-  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. Nil) = (a, b, c, d, e, f, g, h, i, j, k, l)
-  toHList (a, b, c, d, e, f, g, h, i, j, k, l) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. Nil)
+  type
+    Types (a, b, c, d, e, f, g, h, i, j, k, l) =
+      '[a, b, c, d, e, f, g, h, i, j, k, l]
+  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. Nil) =
+    (a, b, c, d, e, f, g, h, i, j, k, l)
+  toHList (a, b, c, d, e, f, g, h, i, j, k, l) =
+    a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j, k, l, m) where
-  type Types (a, b, c, d, e, f, g, h, i, j, k, l, m) = '[a, b, c, d, e, f, g, h, i, j, k, l, m]
-  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. Nil) = (a, b, c, d, e, f, g, h, i, j, k, l, m)
-  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. Nil)
+  type
+    Types (a, b, c, d, e, f, g, h, i, j, k, l, m) =
+      '[a, b, c, d, e, f, g, h, i, j, k, l, m]
+  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. Nil) =
+    (a, b, c, d, e, f, g, h, i, j, k, l, m)
+  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m) =
+    a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j, k, l, m, n) where
-  type Types (a, b, c, d, e, f, g, h, i, j, k, l, m, n) = '[a, b, c, d, e, f, g, h, i, j, k, l, m, n]
-  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. Nil) = (a, b, c, d, e, f, g, h, i, j, k, l, m, n)
-  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m, n) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. Nil)
+  type
+    Types (a, b, c, d, e, f, g, h, i, j, k, l, m, n) =
+      '[a, b, c, d, e, f, g, h, i, j, k, l, m, n]
+  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. Nil) =
+    (a, b, c, d, e, f, g, h, i, j, k, l, m, n)
+  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m, n) =
+    a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. Nil
 
 instance HListable (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) where
-  type Types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) = '[a, b, c, d, e, f, g, h, i, j, k, l, m, n, o]
-  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. o :. Nil) = (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o)
-  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) = (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. o :. Nil)
+  type
+    Types (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) =
+      '[a, b, c, d, e, f, g, h, i, j, k, l, m, n, o]
+  fromHList (a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. o :. Nil) =
+    (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o)
+  toHList (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) =
+    a :. b :. c :. d :. e :. f :. g :. h :. i :. j :. k :. l :. m :. n :. o :. Nil

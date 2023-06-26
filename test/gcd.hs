@@ -6,18 +6,14 @@
 module Main (main) where
 
 import Control.Exception (Exception, throwIO)
-import Control.Monad.Primitive (RealWorld)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
 import Paths_wasmtime (getDataFileName)
-import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Text.Printf (printf)
 import Wasmtime
 
 main :: IO ()
 main = do
-  hSetBuffering stdout NoBuffering
-
   engine <- newEngine
 
   store <- newStore engine
@@ -33,13 +29,10 @@ main = do
 
   inst <- newInstance ctx myModule [] >>= handleException
 
-  Just (gcdTypedFunc :: TypedFunc RealWorld (Int32 -> Int32 -> IO (Either Trap Int32))) <-
-    getExportedTypedFunc ctx inst "gcd"
+  Just (wasmGCD :: Int32 -> Int32 -> IO (Either Trap Int32)) <-
+    getExportedFunction ctx inst "gcd"
 
-  let wasmGCD :: Int32 -> Int32 -> IO (Either Trap Int32)
-      wasmGCD = callFunc ctx gcdTypedFunc
-
-      a = 6
+  let a = 6
       b = 27
 
   r <- wasmGCD a b >>= handleException
