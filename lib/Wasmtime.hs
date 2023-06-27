@@ -76,6 +76,8 @@ module Wasmtime
     -- * Modules
     Module,
     newModule,
+    serializeModule,
+    deserializeModule,
 
     -- ** Imports
     moduleImports,
@@ -602,24 +604,16 @@ wasmFromBytes engine inp@(BI.BS inp_fp inp_size) =
 -- Throws a 'WasmtimeError' in case conversion fails.
 wat2wasm :: B.ByteString -> Either WasmtimeError Wasm
 wat2wasm (BI.BS inp_fp inp_size) =
-  unsafePerformIO $ try $ withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
-    alloca $ \(wasm_byte_vec_ptr :: Ptr C'wasm_byte_vec_t) -> mask_ $ do
-      let cchar_ptr :: Ptr CChar
-          cchar_ptr = castPtr inp_ptr
-      error_ptr <-
-        c'wasmtime_wat2wasm
-          cchar_ptr
-          (fromIntegral inp_size)
-          wasm_byte_vec_ptr
-      checkWasmtimeError error_ptr
-      data_ptr :: Ptr CChar <- peek $ p'wasm_byte_vec_t'data wasm_byte_vec_ptr
-      size <- peek $ p'wasm_byte_vec_t'size wasm_byte_vec_ptr
-      let word_ptr :: Ptr Word8
-          word_ptr = castPtr data_ptr
-      out_fp <-
-        Foreign.Concurrent.newForeignPtr word_ptr $
-          c'wasm_byte_vec_delete wasm_byte_vec_ptr
-      pure $ Wasm $ BI.fromForeignPtr0 out_fp $ fromIntegral size
+  unsafePerformIO $
+    try $
+      fmap Wasm $
+        withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
+          withByteVecToByteString $ \byte_vec_ptr ->
+            c'wasmtime_wat2wasm
+              (castPtr inp_ptr :: Ptr CChar)
+              (fromIntegral inp_size)
+              byte_vec_ptr
+              >>= checkWasmtimeError
 
 --------------------------------------------------------------------------------
 -- Module
@@ -631,6 +625,9 @@ wat2wasm (BI.BS inp_fp inp_size) =
 -- ready to be instantiated and can be inspected for imports/exports.
 newtype Module = Module {unModule :: ForeignPtr C'wasmtime_module_t}
 
+newModuleFromPtr :: Ptr C'wasmtime_module_t -> IO Module
+newModuleFromPtr = fmap Module . newForeignPtr p'wasmtime_module_delete
+
 -- | Compiles a WebAssembly binary into a 'Module'.
 newModule :: Engine -> Wasm -> Either WasmtimeError Module
 newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
@@ -638,18 +635,45 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
     withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
       withEngine engine $ \engine_ptr ->
         allocaNullPtr $ \module_ptr_ptr -> mask_ $ do
-          error_ptr <-
-            c'wasmtime_module_new
+          c'wasmtime_module_new
+            engine_ptr
+            inp_ptr
+            (fromIntegral inp_size)
+            module_ptr_ptr
+            >>= checkWasmtimeError
+          peek module_ptr_ptr >>= newModuleFromPtr
+
+withModule :: Module -> (Ptr C'wasmtime_module_t -> IO a) -> IO a
+withModule = withForeignPtr . unModule
+
+-- | This function serializes compiled module artifacts as blob data.
+serializeModule :: Module -> Either WasmtimeError B.ByteString
+serializeModule m =
+  unsafePerformIO $
+    try $
+      withModule m $ \module_ptr ->
+        withByteVecToByteString $
+          c'wasmtime_module_serialize module_ptr >=> checkWasmtimeError
+
+-- | Build a module from serialized data.
+--
+-- This function is not safe to receive arbitrary user input. See the Rust
+-- documentation for more information on what inputs are safe to pass in here
+-- (e.g. only that of 'serializeModule').
+deserializeModule :: Engine -> B.ByteString -> Either WasmtimeError Module
+deserializeModule engine (BI.BS inp_fp inp_size) =
+  unsafePerformIO $
+    try $
+      withEngine engine $ \engine_ptr ->
+        withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
+          allocaNullPtr $ \module_ptr_ptr -> mask_ $ do
+            c'wasmtime_module_deserialize
               engine_ptr
               inp_ptr
               (fromIntegral inp_size)
               module_ptr_ptr
-          checkWasmtimeError error_ptr
-          module_ptr <- peek module_ptr_ptr
-          Module <$> newForeignPtr p'wasmtime_module_delete module_ptr
-
-withModule :: Module -> (Ptr C'wasmtime_module_t -> IO a) -> IO a
-withModule = withForeignPtr . unModule
+              >>= checkWasmtimeError
+            peek module_ptr_ptr >>= newModuleFromPtr
 
 --------------------------------------------------------------------------------
 -- Module Imports
@@ -2622,6 +2646,17 @@ peekByteVecAsString p = do
   data_ptr <- peek $ p'wasm_byte_vec_t'data p
   size <- peek $ p'wasm_byte_vec_t'size p
   peekCStringLen (data_ptr, fromIntegral size)
+
+withByteVecToByteString :: (Ptr C'wasm_byte_vec_t -> IO ()) -> IO B.ByteString
+withByteVecToByteString f =
+  alloca $ \(wasm_byte_vec_ptr :: Ptr C'wasm_byte_vec_t) -> mask_ $ do
+    f wasm_byte_vec_ptr
+    data_ptr :: Ptr CChar <- peek $ p'wasm_byte_vec_t'data wasm_byte_vec_ptr
+    size <- peek $ p'wasm_byte_vec_t'size wasm_byte_vec_ptr
+    out_fp <-
+      Foreign.Concurrent.newForeignPtr (castPtr data_ptr :: Ptr Word8) $
+        c'wasm_byte_vec_delete wasm_byte_vec_ptr
+    pure $ BI.fromForeignPtr0 out_fp $ fromIntegral size
 
 withNonNullPtr :: (Ptr a -> IO b) -> Ptr a -> IO (Maybe b)
 withNonNullPtr f ptr
