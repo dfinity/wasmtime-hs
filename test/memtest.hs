@@ -1,18 +1,16 @@
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
+{-# OPTIONS_GHC -Wno-unused-matches #-}
 
 module Main (main) where
 
-import Control.Exception (Exception, throwIO)
-import Control.Monad.Primitive (MonadPrim, RealWorld)
+import Control.Exception (throwIO)
 import qualified Data.ByteString as B
 import Data.Foldable (for_)
 import Data.Int (Int32)
-import Data.Word (Word8)
 import Paths_wasmtime (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
-import System.Mem (performGC)
-import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 
 -- TODO: cmd line args for num iterations
@@ -23,7 +21,7 @@ main = do
 
   putStrLn "Initializing..."
   engine <- newEngine
-  for_ ([1 .. 100] :: [Int32]) $ \j -> do
+  for_ ([1 .. 100] :: [Int32]) $ \_j -> do
     -- print ("j", j) -- FIXME: currently fails after 13107 iterations
     store <- newStore engine
     ctx <- storeContext store
@@ -32,8 +30,8 @@ main = do
     myModule <- handleWasmtimeError $ newModule engine wasm
 
     for_ ([1 .. 10] :: [Int32]) $ \i -> do
-      fIo <- newFunc ctx io_imp
-      fPure <- newFunc ctx pure_imp
+      fIo <- newFunc ctx ioImp
+      fPure <- newFunc ctx pureImp
 
       inst <- newInstance ctx myModule [toExtern fIo, toExtern fPure]
       inst <- case inst of
@@ -63,11 +61,11 @@ main = do
   -- putStrLn "=================="
   putStrLn "end"
 
-io_imp :: IO (Either Trap ())
-io_imp = Right <$> putStrLn "hello io"
+ioImp :: IO (Either Trap ())
+ioImp = Right <$> putStrLn "hello io"
 
-pure_imp :: Int32 -> IO (Either Trap Int32)
-pure_imp x = pure . Right $ x * (x - 1)
+pureImp :: Int32 -> IO (Either Trap Int32)
+pureImp x = pure . Right $ x * (x - 1)
 
 handleWasmtimeError :: Either WasmtimeError a -> IO a
 handleWasmtimeError = either throwIO pure
