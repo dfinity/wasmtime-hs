@@ -5,6 +5,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
@@ -277,7 +278,6 @@ import Data.Kind (Type)
 import Data.List (intercalate)
 import Data.Maybe (fromMaybe)
 import Data.Proxy (Proxy (..))
-import Data.Typeable (Typeable)
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Data.WideWord.Word128 (Word128)
@@ -292,7 +292,6 @@ import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable, peek, peekElemOff, poke)
 import System.IO.Unsafe (unsafePerformIO)
-import Type.Reflection (TypeRep, eqTypeRep, typeRep, (:~~:) (HRefl))
 import Prelude hiding (curry, uncurry)
 
 --------------------------------------------------------------------------------
@@ -608,12 +607,9 @@ wat2wasm (BI.BS inp_fp inp_size) =
     try $
       fmap Wasm $
         withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
-          withByteVecToByteString $ \byte_vec_ptr ->
-            c'wasmtime_wat2wasm
-              (castPtr inp_ptr :: Ptr CChar)
-              (fromIntegral inp_size)
-              byte_vec_ptr
-              >>= checkWasmtimeError
+          withByteVecToByteString $
+            c'wasmtime_wat2wasm (castPtr inp_ptr :: Ptr CChar) (fromIntegral inp_size)
+              >=> checkWasmtimeError
 
 --------------------------------------------------------------------------------
 -- Module
@@ -1344,7 +1340,7 @@ peekTableVal val_ptr = do
 -- interoperate between 'Store' instances and if the wrong function is passed to
 -- the wrong store then it may trigger an assertion to abort the process.
 newtype Func s = Func {getWasmtimeFunc :: C'wasmtime_func_t}
-  deriving (Show, Typeable)
+  deriving (Show)
 
 withFunc :: Func s -> (Ptr C'wasmtime_func_t -> IO a) -> IO a
 withFunc = with . getWasmtimeFunc
@@ -1628,7 +1624,7 @@ globalTypeMutability globalType =
 -- work with the store it belongs to, and if another store is passed in by
 -- accident then methods will panic.
 newtype Global s = Global {getWasmtimeGlobal :: C'wasmtime_global_t}
-  deriving (Show, Typeable)
+  deriving (Show)
 
 withGlobal :: Global s -> (Ptr C'wasmtime_global_t -> IO a) -> IO a
 withGlobal = with . getWasmtimeGlobal
@@ -1836,7 +1832,7 @@ tableTypeLimits tt = unsafePerformIO $
 --
 -- For more information, see <https://docs.rs/wasmtime/latest/wasmtime/struct.Table.html>.
 newtype Table s = Table {getWasmtimeTable :: C'wasmtime_table_t}
-  deriving (Show, Typeable)
+  deriving (Show)
 
 withTable :: Table s -> (Ptr C'wasmtime_table_t -> IO a) -> IO a
 withTable = with . getWasmtimeTable
@@ -2174,62 +2170,91 @@ instance Exception MemoryAccessError
 -- | Container for different kinds of extern items (like @'Func's@) that can be
 -- imported into new @'Instance's@ using 'newInstance' and exported from
 -- existing instances using 'getExport'.
-data Extern s where
-  Extern :: forall e s. (Externable e) => TypeRep e -> e s -> Extern s
+data Extern (s :: Type)
+  = ExternFunc (Func s)
+  | ExternGlobal (Global s)
+  | ExternTable (Table s)
+  | ExternMemory (Memory s)
+  deriving (Show)
 
 -- | Class of types that can be imported and exported from @'Instance's@.
-class (Storable (CType e), Typeable e) => Externable (e :: Type -> Type) where
+class (Storable (CType e)) => Externable (e :: Type -> Type) where
   type CType e :: Type
+
+  -- | Turn any externable value (like a 'Func') into the 'Extern' container.
+  toExtern :: e s -> Extern s
+
+  -- | Converts an 'Extern' object back into an ordinary Haskell value (like a 'Func')
+  -- of the correct type.
+  fromExtern :: Extern s -> Maybe (e s)
+
   toCExtern :: e s -> CType e
   externKind :: Proxy e -> C'wasmtime_extern_kind_t
 
 instance Externable Func where
   type CType Func = C'wasmtime_func
+
+  toExtern = ExternFunc
+
+  fromExtern (ExternFunc func) = Just func
+  fromExtern _ = Nothing
+
   toCExtern = getWasmtimeFunc
   externKind _proxy = c'WASMTIME_EXTERN_FUNC
 
 instance Externable Memory where
   type CType Memory = C'wasmtime_memory_t
+
+  toExtern = ExternMemory
+
+  fromExtern (ExternMemory mem) = Just mem
+  fromExtern _ = Nothing
+
   toCExtern = getWasmtimeMemory
   externKind _proxy = c'WASMTIME_EXTERN_MEMORY
 
 instance Externable Table where
   type CType Table = C'wasmtime_table_t
+
+  toExtern = ExternTable
+
+  fromExtern (ExternTable table) = Just table
+  fromExtern _ = Nothing
+
   toCExtern = getWasmtimeTable
   externKind _proxy = c'WASMTIME_EXTERN_TABLE
 
 instance Externable Global where
   type CType Global = C'wasmtime_global_t
+
+  toExtern = ExternGlobal
+
+  fromExtern (ExternGlobal global) = Just global
+  fromExtern _ = Nothing
+
   toCExtern = getWasmtimeGlobal
   externKind _proxy = c'WASMTIME_EXTERN_GLOBAL
-
--- | Turn any externable value (like a 'Func') into the 'Extern' container.
-toExtern :: forall e s. Externable e => e s -> Extern s
-toExtern = Extern (typeRep :: TypeRep e)
-
--- | Converts an 'Extern' object back into an ordinary Haskell value (like a 'Func')
--- of the correct type.
-fromExtern :: forall e s. Externable e => Extern s -> Maybe (e s)
-fromExtern (Extern t v)
-  | Just HRefl <- t `eqTypeRep` rep = Just v
-  | otherwise = Nothing
-  where
-    rep = typeRep :: TypeRep e
 
 withExterns :: Vector (Extern s) -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
 withExterns externs f = allocaArray n $ \externs_ptr0 ->
   let pokeExternsFrom ix
         | ix == n = f externs_ptr0 $ fromIntegral n
-        | otherwise =
+        | otherwise = do
+            let externs_ptr = advancePtr externs_ptr0 ix
             case V.unsafeIndex externs ix of
-              Extern _typeRep (e :: e s) -> do
-                let externs_ptr = advancePtr externs_ptr0 ix
-                poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
-                poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ toCExtern e
-                pokeExternsFrom (ix + 1)
+              ExternFunc func -> pokeExtern externs_ptr func
+              ExternGlobal global -> pokeExtern externs_ptr global
+              ExternTable table -> pokeExtern externs_ptr table
+              ExternMemory memory -> pokeExtern externs_ptr memory
+            pokeExternsFrom (ix + 1)
    in pokeExternsFrom 0
   where
     n = V.length externs
+
+    pokeExtern :: forall e s. Externable e => Ptr C'wasmtime_extern -> e s -> IO ()
+    pokeExtern externs_ptr e = do
+      poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
+      poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ toCExtern e
 
 --------------------------------------------------------------------------------
 -- Instances
@@ -2605,7 +2630,7 @@ frameModuleOffset frame = unsafePerformIO $ withFrame frame c'wasm_frame_module_
 data WasmException
   = -- | Thrown if a WASM object (like an 'Engine' or 'Store') could not be allocated.
     AllocationFailed
-  deriving (Show, Typeable)
+  deriving (Show)
 
 instance Exception WasmException
 
