@@ -1319,7 +1319,7 @@ peekTableVal val_ptr = do
   k <- peek kind_ptr
   if
       | k == c'WASMTIME_FUNCREF ->
-          FuncRefValue . Func
+          FuncRefValue . MkFunc
             <$> peek (castPtr of_ptr :: Ptr C'wasmtime_func_t)
       | k == c'WASMTIME_EXTERNREF ->
           ExternRefValue
@@ -1339,7 +1339,7 @@ peekTableVal val_ptr = do
 -- do not have any destructor associated with them. Functions cannot
 -- interoperate between 'Store' instances and if the wrong function is passed to
 -- the wrong store then it may trigger an assertion to abort the process.
-newtype Func s = Func {getWasmtimeFunc :: C'wasmtime_func_t}
+newtype Func s = MkFunc {getWasmtimeFunc :: C'wasmtime_func_t}
   deriving (Show)
 
 withFunc :: Func s -> (Ptr C'wasmtime_func_t -> IO a) -> IO a
@@ -1391,7 +1391,7 @@ newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
     callback_funptr <- mk'wasmtime_func_callback_t callback
     alloca $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
       c'wasmtime_func_new ctx_ptr functype_ptr callback_funptr nullPtr nullFunPtr func_ptr
-      Func <$> peek func_ptr
+      MkFunc <$> peek func_ptr
   where
     funcType :: FuncType
     funcType = newFuncType $ Proxy @f
@@ -1623,7 +1623,7 @@ globalTypeMutability globalType =
 -- via 'newGlobal' or via instantiating a 'Module'). Operations on a Global only
 -- work with the store it belongs to, and if another store is passed in by
 -- accident then methods will panic.
-newtype Global s = Global {getWasmtimeGlobal :: C'wasmtime_global_t}
+newtype Global s = MkGlobal {getWasmtimeGlobal :: C'wasmtime_global_t}
   deriving (Show)
 
 withGlobal :: Global s -> (Ptr C'wasmtime_global_t -> IO a) -> IO a
@@ -1692,7 +1692,7 @@ newTypedGlobal ctx mutability x =
             alloca $ \(global_ptr :: Ptr C'wasmtime_global_t) -> do
               error_ptr <- c'wasmtime_global_new ctx_ptr globaltype_ptr val_ptr global_ptr
               checkWasmtimeError error_ptr
-              TypedGlobal . Global <$> peek global_ptr
+              TypedGlobal . MkGlobal <$> peek global_ptr
   where
     withNewGlobalTypePtr =
       bracket (newGlobalTypePtr (Proxy @a) mutability) c'wasm_globaltype_delete
@@ -1831,7 +1831,7 @@ tableTypeLimits tt = unsafePerformIO $
 -- | A WebAssembly table, or an array of values.
 --
 -- For more information, see <https://docs.rs/wasmtime/latest/wasmtime/struct.Table.html>.
-newtype Table s = Table {getWasmtimeTable :: C'wasmtime_table_t}
+newtype Table s = MkTable {getWasmtimeTable :: C'wasmtime_table_t}
   deriving (Show)
 
 withTable :: Table s -> (Ptr C'wasmtime_table_t -> IO a) -> IO a
@@ -1841,9 +1841,9 @@ withTable = with . getWasmtimeTable
 data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue (Ptr C'wasmtime_externref_t)
 
 withTableValue :: TableValue -> (Ptr C'wasmtime_val_t -> IO a) -> IO a
-withTableValue (FuncRefValue (Func (func_t :: C'wasmtime_func_t))) f =
+withTableValue (FuncRefValue func) f =
   alloca $ \val_ptr -> do
-    pokeVal val_ptr func_t
+    pokeVal val_ptr (getWasmtimeFunc func :: C'wasmtime_func_t)
     f val_ptr
 withTableValue (ExternRefValue _) _f = error "not implemented: ExternRefValue Tables"
 
@@ -1864,14 +1864,14 @@ newTable ctx tt mbVal = unsafeIOToPrim $
           error_ptr <- case mbVal of
             Nothing -> do
               c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
-            Just (FuncRefValue (Func func_t)) -> do
+            Just (FuncRefValue (MkFunc func_t)) -> do
               alloca $ \val_ptr -> do
                 pokeVal val_ptr func_t
                 c'wasmtime_table_new ctx_ptr tt_ptr val_ptr table_ptr
             Just (ExternRefValue _todo) -> do
               error "not implemented: ExternRefValue Tables"
           checkWasmtimeError error_ptr
-          Table <$> peek table_ptr
+          MkTable <$> peek table_ptr
 
 -- | Grow the table by delta elements.
 growTable ::
@@ -2033,7 +2033,7 @@ wordLength mt = if is64Memory mt then Bit64 else Bit32
 -- Accessing wasm memory is generally quite fast.
 --
 -- Memories, like other wasm items, are owned by a 'Store'.
-newtype Memory s = Memory {getWasmtimeMemory :: C'wasmtime_memory_t}
+newtype Memory s = MkMemory {getWasmtimeMemory :: C'wasmtime_memory_t}
   deriving (Show)
 
 -- | Create new memory with the properties described in the 'MemoryType' argument.
@@ -2045,7 +2045,7 @@ newMemory ctx memtype = unsafeIOToPrim $
         alloca $ \mem_ptr -> do
           error_ptr <- c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
           checkWasmtimeError error_ptr
-          Memory <$> peek mem_ptr
+          MkMemory <$> peek mem_ptr
 
 withMemory :: Memory s -> (Ptr C'wasmtime_memory_t -> IO a) -> IO a
 withMemory = with . getWasmtimeMemory
@@ -2171,10 +2171,10 @@ instance Exception MemoryAccessError
 -- imported into new @'Instance's@ using 'newInstance' and exported from
 -- existing instances using 'getExport'.
 data Extern (s :: Type)
-  = ExternFunc (Func s)
-  | ExternGlobal (Global s)
-  | ExternTable (Table s)
-  | ExternMemory (Memory s)
+  = Func (Func s)
+  | Global (Global s)
+  | Table (Table s)
+  | Memory (Memory s)
   deriving (Show)
 
 -- | Class of types that can be imported and exported from @'Instance's@.
@@ -2194,9 +2194,9 @@ class (Storable (CType e)) => Externable (e :: Type -> Type) where
 instance Externable Func where
   type CType Func = C'wasmtime_func
 
-  toExtern = ExternFunc
+  toExtern = Func
 
-  fromExtern (ExternFunc func) = Just func
+  fromExtern (Func func) = Just func
   fromExtern _ = Nothing
 
   toCExtern = getWasmtimeFunc
@@ -2205,9 +2205,9 @@ instance Externable Func where
 instance Externable Memory where
   type CType Memory = C'wasmtime_memory_t
 
-  toExtern = ExternMemory
+  toExtern = Memory
 
-  fromExtern (ExternMemory mem) = Just mem
+  fromExtern (Memory mem) = Just mem
   fromExtern _ = Nothing
 
   toCExtern = getWasmtimeMemory
@@ -2216,9 +2216,9 @@ instance Externable Memory where
 instance Externable Table where
   type CType Table = C'wasmtime_table_t
 
-  toExtern = ExternTable
+  toExtern = Table
 
-  fromExtern (ExternTable table) = Just table
+  fromExtern (Table table) = Just table
   fromExtern _ = Nothing
 
   toCExtern = getWasmtimeTable
@@ -2227,9 +2227,9 @@ instance Externable Table where
 instance Externable Global where
   type CType Global = C'wasmtime_global_t
 
-  toExtern = ExternGlobal
+  toExtern = Global
 
-  fromExtern (ExternGlobal global) = Just global
+  fromExtern (Global global) = Just global
   fromExtern _ = Nothing
 
   toCExtern = getWasmtimeGlobal
@@ -2242,10 +2242,10 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
         | otherwise = do
             let externs_ptr = advancePtr externs_ptr0 ix
             case V.unsafeIndex externs ix of
-              ExternFunc func -> pokeExtern externs_ptr func
-              ExternGlobal global -> pokeExtern externs_ptr global
-              ExternTable table -> pokeExtern externs_ptr table
-              ExternMemory memory -> pokeExtern externs_ptr memory
+              Func func -> pokeExtern externs_ptr func
+              Global global -> pokeExtern externs_ptr global
+              Table table -> pokeExtern externs_ptr table
+              Memory memory -> pokeExtern externs_ptr memory
             pokeExternsFrom (ix + 1)
    in pokeExternsFrom 0
   where
@@ -2339,10 +2339,10 @@ fromExternPtr extern_ptr = do
 
   fmap (fromMaybe $ error "Unknown extern!") $
     runMaybeT $
-      fromCExtern Func
-        <|> fromCExtern Memory
-        <|> fromCExtern Table
-        <|> fromCExtern Global
+      fromCExtern MkFunc
+        <|> fromCExtern MkMemory
+        <|> fromCExtern MkTable
+        <|> fromCExtern MkGlobal
   where
     kind_ptr :: Ptr C'wasmtime_extern_kind_t
     kind_ptr = p'wasmtime_extern'kind extern_ptr
