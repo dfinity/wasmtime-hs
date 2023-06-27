@@ -30,6 +30,7 @@ library
     other-modules:    Bindings.Wasmtime.Extern
     other-modules:    Bindings.Wasmtime.Func
     other-modules:    Bindings.Wasmtime.Instance
+    other-modules:    Bindings.Wasmtime.Linker
     other-modules:    Bindings.Wasmtime.Module
     other-modules:    Bindings.Wasmtime.Store
     other-modules:    Bindings.Wasmtime.Trap
@@ -45,8 +46,6 @@ library
     build-depends:    transformers >= 0.5.6
     build-depends:    vector >= 0.12.3
     build-depends:    wide-word >= 0.1.5
-    build-depends:    tasty >= 1.4.3
-    build-depends:    tasty-hunit >= 0.10.0
 
     default-language: Haskell2010
 
