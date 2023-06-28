@@ -226,6 +226,14 @@ module Wasmtime
     getExportedTypedGlobal,
     getExportAtIndex,
 
+    -- * Linker
+    Linker,
+    newLinker,
+    linkerAllowShadowing,
+    ModuleName,
+    Name,
+    linkerDefine,
+
     -- * Traps
     Trap,
     newTrap,
@@ -257,6 +265,7 @@ import Bindings.Wasmtime.Extern
 import Bindings.Wasmtime.Func
 import Bindings.Wasmtime.Global
 import Bindings.Wasmtime.Instance
+import Bindings.Wasmtime.Linker
 import Bindings.Wasmtime.Memory
 import Bindings.Wasmtime.Module
 import Bindings.Wasmtime.Store
@@ -2235,24 +2244,32 @@ instance Externable Global where
   toCExtern = getWasmtimeGlobal
   externKind _proxy = c'WASMTIME_EXTERN_GLOBAL
 
-withExterns :: Vector (Extern s) -> (Ptr C'wasmtime_extern -> CSize -> IO a) -> IO a
+withExtern :: Extern s -> (Ptr C'wasmtime_extern_t -> IO a) -> IO a
+withExtern extern f = alloca $ \(extern_ptr :: Ptr C'wasmtime_extern_t) -> do
+  pokeExtern extern_ptr extern
+  f extern_ptr
+
+withExterns :: Vector (Extern s) -> (Ptr C'wasmtime_extern_t -> CSize -> IO a) -> IO a
 withExterns externs f = allocaArray n $ \externs_ptr0 ->
   let pokeExternsFrom ix
         | ix == n = f externs_ptr0 $ fromIntegral n
         | otherwise = do
-            let externs_ptr = advancePtr externs_ptr0 ix
-            case V.unsafeIndex externs ix of
-              Func func -> pokeExtern externs_ptr func
-              Global global -> pokeExtern externs_ptr global
-              Table table -> pokeExtern externs_ptr table
-              Memory memory -> pokeExtern externs_ptr memory
+            pokeExtern (advancePtr externs_ptr0 ix) $ V.unsafeIndex externs ix
             pokeExternsFrom (ix + 1)
    in pokeExternsFrom 0
   where
     n = V.length externs
 
-    pokeExtern :: forall e s. Externable e => Ptr C'wasmtime_extern -> e s -> IO ()
-    pokeExtern externs_ptr e = do
+pokeExtern :: Ptr C'wasmtime_extern -> Extern s -> IO ()
+pokeExtern externs_ptr extern =
+  case extern of
+    Func func -> pokeExternable func
+    Global global -> pokeExternable global
+    Table table -> pokeExternable table
+    Memory memory -> pokeExternable memory
+  where
+    pokeExternable :: forall e s. Externable e => e s -> IO ()
+    pokeExternable e = do
       poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
       poke (castPtr $ p'wasmtime_extern'of externs_ptr) $ toCExtern e
 
@@ -2453,6 +2470,71 @@ getExportAtIndex ctx inst ix =
                   name <- peekCStringLen (name_ptr, fromIntegral name_len)
 
                   pure $ Just (name, extern)
+
+--------------------------------------------------------------------------------
+-- Linker
+--------------------------------------------------------------------------------
+
+-- | Object used to conveniently link together and instantiate wasm modules.
+newtype Linker s = Linker {unLinker :: ForeignPtr C'wasmtime_linker_t}
+
+withLinker :: Linker s -> (Ptr C'wasmtime_linker_t -> IO a) -> IO a
+withLinker = withForeignPtr . unLinker
+
+-- | Creates a new linker for the specified engine.
+newLinker :: MonadPrim s m => Engine -> m (Linker s)
+newLinker engine =
+  unsafeIOToPrim $
+    mask_ $
+      withEngine engine $
+        c'wasmtime_linker_new
+          >=> fmap Linker . newForeignPtr p'wasmtime_linker_delete
+
+-- | Configures whether this linker allows later definitions to shadow previous
+-- definitions.
+--
+-- By default this setting is 'False'.
+linkerAllowShadowing :: MonadPrim s m => Linker s -> Bool -> m ()
+linkerAllowShadowing linker allowShadowing =
+  unsafeIOToPrim $
+    withLinker linker $ \linker_ptr ->
+      c'wasmtime_linker_allow_shadowing linker_ptr allowShadowing
+
+type ModuleName = String
+
+type Name = String
+
+-- | Defines a new item in this linker.
+linkerDefine ::
+  MonadPrim s m =>
+  -- | The linker the name is being defined in.
+  Linker s ->
+  -- | The store that the item is owned by.
+  Context s ->
+  -- | The module name the item is defined under.
+  ModuleName ->
+  -- | The field name the item is defined under
+  Name ->
+  -- | The item that is being defined in this linker.
+  Extern s ->
+  m (Either WasmtimeError ())
+linkerDefine linker ctx m name extern =
+  unsafeIOToPrim $
+    withLinker linker $ \linker_ptr ->
+      withContext ctx $ \ctx_ptr ->
+        withCStringLen m $ \(mod_name_ptr, mod_name_sz) ->
+          withCStringLen name $ \(name_ptr, name_sz) ->
+            withExtern extern $ \extern_ptr ->
+              try $
+                c'wasmtime_linker_define
+                  linker_ptr
+                  ctx_ptr
+                  mod_name_ptr
+                  (fromIntegral mod_name_sz)
+                  name_ptr
+                  (fromIntegral name_sz)
+                  extern_ptr
+                  >>= checkWasmtimeError
 
 --------------------------------------------------------------------------------
 -- Traps
