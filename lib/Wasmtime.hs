@@ -12,6 +12,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 -- | High-level Haskell API to the wasmtime C API.
@@ -282,6 +283,7 @@ import Control.Monad.Trans.Maybe (MaybeT (MaybeT), runMaybeT)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
 import Data.Functor (($>))
+import Data.IORef (IORef, atomicModifyIORef, newIORef, readIORef)
 import Data.Int (Int32, Int64)
 import Data.Kind (Type)
 import Data.List (intercalate)
@@ -298,7 +300,7 @@ import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
 import Foreign.Marshal.Alloc (alloca)
 import Foreign.Marshal.Array (advancePtr, allocaArray)
 import Foreign.Marshal.Utils (with)
-import Foreign.Ptr (Ptr, castPtr, nullFunPtr, nullPtr)
+import Foreign.Ptr (FunPtr, Ptr, castFunPtr, castPtr, freeHaskellFunPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable, peek, peekElemOff, poke)
 import System.IO.Unsafe (unsafePerformIO)
 import Prelude hiding (curry, uncurry)
@@ -961,17 +963,28 @@ newExternTypeFromPtr externtype_ptr = do
 -- number of instances in it because 'Store' will never release this
 -- memory. It’s recommended to have a 'Store' correspond roughly to the lifetime
 -- of a “main instance” that an embedding is interested in executing.
-newtype Store s = Store {unStore :: ForeignPtr C'wasmtime_store_t}
+data Store s = Store
+  { storeFunPtrs :: !(IORef [FunPtr ()]),
+    storeForeignPtr :: !(ForeignPtr C'wasmtime_store_t)
+  }
 
 -- | Creates a new store within the specified engine.
 newStore :: MonadPrim s m => Engine -> m (Store s)
 newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
   wasmtime_store_ptr <- c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
   checkAllocation wasmtime_store_ptr
-  Store <$> newForeignPtr p'wasmtime_store_delete wasmtime_store_ptr
+  funPtrsRef <- newIORef []
+  storeFP <- Foreign.Concurrent.newForeignPtr wasmtime_store_ptr $ do
+    c'wasmtime_store_delete wasmtime_store_ptr
+    readIORef funPtrsRef >>= mapM_ freeHaskellFunPtr
+  pure
+    Store
+      { storeFunPtrs = funPtrsRef,
+        storeForeignPtr = storeFP
+      }
 
 withStore :: Store s -> (Ptr C'wasmtime_store_t -> IO a) -> IO a
-withStore = withForeignPtr . unStore
+withStore = withForeignPtr . storeForeignPtr
 
 -- | A context is basically the same as a 'Store'. All functions in @wasmtime@
 -- that require a 'Store' will actually require a 'Context' instead.
@@ -1372,6 +1385,17 @@ type FuncCallback =
   CSize -> -- nresults
   IO (Ptr C'wasm_trap_t)
 
+newFuncCallbackFunPtr :: Context s -> FuncCallback -> IO (FunPtr FuncCallback)
+newFuncCallbackFunPtr ctx callback = mask_ $ do
+  callback_funptr <- mk'wasmtime_func_callback_t callback
+  registerFunPtr ctx callback_funptr
+  pure callback_funptr
+
+registerFunPtr :: Context s -> FunPtr a -> IO ()
+registerFunPtr (storeContextStore -> storeFunPtrs -> ioRef) funPtr =
+  atomicModifyIORef ioRef $ \(existingFunPtrs :: [FunPtr ()]) ->
+    (castFunPtr funPtr : existingFunPtrs, ())
+
 -- | Insert a new function into the 'Store'.
 newFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
@@ -1393,14 +1417,14 @@ newFunc ::
   -- | 'Funcable' Haskell function.
   f ->
   m (Func s)
-newFunc ctx f = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
-  withFuncType funcType $ \functype_ptr -> do
-    -- TODO: We probably need to extend the Store with a mutable set of FunPtrs
-    -- that need to be freed using freeHaskellFunPtr when the Store is collected!!!
-    callback_funptr <- mk'wasmtime_func_callback_t callback
-    alloca $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
-      c'wasmtime_func_new ctx_ptr functype_ptr callback_funptr nullPtr nullFunPtr func_ptr
-      MkFunc <$> peek func_ptr
+newFunc ctx f =
+  unsafeIOToPrim $
+    withContext ctx $ \ctx_ptr ->
+      withFuncType funcType $ \functype_ptr -> do
+        callback_funptr :: FunPtr FuncCallback <- newFuncCallbackFunPtr ctx callback
+        alloca $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+          c'wasmtime_func_new ctx_ptr functype_ptr callback_funptr nullPtr nullFunPtr func_ptr
+          MkFunc <$> peek func_ptr
   where
     funcType :: FuncType
     funcType = newFuncType $ Proxy @f
