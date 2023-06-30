@@ -308,7 +308,6 @@ import Foreign.Marshal.Utils (with)
 import Foreign.Ptr (FunPtr, Ptr, castFunPtr, castPtr, freeHaskellFunPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable, peek, peekElemOff, poke)
 import System.IO.Unsafe (unsafePerformIO)
-import Prelude hiding (curry, uncurry)
 
 --------------------------------------------------------------------------------
 -- Typedefs
@@ -1451,7 +1450,7 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
       case mbParams of
         Nothing -> error "ValType mismatch!"
         Just (params :: List params) -> do
-          e <- unsafePrimToIO $ (uncurry f :: List params -> m (Either Trap r)) params
+          e <- unsafePrimToIO $ (uncurryList f :: List params -> m (Either Trap r)) params
           case e of
             Left trap ->
               -- As the docs of <wasmtime_func_callback_t> mention:
@@ -1545,7 +1544,7 @@ callFunc ::
   -- | See 'funcToFunction'.
   Func s ->
   f
-callFunc store func = curry callFuncOnParams
+callFunc store func = curryList callFuncOnParams
   where
     callFuncOnParams :: List params -> m (Either Trap r)
     callFuncOnParams params =
@@ -3098,16 +3097,16 @@ type family Foldr (f :: Type -> Type -> Type) (z :: Type) (xs :: [Type]) where
 -- | Curry and uncurry Haskell functions with arbitrary number of arguments to
 -- and from functions on heterogeneous lists.
 class Curry (as :: [Type]) where
-  uncurry :: Foldr (->) b as -> (List as -> b)
-  curry :: (List as -> b) -> Foldr (->) b as
+  uncurryList :: Foldr (->) b as -> (List as -> b)
+  curryList :: (List as -> b) -> Foldr (->) b as
 
 instance Curry '[] where
-  uncurry f _ = f
-  curry f = f Nil
+  uncurryList f _ = f
+  curryList f = f Nil
 
 instance Curry as => Curry (a ': as) where
-  uncurry f (x :. xs) = uncurry (f x) xs
-  curry f x = curry $ f . (x :.)
+  uncurryList f (x :. xs) = uncurryList (f x) xs
+  curryList f x = curryList $ f . (x :.)
 
 -- | The length of a type of kind list of types.
 class Len (l :: [Type]) where
