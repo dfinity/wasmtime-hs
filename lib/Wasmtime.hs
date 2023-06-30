@@ -237,6 +237,8 @@ module Wasmtime
     linkerDefineWasi,
     linkerGet,
     linkerGetDefault,
+    linkerInstantiate,
+    linkerModule,
 
     -- * Traps
     Trap,
@@ -2325,21 +2327,21 @@ newInstance ::
   -- ergonomic name-based resolution API.
   Vector (Extern s) ->
   m (Either Trap (Instance s))
+-- TODO: don't throw the WasmtimeError but return it via Either
 newInstance store m externs = unsafeIOToPrim $
   withStore store $ \ctx_ptr ->
     withModule m $ \mod_ptr ->
       withExterns externs $ \externs_ptr n ->
         alloca $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
           allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
-            error_ptr <-
-              c'wasmtime_instance_new
-                ctx_ptr
-                mod_ptr
-                externs_ptr
-                n
-                inst_ptr
-                trap_ptr_ptr
-            checkWasmtimeError error_ptr
+            c'wasmtime_instance_new
+              ctx_ptr
+              mod_ptr
+              externs_ptr
+              n
+              inst_ptr
+              trap_ptr_ptr
+              >>= checkWasmtimeError
             trap_ptr <- peek trap_ptr_ptr
             if trap_ptr == nullPtr
               then Right . Instance <$> peek inst_ptr
@@ -2507,6 +2509,12 @@ getExportAtIndex store inst ix =
 data Linker s = Linker
   { linkerForeignPtr :: ForeignPtr C'wasmtime_linker_t,
     linkerFunPtrs :: IORef [FunPtr ()]
+    -- TODO: once we connect a Linker to an Instance and thus to a Store we need
+    -- to ensure that the lifetime of the Store doesn't exceed the lifetime of
+    -- the Linker to ensure that the FunPtrs above remain alive.
+    --
+    -- One way of implementing this is to give the Store a mutable list of
+    -- Linkers. And to adapt withStore to call withLinker for all those linkers.
   }
 
 withLinker :: Linker s -> (Ptr C'wasmtime_linker_t -> IO a) -> IO a
@@ -2746,6 +2754,74 @@ linkerGetDefault linker store name =
               func_ptr
               >>= checkWasmtimeError
             MkFunc <$> peek func_ptr
+
+-- | Instantiates a 'Module' with the items defined in the given 'Linker'.
+--
+-- This function will attempt to satisfy all of the imports of the module
+-- provided with items previously defined in the given linker. If any name isn't
+-- defined in the linker than an error is returned. (or if the previously
+-- defined item is of the wrong type).
+linkerInstantiate ::
+  MonadPrim s m =>
+  -- | The linker used to instantiate the provided module.
+  Linker s ->
+  -- | The store that is used to instantiate within.
+  Store s ->
+  -- | The module that is being instantiated.
+  Module ->
+  m (Either Trap (Instance s))
+-- TODO: don't throw the WasmtimeError but return it via Either
+linkerInstantiate linker store m =
+  unsafeIOToPrim $
+    withLinker linker $ \linker_ptr ->
+      withStore store $ \ctx_ptr ->
+        withModule m $ \mod_ptr ->
+          alloca $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
+            allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+              c'wasmtime_linker_instantiate
+                linker_ptr
+                ctx_ptr
+                mod_ptr
+                inst_ptr
+                trap_ptr_ptr
+                >>= checkWasmtimeError
+              trap_ptr <- peek trap_ptr_ptr
+              if trap_ptr == nullPtr
+                then Right . Instance <$> peek inst_ptr
+                else Left <$> newTrapFromPtr trap_ptr
+
+-- | Defines automatic instantiations of a 'Module' in the given 'Linker'.
+--
+-- This function automatically handles
+-- <https://github.com/WebAssembly/WASI/blob/main/legacy/application-abi.md#current-unstable-abi Commands and Reactors>
+-- instantiation and initialization.
+--
+-- For more information see the
+-- <https://bytecodealliance.github.io/wasmtime/api/wasmtime/struct.Linker.html#method.module Rust documentation>.
+linkerModule ::
+  MonadPrim s m =>
+  -- | The linker the module is being added to.
+  Linker s ->
+  -- | The store that is used to instantiate the given module.
+  Store s ->
+  -- | The name of the module within the linker.
+  ModuleName ->
+  -- | The module that's being instantiated.
+  Module ->
+  m (Either WasmtimeError ())
+linkerModule linker store modName m =
+  unsafeIOToPrim $
+    withLinker linker $ \linker_ptr ->
+      withStore store $ \ctx_ptr ->
+        withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
+          withModule m $ \mod_ptr ->
+            c'wasmtime_linker_module
+              linker_ptr
+              ctx_ptr
+              mod_name_ptr
+              (fromIntegral mod_name_sz)
+              mod_ptr
+              >>= try . checkWasmtimeError
 
 --------------------------------------------------------------------------------
 -- Traps
