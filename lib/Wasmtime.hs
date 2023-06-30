@@ -233,6 +233,10 @@ module Wasmtime
     Name,
     linkerDefine,
     linkerDefineFunc,
+    linkerDefineInstance,
+    linkerDefineWasi,
+    linkerGet,
+    linkerGetDefault,
 
     -- * Traps
     Trap,
@@ -731,7 +735,7 @@ moduleImports m =
 -- | Creates a new import type.
 newImportType ::
   -- | Module
-  String ->
+  ModuleName ->
   -- | Optional name (in the module linking proposal the import name can be omitted).
   Maybe String ->
   ExternType ->
@@ -2540,6 +2544,9 @@ type ModuleName = String
 type Name = String
 
 -- | Defines a new item in this linker.
+--
+-- For more information about name resolution consult the
+-- <https://docs.wasmtime.dev/api/wasmtime/struct.Linker.html#name-resolution Rust documentation>.
 linkerDefine ::
   MonadPrim s m =>
   -- | The linker the name is being defined in.
@@ -2553,11 +2560,11 @@ linkerDefine ::
   -- | The item that is being defined in this linker.
   Extern s ->
   m (Either WasmtimeError ())
-linkerDefine linker store m name extern =
+linkerDefine linker store modName name extern =
   unsafeIOToPrim $
     withLinker linker $ \linker_ptr ->
       withStore store $ \ctx_ptr ->
-        withCStringLen m $ \(mod_name_ptr, mod_name_sz) ->
+        withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
           withCStringLen name $ \(name_ptr, name_sz) ->
             withExtern extern $ \extern_ptr ->
               c'wasmtime_linker_define
@@ -2575,6 +2582,9 @@ linkerDefine linker store m name extern =
 -- Note that this function does not create a 'Func'. This creates a
 -- 'Store'-independent function within the 'Linker', allowing this function
 -- definition to be used with multiple stores.
+--
+-- For more information about name resolution consult the
+-- <https://docs.wasmtime.dev/api/wasmtime/struct.Linker.html#name-resolution Rust documentation>.
 linkerDefineFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
@@ -2599,10 +2609,10 @@ linkerDefineFunc ::
   Name ->
   f ->
   m (Either WasmtimeError ())
-linkerDefineFunc linker m name f =
+linkerDefineFunc linker modName name f =
   unsafeIOToPrim $
     withLinker linker $ \linker_ptr ->
-      withCStringLen m $ \(mod_name_ptr, mod_name_sz) ->
+      withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
         withCStringLen name $ \(name_ptr, name_sz) ->
           withFuncType funcType $ \functype_ptr -> do
             callback_funptr :: FunPtr FuncCallback <-
@@ -2624,6 +2634,118 @@ linkerDefineFunc linker m name f =
 
     callback :: FuncCallback
     callback = mkCallback f
+
+-- | Defines an instance under the specified name in this linker.
+--
+-- This function will take all of the exports of the given 'Instance' and define
+-- them under a module with the given name with a field name as the export's own
+-- name.
+--
+-- For more information about name resolution consult the
+-- <https://docs.wasmtime.dev/api/wasmtime/struct.Linker.html#name-resolution Rust documentation>.
+linkerDefineInstance ::
+  MonadPrim s m =>
+  -- | The linker the name is being defined in.
+  Linker s ->
+  -- | The store that owns the given 'Instance'.
+  Store s ->
+  -- | The module name to define the given 'Instance' under.
+  ModuleName ->
+  -- | A previously-created 'Instance'.
+  Instance s ->
+  m (Either WasmtimeError ())
+linkerDefineInstance linker store name inst =
+  unsafeIOToPrim $
+    withLinker linker $ \linker_ptr ->
+      withStore store $ \ctx_ptr ->
+        withCStringLen name $ \(name_ptr, name_sz) ->
+          withInstance inst $ \inst_ptr ->
+            c'wasmtime_linker_define_instance
+              linker_ptr
+              ctx_ptr
+              name_ptr
+              (fromIntegral name_sz)
+              inst_ptr
+              >>= try . checkWasmtimeError
+
+-- TODO: Bind wasmtime_context_set_wasi
+
+-- | Defines WASI functions in this linker.
+--
+-- This function will provide WASI function names in the specified linker. Note
+-- that when an instance is created within a store then the store also needs to
+-- have its WASI settings configured with @wasmtime_context_set_wasi@ for WASI
+-- functions to work, otherwise an assert will be tripped that will abort the
+-- process.
+--
+-- For more information about name resolution consult the
+-- <https://docs.wasmtime.dev/api/wasmtime/struct.Linker.html#name-resolution Rust documentation>.
+linkerDefineWasi :: MonadPrim s m => Linker s -> m (Either WasmtimeError ())
+linkerDefineWasi linker =
+  unsafeIOToPrim $
+    withLinker linker $
+      c'wasmtime_linker_define_wasi
+        >=> try . checkWasmtimeError
+
+-- | Loads an item by name from this linker.
+linkerGet ::
+  MonadPrim s m =>
+  -- | The linker to load from.
+  Linker s ->
+  -- | The store to load the item into.
+  Store s ->
+  -- | The name of the module to get.
+  ModuleName ->
+  -- | The name of the field to get.
+  Name ->
+  m (Maybe (Extern s))
+linkerGet linker store modName name =
+  unsafeIOToPrim $
+    withLinker linker $ \linker_ptr ->
+      withStore store $ \ctx_ptr ->
+        withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
+          withCStringLen name $ \(name_ptr, name_sz) ->
+            alloca $ \(extern_ptr :: Ptr C'wasmtime_extern) -> do
+              found <-
+                c'wasmtime_linker_get
+                  linker_ptr
+                  ctx_ptr
+                  mod_name_ptr
+                  (fromIntegral mod_name_sz)
+                  name_ptr
+                  (fromIntegral name_sz)
+                  extern_ptr
+              if not found
+                then pure Nothing
+                else Just <$> fromExternPtr extern_ptr
+
+-- | Acquires the \"default export\" of the named module in this linker.
+--
+-- For more information see the
+-- <https://bytecodealliance.github.io/wasmtime/api/wasmtime/struct.Linker.html#method.get_default Rust documentation>.
+linkerGetDefault ::
+  MonadPrim s m =>
+  -- | The linker to load from.
+  Linker s ->
+  -- | The store to load the item into.
+  Store s ->
+  -- | The name of the field to get.
+  Name ->
+  m (Either WasmtimeError (Func s))
+linkerGetDefault linker store name =
+  unsafeIOToPrim $
+    withLinker linker $ \linker_ptr ->
+      withStore store $ \ctx_ptr ->
+        withCStringLen name $ \(name_ptr, name_sz) ->
+          alloca $ \(func_ptr :: Ptr C'wasmtime_func_t) -> try $ do
+            c'wasmtime_linker_get_default
+              linker_ptr
+              ctx_ptr
+              name_ptr
+              (fromIntegral name_sz)
+              func_ptr
+              >>= checkWasmtimeError
+            MkFunc <$> peek func_ptr
 
 --------------------------------------------------------------------------------
 -- Traps
