@@ -105,8 +105,6 @@ module Wasmtime
     -- * Stores
     Store,
     newStore,
-    Context,
-    storeContext,
     addFuel,
     fuelConsumed,
     consumeFuel,
@@ -932,7 +930,7 @@ newExternTypeFromPtr externtype_ptr = do
 -- pure code as long as the side-effects are contained within the 'ST'
 -- computation.
 --
--- All (mutable) objects ('Store', 'Context', 'Func', 'Global', 'TypedGlobal',
+-- All (mutable) objects ('Store', 'Func', 'Global', 'TypedGlobal',
 -- 'Table' and 'Memory') have a phantom type @s@ that ensures that when executed
 -- within:
 --
@@ -965,7 +963,8 @@ newExternTypeFromPtr externtype_ptr = do
 -- of a “main instance” that an embedding is interested in executing.
 data Store s = Store
   { storeFunPtrs :: !(IORef [FunPtr ()]),
-    storeForeignPtr :: !(ForeignPtr C'wasmtime_store_t)
+    storeForeignPtr :: !(ForeignPtr C'wasmtime_store_t),
+    storeCtxPtr :: Ptr C'wasmtime_context_t
   }
 
 -- | Creates a new store within the specified engine.
@@ -973,6 +972,7 @@ newStore :: MonadPrim s m => Engine -> m (Store s)
 newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
   wasmtime_store_ptr <- c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
   checkAllocation wasmtime_store_ptr
+  wasmtime_ctx_ptr <- c'wasmtime_store_context wasmtime_store_ptr
   funPtrsRef <- newIORef []
   storeFP <- Foreign.Concurrent.newForeignPtr wasmtime_store_ptr $ do
     c'wasmtime_store_delete wasmtime_store_ptr
@@ -980,37 +980,13 @@ newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
   pure
     Store
       { storeFunPtrs = funPtrsRef,
+        storeCtxPtr = wasmtime_ctx_ptr,
         storeForeignPtr = storeFP
       }
 
-withStore :: Store s -> (Ptr C'wasmtime_store_t -> IO a) -> IO a
-withStore = withForeignPtr . storeForeignPtr
-
--- | A context is basically the same as a 'Store'. All functions in @wasmtime@
--- that require a 'Store' will actually require a 'Context' instead.
---
--- We might fold 'Store' and 'Context' into a single type in the future.
-data Context s = Context
-  { -- | Usage of a @wasmtime_context_t@ must not outlive the original @wasmtime_store_t@
-    -- so we keep a reference to a 'Store' to ensure it's not garbage collected.
-    storeContextStore :: !(Store s),
-    storeContextPtr :: !(Ptr C'wasmtime_context_t)
-  }
-
--- | Get a 'Context' from a 'Store'.
-storeContext :: MonadPrim s m => Store s -> m (Context s)
-storeContext store =
-  unsafeIOToPrim $ withStore store $ \wasmtime_store_ptr -> do
-    wasmtime_ctx_ptr <- c'wasmtime_store_context wasmtime_store_ptr
-    pure
-      Context
-        { storeContextStore = store,
-          storeContextPtr = wasmtime_ctx_ptr
-        }
-
-withContext :: Context s -> (Ptr C'wasmtime_context_t -> IO a) -> IO a
-withContext ctx f = withStore (storeContextStore ctx) $ \_store_ptr ->
-  f $ storeContextPtr ctx
+withStore :: Store s -> (Ptr C'wasmtime_context_t -> IO a) -> IO a
+withStore store f = withForeignPtr (storeForeignPtr store) $ \_store_ptr ->
+  f $ storeCtxPtr store
 
 -- | Adds fuel to this 'Store' for wasm to consume while executing.
 --
@@ -1028,8 +1004,8 @@ withContext ctx f = withStore (storeContextStore ctx) $ \_store_ptr ->
 --
 -- This function will return an error if fuel consumption is not enabled via
 -- 'setConsumeFuel'.
-addFuel :: MonadPrim s m => Context s -> Word64 -> m (Either WasmtimeError ())
-addFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> try $ do
+addFuel :: MonadPrim s m => Store s -> Word64 -> m (Either WasmtimeError ())
+addFuel store amount = unsafeIOToPrim $ withStore store $ \ctx_ptr -> try $ do
   error_ptr <- c'wasmtime_context_add_fuel ctx_ptr amount
   checkWasmtimeError error_ptr
 
@@ -1038,8 +1014,8 @@ addFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr -> try $ do
 -- If fuel consumption is not enabled via 'setConsumeFuel' then this function
 -- will return 'Nothing'. Also note that fuel, if enabled, must be originally
 -- configured via 'addFuel'.
-fuelConsumed :: MonadPrim s m => Context s -> m (Maybe Word64)
-fuelConsumed ctx = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
+fuelConsumed :: MonadPrim s m => Store s -> m (Maybe Word64)
+fuelConsumed store = unsafeIOToPrim $ withStore store $ \ctx_ptr ->
   alloca $ \amount_ptr -> do
     res <- c'wasmtime_context_fuel_consumed ctx_ptr amount_ptr
     if not res
@@ -1064,11 +1040,11 @@ fuelConsumed ctx = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
 -- this store.
 consumeFuel ::
   MonadPrim s m =>
-  Context s ->
+  Store s ->
   -- | Amount of @fuel@ to consume.
   Word64 ->
   m (Either WasmtimeError Word64)
-consumeFuel ctx amount = unsafeIOToPrim $ withContext ctx $ \ctx_ptr ->
+consumeFuel store amount = unsafeIOToPrim $ withStore store $ \ctx_ptr ->
   alloca $ \remaining_ptr -> try $ do
     error_ptr <- c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
     checkWasmtimeError error_ptr
@@ -1368,10 +1344,10 @@ withFunc :: Func s -> (Ptr C'wasmtime_func_t -> IO a) -> IO a
 withFunc = with . getWasmtimeFunc
 
 -- | Returns the type of the given function.
-getFuncType :: MonadPrim s m => Context s -> Func s -> m FuncType
-getFuncType ctx func =
+getFuncType :: MonadPrim s m => Store s -> Func s -> m FuncType
+getFuncType store func =
   unsafeIOToPrim $
-    withContext ctx $ \ctx_ptr ->
+    withStore store $ \ctx_ptr ->
       withFunc func $ \func_ptr ->
         mask_ $
           c'wasmtime_func_type ctx_ptr func_ptr >>= newFuncTypeFromPtr
@@ -1385,14 +1361,14 @@ type FuncCallback =
   CSize -> -- nresults
   IO (Ptr C'wasm_trap_t)
 
-newFuncCallbackFunPtr :: Context s -> FuncCallback -> IO (FunPtr FuncCallback)
-newFuncCallbackFunPtr ctx callback = mask_ $ do
+newFuncCallbackFunPtr :: Store s -> FuncCallback -> IO (FunPtr FuncCallback)
+newFuncCallbackFunPtr store callback = mask_ $ do
   callback_funptr <- mk'wasmtime_func_callback_t callback
-  registerFunPtr ctx callback_funptr
+  registerFunPtr store callback_funptr
   pure callback_funptr
 
-registerFunPtr :: Context s -> FunPtr a -> IO ()
-registerFunPtr (storeContextStore -> storeFunPtrs -> ioRef) funPtr =
+registerFunPtr :: Store s -> FunPtr a -> IO ()
+registerFunPtr (storeFunPtrs -> ioRef) funPtr =
   atomicModifyIORef ioRef $ \(existingFunPtrs :: [FunPtr ()]) ->
     (castFunPtr funPtr : existingFunPtrs, ())
 
@@ -1413,15 +1389,15 @@ newFunc ::
     MonadPrim s m,
     PrimBase m
   ) =>
-  Context s ->
+  Store s ->
   -- | 'Funcable' Haskell function.
   f ->
   m (Func s)
-newFunc ctx f =
+newFunc store f =
   unsafeIOToPrim $
-    withContext ctx $ \ctx_ptr ->
+    withStore store $ \ctx_ptr ->
       withFuncType funcType $ \functype_ptr -> do
-        callback_funptr :: FunPtr FuncCallback <- newFuncCallbackFunPtr ctx callback
+        callback_funptr :: FunPtr FuncCallback <- newFuncCallbackFunPtr store callback
         alloca $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
           c'wasmtime_func_new ctx_ptr functype_ptr callback_funptr nullPtr nullFunPtr func_ptr
           MkFunc <$> peek func_ptr
@@ -1482,7 +1458,7 @@ newFunc ctx f =
 -- Example:
 --
 -- @
--- mbGCD <- 'funcToFunction' ctx someExportedGcdFunc
+-- mbGCD <- 'funcToFunction' store someExportedGcdFunc
 -- case mbGCD of
 --   Nothing -> error "gcd did not have the expected type!"
 --   Just (wasmGCD :: Int32 -> Int32 -> IO (Either Trap Int32)) -> do
@@ -1506,15 +1482,15 @@ funcToFunction ::
     MonadPrim s m,
     PrimBase m
   ) =>
-  Context s ->
+  Store s ->
   -- | WASM function.
   Func s ->
   m (Maybe f)
-funcToFunction ctx func = do
-  actualFuncType <- getFuncType ctx func
+funcToFunction store func = do
+  actualFuncType <- getFuncType store func
   pure $
     if actualFuncType == expectedFuncType
-      then Just $ callFunc ctx func
+      then Just $ callFunc store func
       else Nothing
   where
     expectedFuncType = newFuncType $ Proxy @f
@@ -1535,16 +1511,16 @@ callFunc ::
     MonadPrim s m,
     PrimBase m
   ) =>
-  Context s ->
+  Store s ->
   -- | See 'funcToFunction'.
   Func s ->
   f
-callFunc ctx func = curry callFuncOnParams
+callFunc store func = curry callFuncOnParams
   where
     callFuncOnParams :: List params -> m (Either Trap r)
     callFuncOnParams params =
       unsafeIOToPrim $
-        withContext ctx $ \ctx_ptr ->
+        withStore store $ \ctx_ptr ->
           withFunc func $ \func_ptr ->
             allocaArray n $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
               pokeRawVals args_and_results_ptr params
@@ -1663,10 +1639,10 @@ withGlobal :: Global s -> (Ptr C'wasmtime_global_t -> IO a) -> IO a
 withGlobal = with . getWasmtimeGlobal
 
 -- | Returns the wasm type of the specified global.
-getGlobalType :: (MonadPrim s m) => Context s -> Global s -> m GlobalType
-getGlobalType ctx global =
+getGlobalType :: (MonadPrim s m) => Store s -> Global s -> m GlobalType
+getGlobalType store global =
   unsafeIOToPrim $
-    withContext ctx $ \ctx_ptr ->
+    withStore store $ \ctx_ptr ->
       withGlobal global $ \global_ptr -> mask_ $ do
         globaltype_ptr <- c'wasmtime_global_type ctx_ptr global_ptr
         newGlobalTypeFromPtr globaltype_ptr
@@ -1676,11 +1652,11 @@ getGlobalType ctx global =
 toTypedGlobal ::
   forall s m a.
   (MonadPrim s m, HasValType a) =>
-  Context s ->
+  Store s ->
   Global s ->
   m (Maybe (TypedGlobal s a))
-toTypedGlobal ctx global = do
-  globalType <- getGlobalType ctx global
+toTypedGlobal store global = do
+  globalType <- getGlobalType store global
   let actualKind = toWasmKind $ globalTypeValType globalType
       expectedKind = kind $ Proxy @a
   if actualKind == expectedKind
@@ -1700,25 +1676,25 @@ withTypedGlobal = with . getWasmtimeGlobal . unTypedGlobal
 -- to the type of the given Haskell value and the specified 'Mutability'. The
 -- global will be initialised with the given Haskell value.
 --
--- The 'Context' argument will be the owner of the 'Global' returned. Using the
+-- The 'Store' argument will be the owner of the 'Global' returned. Using the
 -- returned Global other items in the store may access this global. For example
 -- this could be provided as an argument to 'newInstance'.
 --
 -- Returns an error if the value comes from a different store than the specified
--- store ('Context').
+-- store ('Store').
 newTypedGlobal ::
   forall s m a.
   (MonadPrim s m, HasValType a, Storable a) =>
-  Context s ->
+  Store s ->
   -- | Specifies whether the global can be mutated or not.
   Mutability ->
   -- | Initialise the global with this Haskell value.
   a ->
   m (Either WasmtimeError (TypedGlobal s a))
-newTypedGlobal ctx mutability x =
+newTypedGlobal store mutability x =
   unsafeIOToPrim $
     try $
-      withContext ctx $ \ctx_ptr ->
+      withStore store $ \ctx_ptr ->
         withNewGlobalTypePtr $ \(globaltype_ptr :: Ptr C'wasm_globaltype_t) ->
           alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
             pokeVal val_ptr x
@@ -1733,12 +1709,12 @@ newTypedGlobal ctx mutability x =
 -- | Returns the current value of the given typed global.
 typedGlobalGet ::
   (MonadPrim s m, HasValType a, Storable a) =>
-  Context s ->
+  Store s ->
   TypedGlobal s a ->
   m a
-typedGlobalGet ctx typedGlobal =
+typedGlobalGet store typedGlobal =
   unsafeIOToPrim $
-    withContext ctx $ \ctx_ptr ->
+    withStore store $ \ctx_ptr ->
       withTypedGlobal typedGlobal $ \global_ptr ->
         alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
           c'wasmtime_global_get ctx_ptr global_ptr val_ptr
@@ -1750,14 +1726,14 @@ typedGlobalGet ctx typedGlobal =
 -- different store than the one provided.
 typedGlobalSet ::
   (MonadPrim s m, HasValType a, Storable a) =>
-  Context s ->
+  Store s ->
   TypedGlobal s a ->
   a ->
   m (Either WasmtimeError ())
-typedGlobalSet ctx typedGlobal x =
+typedGlobalSet store typedGlobal x =
   unsafeIOToPrim $
     try $
-      withContext ctx $ \ctx_ptr ->
+      withStore store $ \ctx_ptr ->
         withTypedGlobal typedGlobal $ \global_ptr ->
           alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
             pokeVal val_ptr x
@@ -1883,15 +1859,15 @@ withTableValue (ExternRefValue _) _f = error "not implemented: ExternRefValue Ta
 -- | Create a new table
 newTable ::
   MonadPrim s m =>
-  Context s ->
+  Store s ->
   TableType ->
   -- | An optional initial value which will be used to fill in the table,
   -- if its initial size is > 0.
   Maybe TableValue ->
   m (Either WasmtimeError (Table s))
-newTable ctx tt mbVal = unsafeIOToPrim $
+newTable store tt mbVal = unsafeIOToPrim $
   try $
-    withContext ctx $ \ctx_ptr ->
+    withStore store $ \ctx_ptr ->
       withTableType tt $ \tt_ptr ->
         alloca $ \table_ptr -> do
           error_ptr <- case mbVal of
@@ -1909,16 +1885,16 @@ newTable ctx tt mbVal = unsafeIOToPrim $
 -- | Grow the table by delta elements.
 growTable ::
   MonadPrim s m =>
-  Context s ->
+  Store s ->
   Table s ->
   -- | Delta
   Word32 ->
   -- | Optional element to fill in the new space.
   Maybe TableValue ->
   m (Either WasmtimeError Word32)
-growTable ctx table delta mbVal = unsafeIOToPrim $
+growTable store table delta mbVal = unsafeIOToPrim $
   try $
-    withContext ctx $ \ctx_ptr ->
+    withStore store $ \ctx_ptr ->
       withTable table $ \table_ptr ->
         alloca $ \prev_size_ptr -> do
           error_ptr <- case mbVal of
@@ -1933,13 +1909,13 @@ growTable ctx table delta mbVal = unsafeIOToPrim $
 -- | Get value at index from table. If index > length table, Nothing is returned.
 tableGet ::
   MonadPrim s m =>
-  Context s ->
+  Store s ->
   Table s ->
   -- | Index into table
   Word32 ->
   m (Maybe TableValue)
-tableGet ctx table ix = unsafeIOToPrim $
-  withContext ctx $ \ctx_ptr ->
+tableGet store table ix = unsafeIOToPrim $
+  withStore store $ \ctx_ptr ->
     withTable table $ \table_ptr ->
       alloca $ \val_ptr -> do
         success <- c'wasmtime_table_get ctx_ptr table_ptr ix val_ptr
@@ -1952,25 +1928,25 @@ tableGet ctx table ix = unsafeIOToPrim $
 -- This function will return an error if the index is too large.
 tableSet ::
   MonadPrim s m =>
-  Context s ->
+  Store s ->
   Table s ->
   -- | Index
   Word32 ->
   -- | The new value
   TableValue ->
   m (Either WasmtimeError ())
-tableSet ctx table ix val = unsafeIOToPrim $
+tableSet store table ix val = unsafeIOToPrim $
   try $
-    withContext ctx $ \ctx_ptr ->
+    withStore store $ \ctx_ptr ->
       withTable table $ \table_ptr ->
         withTableValue val $ \val_ptr -> do
           error_ptr <- c'wasmtime_table_set ctx_ptr table_ptr ix val_ptr
           checkWasmtimeError error_ptr
 
 -- | Return the 'TableType' with which this table was created.
-getTableType :: Context s -> Table s -> TableType
-getTableType ctx table = unsafePerformIO $
-  withContext ctx $ \ctx_ptr ->
+getTableType :: Store s -> Table s -> TableType
+getTableType store table = unsafePerformIO $
+  withStore store $ \ctx_ptr ->
     withTable table $ \table_ptr ->
       mask_ $
         c'wasmtime_table_type ctx_ptr table_ptr >>= newTableTypeFromPtr
@@ -2070,10 +2046,10 @@ newtype Memory s = MkMemory {getWasmtimeMemory :: C'wasmtime_memory_t}
   deriving (Show)
 
 -- | Create new memory with the properties described in the 'MemoryType' argument.
-newMemory :: MonadPrim s m => Context s -> MemoryType -> m (Either WasmtimeError (Memory s))
-newMemory ctx memtype = unsafeIOToPrim $
+newMemory :: MonadPrim s m => Store s -> MemoryType -> m (Either WasmtimeError (Memory s))
+newMemory store memtype = unsafeIOToPrim $
   try $
-    withContext ctx $ \ctx_ptr ->
+    withStore store $ \ctx_ptr ->
       withMemoryType memtype $ \memtype_ptr ->
         alloca $ \mem_ptr -> do
           error_ptr <- c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
@@ -2084,37 +2060,37 @@ withMemory :: Memory s -> (Ptr C'wasmtime_memory_t -> IO a) -> IO a
 withMemory = with . getWasmtimeMemory
 
 -- | Returns the 'MemoryType' descriptor for this memory.
-getMemoryType :: Context s -> Memory s -> MemoryType
-getMemoryType ctx mem = unsafePerformIO $
-  withContext ctx $ \ctx_ptr ->
+getMemoryType :: Store s -> Memory s -> MemoryType
+getMemoryType store mem = unsafePerformIO $
+  withStore store $ \ctx_ptr ->
     withMemory mem $ \mem_ptr -> mask_ $ do
       memtype_ptr <- c'wasmtime_memory_type ctx_ptr mem_ptr
       MemoryType <$> newForeignPtr p'wasm_memorytype_delete memtype_ptr
 
 -- | Returns the linear memory size in bytes. Always a multiple of 64KB (65536).
-getMemorySizeBytes :: MonadPrim s m => Context s -> Memory s -> m Word64
-getMemorySizeBytes ctx mem = unsafeIOToPrim $
-  withContext ctx $ \ctx_ptr ->
+getMemorySizeBytes :: MonadPrim s m => Store s -> Memory s -> m Word64
+getMemorySizeBytes store mem = unsafeIOToPrim $
+  withStore store $ \ctx_ptr ->
     withMemory mem (fmap fromIntegral . c'wasmtime_memory_data_size ctx_ptr)
 
 -- | Returns the length of the linear memory in WebAssembly pages
-getMemorySizePages :: MonadPrim s m => Context s -> Memory s -> m Word64
-getMemorySizePages ctx mem = unsafeIOToPrim $
-  withContext ctx $ \ctx_ptr ->
+getMemorySizePages :: MonadPrim s m => Store s -> Memory s -> m Word64
+getMemorySizePages store mem = unsafeIOToPrim $
+  withStore store $ \ctx_ptr ->
     withMemory mem $ \mem_ptr ->
       c'wasmtime_memory_size ctx_ptr mem_ptr
 
 -- | Grow the linar memory by delta number of pages. Return the size before.
 growMemory ::
   MonadPrim s m =>
-  Context s ->
+  Store s ->
   Memory s ->
   -- | Delta
   Word64 ->
   m (Either WasmtimeError Word64)
-growMemory ctx mem delta = unsafeIOToPrim $
+growMemory store mem delta = unsafeIOToPrim $
   try $
-    withContext ctx $ \ctx_ptr ->
+    withStore store $ \ctx_ptr ->
       withMemory mem $ \mem_ptr ->
         alloca $ \before_size_ptr -> do
           error_ptr <- c'wasmtime_memory_grow ctx_ptr mem_ptr delta before_size_ptr
@@ -2128,18 +2104,18 @@ growMemory ctx mem delta = unsafeIOToPrim $
 -- This function is unsafe, because we do not restrict the continuation in any
 -- way.  DO NOT call exported wasm functions, grow the memory or do anything
 -- similar in the continuation!
-unsafeWithMemory :: Context s -> Memory s -> (Ptr Word8 -> Size -> IO a) -> IO a
-unsafeWithMemory ctx mem f =
-  withContext ctx $ \ctx_ptr ->
+unsafeWithMemory :: Store s -> Memory s -> (Ptr Word8 -> Size -> IO a) -> IO a
+unsafeWithMemory store mem f =
+  withStore store $ \ctx_ptr ->
     withMemory mem $ \mem_ptr -> do
       mem_size <- fromIntegral <$> c'wasmtime_memory_data_size ctx_ptr mem_ptr
       mem_data_ptr <- c'wasmtime_memory_data ctx_ptr mem_ptr
       f mem_data_ptr mem_size
 
 -- | Returns a copy of the whole linear memory as a bytestring.
-readMemory :: MonadPrim s m => Context s -> Memory s -> m B.ByteString
-readMemory ctx mem = unsafeIOToPrim $
-  unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
+readMemory :: MonadPrim s m => Store s -> Memory s -> m B.ByteString
+readMemory store mem = unsafeIOToPrim $
+  unsafeWithMemory store mem $ \mem_data_ptr mem_size ->
     BI.create (fromIntegral mem_size) $ \dst_ptr ->
       BI.memcpy dst_ptr mem_data_ptr (fromIntegral mem_size)
 
@@ -2150,20 +2126,20 @@ readMemory ctx mem = unsafeIOToPrim $
 -- memory.
 readMemoryAt ::
   MonadPrim s m =>
-  Context s ->
+  Store s ->
   Memory s ->
   -- | Offset
   Offset ->
   -- | Number of bytes to read
   Size ->
   m (Either MemoryAccessError B.ByteString)
-readMemoryAt ctx mem offset sz = do
-  max_sz <- getMemorySizeBytes ctx mem
+readMemoryAt store mem offset sz = do
+  max_sz <- getMemorySizeBytes store mem
   unsafeIOToPrim $ do
     if offset + sz > max_sz
       then pure $ Left MemoryAccessError
       else do
-        res <- unsafeWithMemory ctx mem $ \mem_data_ptr mem_size ->
+        res <- unsafeWithMemory store mem $ \mem_data_ptr mem_size ->
           BI.create (fromIntegral mem_size) $ \dst_ptr ->
             BI.memcpy
               dst_ptr
@@ -2178,14 +2154,14 @@ readMemoryAt ctx mem offset sz = do
 -- to memory and @'Left' 'MemoryAccessError'@ is returned.
 writeMemory ::
   MonadPrim s m =>
-  Context s ->
+  Store s ->
   Memory s ->
   -- | Offset
   Int ->
   B.ByteString ->
   m (Either MemoryAccessError ())
-writeMemory ctx mem offset (BI.BS fp n) =
-  unsafeIOToPrim $ unsafeWithMemory ctx mem $ \dst sz ->
+writeMemory store mem offset (BI.BS fp n) =
+  unsafeIOToPrim $ unsafeWithMemory store mem $ \dst sz ->
     if offset + n > fromIntegral sz
       then pure $ Left MemoryAccessError
       else withForeignPtr fp $ \src ->
@@ -2312,7 +2288,7 @@ newtype Instance s = Instance {unInstance :: C'wasmtime_instance_t}
 -- afterwards be inspected for exports.
 newInstance ::
   MonadPrim s m =>
-  Context s ->
+  Store s ->
   Module ->
   -- | This function requires that this `imports` vector has the same size as
   -- the imports of the given 'Module'. Additionally the `imports` must be 1:1
@@ -2321,8 +2297,8 @@ newInstance ::
   -- ergonomic name-based resolution API.
   Vector (Extern s) ->
   m (Either Trap (Instance s))
-newInstance ctx m externs = unsafeIOToPrim $
-  withContext ctx $ \ctx_ptr ->
+newInstance store m externs = unsafeIOToPrim $
+  withStore store $ \ctx_ptr ->
     withModule m $ \mod_ptr ->
       withExterns externs $ \externs_ptr n ->
         alloca $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
@@ -2345,9 +2321,9 @@ withInstance :: Instance s -> (Ptr C'wasmtime_instance_t -> IO a) -> IO a
 withInstance = with . unInstance
 
 -- | Get an export by name from an instance.
-getExport :: MonadPrim s m => Context s -> Instance s -> String -> m (Maybe (Extern s))
-getExport ctx inst name = unsafeIOToPrim $
-  withContext ctx $ \ctx_ptr ->
+getExport :: MonadPrim s m => Store s -> Instance s -> String -> m (Maybe (Extern s))
+getExport store inst name = unsafeIOToPrim $
+  withStore store $ \ctx_ptr ->
     withInstance inst $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
       withCStringLen name $ \(name_ptr, sz) ->
         alloca $ \(extern_ptr :: Ptr C'wasmtime_extern) -> do
@@ -2411,39 +2387,39 @@ getExportedFunction ::
     MonadPrim s m,
     PrimBase m
   ) =>
-  Context s ->
+  Store s ->
   Instance s ->
   -- | Name of the export.
   String ->
   m (Maybe f)
-getExportedFunction ctx inst name = runMaybeT $ do
-  extern <- MaybeT $ getExport ctx inst name
+getExportedFunction store inst name = runMaybeT $ do
+  extern <- MaybeT $ getExport store inst name
   (func :: Func s) <- MaybeT $ pure $ fromExtern extern
-  MaybeT $ funcToFunction ctx func
+  MaybeT $ funcToFunction store func
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport') and checks if it's a 'Memory' ('fromExtern').
 getExportedMemory ::
   forall s m.
   (MonadPrim s m) =>
-  Context s ->
+  Store s ->
   Instance s ->
   -- | Name of the export.
   String ->
   m (Maybe (Memory s))
-getExportedMemory ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
+getExportedMemory store inst name = (>>= fromExtern) <$> getExport store inst name
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport') and checks if it's a 'Table' ('fromExtern').
 getExportedTable ::
   forall s m.
   (MonadPrim s m) =>
-  Context s ->
+  Store s ->
   Instance s ->
   -- | Name of the export.
   String ->
   m (Maybe (Table s))
-getExportedTable ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
+getExportedTable store inst name = (>>= fromExtern) <$> getExport store inst name
 
 -- | Convenience function which gets the named export from the store
 -- ('getExport'), checks if it's a 'Global' ('fromExtern') and finally checks if
@@ -2451,27 +2427,27 @@ getExportedTable ctx inst name = (>>= fromExtern) <$> getExport ctx inst name
 getExportedTypedGlobal ::
   forall s m a.
   (MonadPrim s m, HasValType a) =>
-  Context s ->
+  Store s ->
   Instance s ->
   -- | Name of the export.
   String ->
   m (Maybe (TypedGlobal s a))
-getExportedTypedGlobal ctx inst name = runMaybeT $ do
-  extern <- MaybeT $ getExport ctx inst name
+getExportedTypedGlobal store inst name = runMaybeT $ do
+  extern <- MaybeT $ getExport store inst name
   (global :: Global s) <- MaybeT $ pure $ fromExtern extern
-  MaybeT $ toTypedGlobal ctx global
+  MaybeT $ toTypedGlobal store global
 
 -- | Get an export by index from an instance.
 getExportAtIndex ::
   MonadPrim s m =>
-  Context s ->
+  Store s ->
   Instance s ->
   -- | Index of the export within the module.
   Word64 ->
   m (Maybe (String, Extern s))
-getExportAtIndex ctx inst ix =
+getExportAtIndex store inst ix =
   unsafeIOToPrim $
-    withContext ctx $ \ctx_ptr ->
+    withStore store $ \ctx_ptr ->
       withInstance inst $ \inst_ptr ->
         alloca $ \(name_ptr_ptr :: Ptr (Ptr CChar)) ->
           alloca $ \(name_len_ptr :: Ptr CSize) ->
@@ -2534,7 +2510,7 @@ linkerDefine ::
   -- | The linker the name is being defined in.
   Linker s ->
   -- | The store that the item is owned by.
-  Context s ->
+  Store s ->
   -- | The module name the item is defined under.
   ModuleName ->
   -- | The field name the item is defined under
@@ -2542,10 +2518,10 @@ linkerDefine ::
   -- | The item that is being defined in this linker.
   Extern s ->
   m (Either WasmtimeError ())
-linkerDefine linker ctx m name extern =
+linkerDefine linker store m name extern =
   unsafeIOToPrim $
     withLinker linker $ \linker_ptr ->
-      withContext ctx $ \ctx_ptr ->
+      withStore store $ \ctx_ptr ->
         withCStringLen m $ \(mod_name_ptr, mod_name_sz) ->
           withCStringLen name $ \(name_ptr, name_sz) ->
             withExtern extern $ \extern_ptr ->

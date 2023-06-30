@@ -18,8 +18,6 @@ main = do
 
   store <- newStore engine
 
-  ctx <- storeContext store
-
   helloWatPath <- getDataFileName "test/gcd.wat"
   watBytes <- B.readFile helloWatPath
 
@@ -27,10 +25,10 @@ main = do
 
   myModule <- handleException $ newModule engine wasm
 
-  inst <- newInstance ctx myModule [] >>= handleException
+  inst <- newInstance store myModule [] >>= handleException
 
   Just (wasmGCD :: Int32 -> Int32 -> IO (Either Trap Int32)) <-
-    getExportedFunction ctx inst "gcd"
+    getExportedFunction store inst "gcd"
 
   let a = 6
       b = 27

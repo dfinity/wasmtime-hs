@@ -17,8 +17,6 @@ main = do
 
   store <- newStore engine
 
-  ctx <- storeContext store
-
   helloWatPath <- getDataFileName "test/hello.wat"
   watBytes <- B.readFile helloWatPath
 
@@ -28,14 +26,14 @@ main = do
   myModule <- handleException $ newModule engine wasm
 
   putStrLn "Creating callback..."
-  func <- newFunc ctx hello
+  func <- newFunc store hello
 
   putStrLn "Instantiating module..."
-  inst <- newInstance ctx myModule [toExtern func] >>= handleException
+  inst <- newInstance store myModule [toExtern func] >>= handleException
 
   putStrLn "Extracting export..."
   Just (run :: IO (Either Trap ())) <-
-    getExportedFunction ctx inst "run"
+    getExportedFunction store inst "run"
 
   putStrLn "Calling export..."
   run >>= handleException

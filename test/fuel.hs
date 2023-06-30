@@ -19,8 +19,7 @@ main = do
   putStrLn "Initializing..."
   engine <- newEngineWithConfig $ setConsumeFuel True
   store <- newStore engine
-  ctx <- storeContext store
-  Right () <- addFuel ctx 10000
+  Right () <- addFuel store 10000
 
   wasm <- wasmFromPath "test/fuel.wat"
 
@@ -28,21 +27,21 @@ main = do
   myModule <- handleException $ newModule engine wasm
 
   putStrLn "Instantiating module..."
-  inst <- newInstance ctx myModule [] >>= handleException
+  inst <- newInstance store myModule [] >>= handleException
 
   putStrLn "Extracting exports..."
   Just (fib :: Int32 -> IO (Either Trap Int32)) <-
-    getExportedFunction ctx inst "fibonacci"
+    getExportedFunction store inst "fibonacci"
   (Left trap :: Either Trap ()) <- try $ for_ ([1 ..] :: [Int32]) $ \i -> do
-    Just fuel_before <- fuelConsumed ctx
+    Just fuel_before <- fuelConsumed store
     res <- fib i
     case res of
       Left trap -> putStrLn ("Exhausted fuel computing fib " ++ show i) >> throwIO trap
       Right m -> do
-        Just fuel_after <- fuelConsumed ctx
+        Just fuel_after <- fuelConsumed store
         let diff = fuel_after - fuel_before
         putStrLn $ "fib " ++ show i ++ " = " ++ show m ++ " consumed " ++ show diff ++ " fuel."
-        Right () <- addFuel ctx diff
+        Right () <- addFuel store diff
         pure ()
   trapCode trap @?= Just TRAP_CODE_OUT_OF_FUEL
 

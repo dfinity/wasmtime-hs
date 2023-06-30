@@ -23,29 +23,28 @@ main = do
   engine <- newEngine
   for_ ([1 .. 100] :: [Int32]) $ \_j -> do
     -- print ("j", j) -- FIXME: currently fails after 13107 iterations
-    store <- newStore engine
-    ctx <- storeContext store
+    s <- newStore engine
     wasm <- wasmFromPath "test/memtest.wat"
 
     myModule <- handleWasmtimeError $ newModule engine wasm
 
     for_ ([1 .. 10] :: [Int32]) $ \i -> do
-      fIo <- newFunc ctx ioImp
-      fPure <- newFunc ctx pureImp
+      fIo <- newFunc s ioImp
+      fPure <- newFunc s pureImp
 
-      inst <- newInstance ctx myModule [toExtern fIo, toExtern fPure]
+      inst <- newInstance s myModule [toExtern fIo, toExtern fPure]
       inst <- case inst of
         Left trap -> do
           print ("trapped while creating instance: ", trapCode trap)
           error "nok"
         Right inst -> pure inst
 
-      Just memory <- getExportedMemory ctx inst "memory"
-      Just (size :: IO (Either Trap Int32)) <- getExportedFunction ctx inst "size"
-      Just (load :: Int32 -> IO (Either Trap Int32)) <- getExportedFunction ctx inst "load"
-      Just (store :: Int32 -> Int32 -> IO (Either Trap ())) <- getExportedFunction ctx inst "store"
-      Just (callImportedPure :: Int32 -> IO (Either Trap Int32)) <- getExportedFunction ctx inst "call_imported_pure"
-      Just (callImportedIo :: IO (Either Trap ())) <- getExportedFunction ctx inst "call_imported_io"
+      Just memory <- getExportedMemory s inst "memory"
+      Just (size :: IO (Either Trap Int32)) <- getExportedFunction s inst "size"
+      Just (load :: Int32 -> IO (Either Trap Int32)) <- getExportedFunction s inst "load"
+      Just (store :: Int32 -> Int32 -> IO (Either Trap ())) <- getExportedFunction s inst "store"
+      Just (callImportedPure :: Int32 -> IO (Either Trap Int32)) <- getExportedFunction s inst "call_imported_pure"
+      Just (callImportedIo :: IO (Either Trap ())) <- getExportedFunction s inst "call_imported_io"
 
       Right res <- size
       -- print ("size", res)

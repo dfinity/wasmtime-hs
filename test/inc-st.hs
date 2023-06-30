@@ -33,16 +33,14 @@ st :: forall s. Engine -> Module -> ST s Int
 st engine myModule = do
   store :: Store s <- newStore engine
 
-  ctx :: Context s <- storeContext store
-
   stRef :: STRef s Int <- newSTRef 1
 
-  func :: Func s <- newFunc ctx $ inc stRef
+  func :: Func s <- newFunc store $ inc stRef
 
-  Right (inst :: Instance s) <- newInstance ctx myModule [toExtern func]
+  Right (inst :: Instance s) <- newInstance store myModule [toExtern func]
 
   Just (run :: ST s (Either Trap ())) <-
-    getExportedFunction ctx inst "run"
+    getExportedFunction store inst "run"
 
   Right () <- run
 
