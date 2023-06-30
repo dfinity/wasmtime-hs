@@ -9,7 +9,7 @@ import Control.Exception (throwIO)
 import qualified Data.ByteString as B
 import Data.Foldable (for_)
 import Data.Int (Int32)
-import Paths_wasmtime (getDataFileName)
+import Paths_wasmtime_hs (getDataFileName)
 import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Wasmtime
 

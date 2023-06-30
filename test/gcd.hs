@@ -8,7 +8,7 @@ module Main (main) where
 import Control.Exception (Exception, throwIO)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
-import Paths_wasmtime (getDataFileName)
+import Paths_wasmtime_hs (getDataFileName)
 import Text.Printf (printf)
 import Wasmtime
 

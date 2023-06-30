@@ -9,7 +9,7 @@ import Control.Exception (Exception, throwIO)
 import Control.Monad.ST (ST, runST)
 import qualified Data.ByteString as B
 import Data.STRef
-import Paths_wasmtime (getDataFileName)
+import Paths_wasmtime_hs (getDataFileName)
 import Wasmtime
 
 main :: IO ()

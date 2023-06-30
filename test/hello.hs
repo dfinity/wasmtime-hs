@@ -7,7 +7,7 @@ module Main (main) where
 
 import Control.Exception (Exception, throwIO)
 import qualified Data.ByteString as B
-import Paths_wasmtime (getDataFileName)
+import Paths_wasmtime_hs (getDataFileName)
 import Wasmtime
 
 main :: IO ()

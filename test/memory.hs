@@ -11,7 +11,7 @@ import Control.Monad.Primitive (MonadPrim)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
 import Data.Word (Word8)
-import Paths_wasmtime (getDataFileName)
+import Paths_wasmtime_hs (getDataFileName)
 import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 

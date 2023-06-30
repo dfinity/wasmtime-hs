@@ -10,7 +10,7 @@ import Control.Exception (Exception, throwIO, try)
 import qualified Data.ByteString as B
 import Data.Foldable (for_)
 import Data.Int (Int32)
-import Paths_wasmtime (getDataFileName)
+import Paths_wasmtime_hs (getDataFileName)
 import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 
