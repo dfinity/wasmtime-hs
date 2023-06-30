@@ -609,8 +609,8 @@ wasmFromBytes engine inp@(BI.BS inp_fp inp_size) =
     withEngine engine $ \engine_ptr ->
       withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
         try $ do
-          error_ptr <- c'wasmtime_module_validate engine_ptr inp_ptr $ fromIntegral inp_size
-          checkWasmtimeError error_ptr
+          c'wasmtime_module_validate engine_ptr inp_ptr (fromIntegral inp_size)
+            >>= checkWasmtimeError
           pure $ Wasm inp
 
 -- | Converts from the text format of WebAssembly to the binary format.
