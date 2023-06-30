@@ -232,6 +232,7 @@ module Wasmtime
     ModuleName,
     Name,
     linkerDefine,
+    linkerDefineFunc,
 
     -- * Traps
     Trap,
@@ -1361,16 +1362,12 @@ type FuncCallback =
   CSize -> -- nresults
   IO (Ptr C'wasm_trap_t)
 
-newFuncCallbackFunPtr :: Store s -> FuncCallback -> IO (FunPtr FuncCallback)
-newFuncCallbackFunPtr store callback = mask_ $ do
-  callback_funptr <- mk'wasmtime_func_callback_t callback
-  registerFunPtr store callback_funptr
-  pure callback_funptr
-
-registerFunPtr :: Store s -> FunPtr a -> IO ()
-registerFunPtr (storeFunPtrs -> ioRef) funPtr =
+newFuncCallbackFunPtr :: IORef [FunPtr ()] -> FuncCallback -> IO (FunPtr FuncCallback)
+newFuncCallbackFunPtr ioRef callback = mask_ $ do
+  funPtr <- mk'wasmtime_func_callback_t callback
   atomicModifyIORef ioRef $ \(existingFunPtrs :: [FunPtr ()]) ->
     (castFunPtr funPtr : existingFunPtrs, ())
+  pure funPtr
 
 -- | Insert a new function into the 'Store'.
 newFunc ::
@@ -1397,56 +1394,83 @@ newFunc store f =
   unsafeIOToPrim $
     withStore store $ \ctx_ptr ->
       withFuncType funcType $ \functype_ptr -> do
-        callback_funptr :: FunPtr FuncCallback <- newFuncCallbackFunPtr store callback
+        callback_funptr :: FunPtr FuncCallback <-
+          newFuncCallbackFunPtr (storeFunPtrs store) callback
         alloca $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
-          c'wasmtime_func_new ctx_ptr functype_ptr callback_funptr nullPtr nullFunPtr func_ptr
+          c'wasmtime_func_new
+            ctx_ptr
+            functype_ptr
+            callback_funptr
+            nullPtr
+            nullFunPtr
+            func_ptr
           MkFunc <$> peek func_ptr
   where
     funcType :: FuncType
     funcType = newFuncType $ Proxy @f
 
     callback :: FuncCallback
-    callback _env _caller params_ptr nargs result_ptr nresults = do
-      let actualNrOfArgs = fromIntegral nargs
-      if actualNrOfArgs /= expectedNrOfArgs
-        then
-          error $
-            "Expected "
-              ++ show expectedNrOfArgs
-              ++ " number of arguments but got "
-              ++ show actualNrOfArgs
-              ++ "!"
-        else do
-          mbParams <- runMaybeT $ peekVals params_ptr
-          case mbParams of
-            Nothing -> error "ValType mismatch!"
-            Just (params :: List params) -> do
-              e <- unsafePrimToIO $ (uncurry f :: List params -> m (Either Trap r)) params
-              case e of
-                Left trap ->
-                  -- As the docs of <wasmtime_func_callback_t> mention:
-                  --
-                  -- > This callback can optionally return a wasm_trap_t indicating
-                  -- > that a trap should be raised in WebAssembly. It's expected
-                  -- > that in this case the caller relinquishes ownership of the
-                  -- > trap and it is passed back to the engine.
-                  --
-                  -- Since trap is a ForeignPtr which will be garbage collected
-                  -- later we need to copy the trap to safely hand it to the engine.
-                  withTrap trap c'wasm_trap_copy
-                Right r -> do
-                  let n = fromIntegral nresults
-                  if n == expectedNrOfResults
-                    then pokeVals result_ptr (toHList r) $> nullPtr
-                    else do
-                      -- TODO: use throwIO or trap!
-                      error $
-                        "Expected the number of results to be "
-                          ++ show expectedNrOfResults
-                          ++ " but got "
-                          ++ show n
-                          ++ "!"
+    callback = mkCallback f
 
+mkCallback ::
+  forall f (params :: [Type]) m s r (results :: [Type]).
+  ( Funcable f,
+    Params f ~ params,
+    HListable r,
+    Types r ~ results,
+    Result f ~ m (Either Trap r),
+    Foldr (->) (m (Either Trap r)) params ~ f,
+    Curry params,
+    Vals params,
+    Vals results,
+    Len params,
+    Len results,
+    MonadPrim s m,
+    PrimBase m
+  ) =>
+  f ->
+  FuncCallback
+mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
+  let actualNrOfArgs = fromIntegral nargs
+  if actualNrOfArgs /= expectedNrOfArgs
+    then
+      error $
+        "Expected "
+          ++ show expectedNrOfArgs
+          ++ " number of arguments but got "
+          ++ show actualNrOfArgs
+          ++ "!"
+    else do
+      mbParams <- runMaybeT $ peekVals params_ptr
+      case mbParams of
+        Nothing -> error "ValType mismatch!"
+        Just (params :: List params) -> do
+          e <- unsafePrimToIO $ (uncurry f :: List params -> m (Either Trap r)) params
+          case e of
+            Left trap ->
+              -- As the docs of <wasmtime_func_callback_t> mention:
+              --
+              -- > This callback can optionally return a wasm_trap_t indicating
+              -- > that a trap should be raised in WebAssembly. It's expected
+              -- > that in this case the caller relinquishes ownership of the
+              -- > trap and it is passed back to the engine.
+              --
+              -- Since trap is a ForeignPtr which will be garbage collected
+              -- later we need to copy the trap to safely hand it to the engine.
+              withTrap trap c'wasm_trap_copy
+            Right r -> do
+              let n = fromIntegral nresults
+              if n == expectedNrOfResults
+                then pokeVals result_ptr (toHList r) $> nullPtr
+                else do
+                  -- TODO: use throwIO or trap!
+                  error $
+                    "Expected the number of results to be "
+                      ++ show expectedNrOfResults
+                      ++ " but got "
+                      ++ show n
+                      ++ "!"
+  where
     expectedNrOfArgs = len $ Proxy @params
     expectedNrOfResults = len $ Proxy @results
 
@@ -2476,19 +2500,30 @@ getExportAtIndex store inst ix =
 --------------------------------------------------------------------------------
 
 -- | Object used to conveniently link together and instantiate wasm modules.
-newtype Linker s = Linker {unLinker :: ForeignPtr C'wasmtime_linker_t}
+data Linker s = Linker
+  { linkerForeignPtr :: ForeignPtr C'wasmtime_linker_t,
+    linkerFunPtrs :: IORef [FunPtr ()]
+  }
 
 withLinker :: Linker s -> (Ptr C'wasmtime_linker_t -> IO a) -> IO a
-withLinker = withForeignPtr . unLinker
+withLinker = withForeignPtr . linkerForeignPtr
 
 -- | Creates a new linker for the specified engine.
 newLinker :: MonadPrim s m => Engine -> m (Linker s)
 newLinker engine =
   unsafeIOToPrim $
-    mask_ $
-      withEngine engine $
-        c'wasmtime_linker_new
-          >=> fmap Linker . newForeignPtr p'wasmtime_linker_delete
+    withEngine engine $ \engine_ptr ->
+      mask_ $ do
+        linker_ptr <- c'wasmtime_linker_new engine_ptr
+        funPtrsRef <- newIORef []
+        linkerFP <- Foreign.Concurrent.newForeignPtr linker_ptr $ do
+          c'wasmtime_linker_delete linker_ptr
+          readIORef funPtrsRef >>= mapM_ freeHaskellFunPtr
+        pure
+          Linker
+            { linkerForeignPtr = linkerFP,
+              linkerFunPtrs = funPtrsRef
+            }
 
 -- | Configures whether this linker allows later definitions to shadow previous
 -- definitions.
@@ -2525,16 +2560,70 @@ linkerDefine linker store m name extern =
         withCStringLen m $ \(mod_name_ptr, mod_name_sz) ->
           withCStringLen name $ \(name_ptr, name_sz) ->
             withExtern extern $ \extern_ptr ->
-              try $
-                c'wasmtime_linker_define
-                  linker_ptr
-                  ctx_ptr
-                  mod_name_ptr
-                  (fromIntegral mod_name_sz)
-                  name_ptr
-                  (fromIntegral name_sz)
-                  extern_ptr
-                  >>= checkWasmtimeError
+              c'wasmtime_linker_define
+                linker_ptr
+                ctx_ptr
+                mod_name_ptr
+                (fromIntegral mod_name_sz)
+                name_ptr
+                (fromIntegral name_sz)
+                extern_ptr
+                >>= try . checkWasmtimeError
+
+-- | Defines a new function in this linker.
+--
+-- Note that this function does not create a 'Func'. This creates a
+-- 'Store'-independent function within the 'Linker', allowing this function
+-- definition to be used with multiple stores.
+linkerDefineFunc ::
+  forall f (params :: [Type]) m s r (results :: [Type]).
+  ( Funcable f,
+    Params f ~ params,
+    HListable r,
+    Types r ~ results,
+    Result f ~ m (Either Trap r),
+    Foldr (->) (m (Either Trap r)) params ~ f,
+    Curry params,
+    Vals params,
+    Vals results,
+    Len params,
+    Len results,
+    MonadPrim s m,
+    PrimBase m
+  ) =>
+  -- | The linker the name is being defined in.
+  Linker s ->
+  -- | The module name the item is defined under.
+  ModuleName ->
+  -- | The field name the item is defined under
+  Name ->
+  f ->
+  m (Either WasmtimeError ())
+linkerDefineFunc linker m name f =
+  unsafeIOToPrim $
+    withLinker linker $ \linker_ptr ->
+      withCStringLen m $ \(mod_name_ptr, mod_name_sz) ->
+        withCStringLen name $ \(name_ptr, name_sz) ->
+          withFuncType funcType $ \functype_ptr -> do
+            callback_funptr :: FunPtr FuncCallback <-
+              newFuncCallbackFunPtr (linkerFunPtrs linker) callback
+            c'wasmtime_linker_define_func
+              linker_ptr
+              mod_name_ptr
+              (fromIntegral mod_name_sz)
+              name_ptr
+              (fromIntegral name_sz)
+              functype_ptr
+              callback_funptr
+              nullPtr
+              nullFunPtr
+              >>= try . checkWasmtimeError
+  where
+    funcType :: FuncType
+    funcType = newFuncType $ Proxy @f
+
+    callback :: FuncCallback
+    callback = mkCallback f
 
 --------------------------------------------------------------------------------
 -- Traps
