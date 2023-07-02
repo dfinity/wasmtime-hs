@@ -2521,13 +2521,13 @@ getExportAtIndex store inst ix =
 -- | Object used to conveniently link together and instantiate wasm modules.
 data Linker s = Linker
   { linkerForeignPtr :: ForeignPtr C'wasmtime_linker_t,
-    -- We keep a mutable list of reference-counted finalizers of the
+    -- We keep a mutable list of reference-counted finalizers (Arc) of the
     -- FuncCallback FunPtrs. See 'linkerDefineFunc' which adds to this list.
     --
     -- The reason the FunPtrs need to be reference counted is that they need to
     -- stay alive for the lifetime of the 'Instance' returned from
     -- 'linkerInstantiate'. Because that instance may invoke the associated host
-    -- functions.
+    -- functions after the Linker has been garbage collected.
     --
     -- So 'linkerInstantiate' will call 'incArc' for all the Arcs in the linker
     -- to increment their reference counts then add a finalizer to the
