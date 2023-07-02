@@ -2319,7 +2319,7 @@ pokeExtern externs_ptr extern =
 --------------------------------------------------------------------------------
 
 -- | Representation of a instance in Wasmtime.
-newtype Instance s = Instance {instanceForeignPtr :: ForeignPtr C'wasmtime_instance_t}
+newtype Instance s = Instance {unInstance :: ForeignPtr C'wasmtime_instance_t}
 
 -- | Instantiate a wasm module.
 --
@@ -2359,7 +2359,7 @@ newInstance store m externs = unsafeIOToPrim $
               else Left <$> newTrapFromPtr trap_ptr
 
 withInstance :: Instance s -> (Ptr C'wasmtime_instance_t -> IO a) -> IO a
-withInstance = withForeignPtr . instanceForeignPtr
+withInstance = withForeignPtr . unInstance
 
 -- | Get an export by name from an instance.
 getExport :: MonadPrim s m => Store s -> Instance s -> String -> m (Maybe (Extern s))
