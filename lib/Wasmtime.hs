@@ -2537,17 +2537,17 @@ data Linker s = Linker
     -- In the finalizer of the 'linkerForeignPtr' we call 'freeArc' on each of
     -- the Arcs in the list causing the FunPtr to be finalized when its
     -- reference count reaches 0.
-    linkerFunPtrArcs :: IORef [Arc]
+    linkerFunPtrArcsRef :: IORef [Arc]
   }
 
 -- | Given a callback, returns a function pointer to this callback and registers
 -- the finalizer of this function pointer by adding an Arc to the given list of
 -- Arcs.
 newFuncCallbackFunPtrArc :: IORef [Arc] -> FuncCallback -> IO (FunPtr FuncCallback)
-newFuncCallbackFunPtrArc ioRef callback = mask_ $ do
+newFuncCallbackFunPtrArc funPtrArcsRef callback = mask_ $ do
   funPtr <- mk'wasmtime_func_callback_t callback
   arc <- newArc $ freeHaskellFunPtr funPtr
-  atomicModifyIORef ioRef $ \(arcs :: [Arc]) -> (arc : arcs, ())
+  atomicModifyIORef funPtrArcsRef $ \(arcs :: [Arc]) -> (arc : arcs, ())
   pure funPtr
 
 withLinker :: Linker s -> (Ptr C'wasmtime_linker_t -> IO a) -> IO a
@@ -2567,7 +2567,7 @@ newLinker engine =
         pure
           Linker
             { linkerForeignPtr = linkerFP,
-              linkerFunPtrArcs = funPtrArcsRef
+              linkerFunPtrArcsRef = funPtrArcsRef
             }
 
 -- | Configures whether this linker allows later definitions to shadow previous
@@ -2657,7 +2657,7 @@ linkerDefineFunc linker modName name f =
         withCStringLen name $ \(name_ptr, name_sz) ->
           withFuncType funcType $ \functype_ptr -> do
             callback_funptr :: FunPtr FuncCallback <-
-              newFuncCallbackFunPtrArc (linkerFunPtrArcs linker) callback
+              newFuncCallbackFunPtrArc (linkerFunPtrArcsRef linker) callback
             c'wasmtime_linker_define_func
               linker_ptr
               mod_name_ptr
@@ -2812,7 +2812,7 @@ linkerInstantiate linker store m =
         withModule m $ \mod_ptr -> do
           inst_frgn_ptr :: ForeignPtr C'wasmtime_instance_t <- mallocForeignPtr
           mask_ $ do
-            arcs <- readIORef $ linkerFunPtrArcs linker
+            arcs <- readIORef $ linkerFunPtrArcsRef linker
             mapM_ incArc arcs
             Foreign.Concurrent.addForeignPtrFinalizer inst_frgn_ptr $
               mapM_ freeArc arcs
