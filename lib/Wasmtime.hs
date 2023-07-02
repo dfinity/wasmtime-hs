@@ -2607,7 +2607,7 @@ linkerDefine linker store modName name extern =
       withStore store $ \ctx_ptr ->
         withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
           withCStringLen name $ \(name_ptr, name_sz) ->
-            withExtern extern $ \extern_ptr ->
+            withExtern extern $
               c'wasmtime_linker_define
                 linker_ptr
                 ctx_ptr
@@ -2615,8 +2615,7 @@ linkerDefine linker store modName name extern =
                 (fromIntegral mod_name_sz)
                 name_ptr
                 (fromIntegral name_sz)
-                extern_ptr
-                >>= try . checkWasmtimeError
+                >=> try . checkWasmtimeError
 
 -- | Defines a new function in this linker.
 --
@@ -2700,14 +2699,13 @@ linkerDefineInstance linker store name inst =
     withLinker linker $ \linker_ptr ->
       withStore store $ \ctx_ptr ->
         withCStringLen name $ \(name_ptr, name_sz) ->
-          withInstance inst $ \inst_ptr ->
+          withInstance inst $
             c'wasmtime_linker_define_instance
               linker_ptr
               ctx_ptr
               name_ptr
               (fromIntegral name_sz)
-              inst_ptr
-              >>= try . checkWasmtimeError
+              >=> try . checkWasmtimeError
 
 -- TODO: Bind wasmtime_context_set_wasi
 
@@ -2854,14 +2852,13 @@ linkerModule linker store modName m =
     withLinker linker $ \linker_ptr ->
       withStore store $ \ctx_ptr ->
         withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
-          withModule m $ \mod_ptr ->
+          withModule m $
             c'wasmtime_linker_module
               linker_ptr
               ctx_ptr
               mod_name_ptr
               (fromIntegral mod_name_sz)
-              mod_ptr
-              >>= try . checkWasmtimeError
+              >=> try . checkWasmtimeError
 
 --------------------------------------------------------------------------------
 -- Arcs
@@ -3138,8 +3135,8 @@ allocaNullPtr f = alloca $ \ptr_ptr -> do
   poke ptr_ptr nullPtr
   f ptr_ptr
 
--- | Uses 'sizeOf' to copy bytes from the second area (source) into the
---  first (destination); the copied areas may /not/ overlap.
+-- | Uses 'sizeOf' to copy bytes from the second pointer (source) into the first
+--  (destination); the copied areas may /not/ overlap.
 copy :: Storable a => Ptr a -> Ptr a -> IO ()
 copy dest src = copyBytes dest src (sizeOf (type_ src))
   where
