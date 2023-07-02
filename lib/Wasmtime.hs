@@ -15,7 +15,6 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 -- | High-level Haskell API to the wasmtime C API.
 module Wasmtime
