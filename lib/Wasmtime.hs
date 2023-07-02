@@ -1355,10 +1355,10 @@ peekTableVal val_ptr = do
 -- do not have any destructor associated with them. Functions cannot
 -- interoperate between 'Store' instances and if the wrong function is passed to
 -- the wrong store then it may trigger an assertion to abort the process.
-newtype Func s = MkFunc {funcForeignPtr :: ForeignPtr C'wasmtime_func_t}
+newtype Func s = MkFunc {unFunc :: ForeignPtr C'wasmtime_func_t}
 
 withFunc :: Func s -> (Ptr C'wasmtime_func_t -> IO a) -> IO a
-withFunc = withForeignPtr . funcForeignPtr
+withFunc = withForeignPtr . unFunc
 
 -- | Returns the type of the given function.
 getFuncType :: MonadPrim s m => Store s -> Func s -> m FuncType
