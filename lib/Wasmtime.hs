@@ -2540,6 +2540,9 @@ data Linker s = Linker
     linkerFunPtrArcs :: IORef [Arc]
   }
 
+-- | Given a callback, returns a function pointer to this callback and registers
+-- the finalizer of this function pointer by adding an Arc to the given list of
+-- Arcs.
 newFuncCallbackFunPtrArc :: IORef [Arc] -> FuncCallback -> IO (FunPtr FuncCallback)
 newFuncCallbackFunPtrArc ioRef callback = mask_ $ do
   funPtr <- mk'wasmtime_func_callback_t callback
