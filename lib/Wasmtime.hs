@@ -2312,8 +2312,7 @@ pokeExtern externs_ptr extern =
     pokeExternable :: forall e s. Externable e => e s -> IO ()
     pokeExternable e = do
       poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
-      withExternable e $ \e_ptr ->
-        copy (castPtr $ p'wasmtime_extern'of externs_ptr) e_ptr
+      withExternable e $ copy (castPtr $ p'wasmtime_extern'of externs_ptr)
 
 --------------------------------------------------------------------------------
 -- Instances
