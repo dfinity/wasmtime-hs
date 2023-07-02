@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -301,7 +302,7 @@ import Data.Word (Word32, Word64, Word8)
 import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
-import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
+import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtr, newForeignPtr, withForeignPtr)
 import Foreign.Marshal.Alloc (alloca)
 import Foreign.Marshal.Array (advancePtr, allocaArray)
 import Foreign.Marshal.Utils (with)
@@ -2307,8 +2308,9 @@ pokeExtern externs_ptr extern =
 --------------------------------------------------------------------------------
 
 -- | Representation of a instance in Wasmtime.
-newtype Instance s = Instance {unInstance :: C'wasmtime_instance_t}
-  deriving (Show)
+data Instance s = Instance
+  { instanceForeignPtr :: ForeignPtr C'wasmtime_instance_t
+  }
 
 -- | Instantiate a wasm module.
 --
@@ -2330,8 +2332,9 @@ newInstance ::
 newInstance store m externs = unsafeIOToPrim $
   withStore store $ \ctx_ptr ->
     withModule m $ \mod_ptr ->
-      withExterns externs $ \externs_ptr n ->
-        alloca $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
+      withExterns externs $ \externs_ptr n -> do
+        inst_frgn_ptr :: ForeignPtr C'wasmtime_instance_t <- mallocForeignPtr
+        withForeignPtr inst_frgn_ptr $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
           allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             c'wasmtime_instance_new
               ctx_ptr
@@ -2343,11 +2346,11 @@ newInstance store m externs = unsafeIOToPrim $
               >>= checkWasmtimeError
             trap_ptr <- peek trap_ptr_ptr
             if trap_ptr == nullPtr
-              then Right . Instance <$> peek inst_ptr
+              then pure $ Right $ Instance inst_frgn_ptr
               else Left <$> newTrapFromPtr trap_ptr
 
 withInstance :: Instance s -> (Ptr C'wasmtime_instance_t -> IO a) -> IO a
-withInstance = with . unInstance
+withInstance = withForeignPtr . instanceForeignPtr
 
 -- | Get an export by name from an instance.
 getExport :: MonadPrim s m => Store s -> Instance s -> String -> m (Maybe (Extern s))
@@ -2507,14 +2510,15 @@ getExportAtIndex store inst ix =
 -- | Object used to conveniently link together and instantiate wasm modules.
 data Linker s = Linker
   { linkerForeignPtr :: ForeignPtr C'wasmtime_linker_t,
-    linkerFunPtrs :: IORef [FunPtr ()]
-    -- TODO: once we connect a Linker to an Instance and thus to a Store we need
-    -- to ensure that the lifetime of the Store doesn't exceed the lifetime of
-    -- the Linker to ensure that the FunPtrs above remain alive.
-    --
-    -- One way of implementing this is to give the Store a mutable list of
-    -- Linkers. And to adapt withStore to call withLinker for all those linkers.
+    linkerFunPtrArcs :: IORef [Arc]
   }
+
+newFuncCallbackFunPtrArc :: IORef [Arc] -> FuncCallback -> IO (FunPtr FuncCallback)
+newFuncCallbackFunPtrArc ioRef callback = mask_ $ do
+  funPtr <- mk'wasmtime_func_callback_t callback
+  arc <- newArc $ freeHaskellFunPtr funPtr
+  atomicModifyIORef ioRef $ \(arcs :: [Arc]) -> (arc : arcs, ())
+  pure funPtr
 
 withLinker :: Linker s -> (Ptr C'wasmtime_linker_t -> IO a) -> IO a
 withLinker = withForeignPtr . linkerForeignPtr
@@ -2526,14 +2530,14 @@ newLinker engine =
     withEngine engine $ \engine_ptr ->
       mask_ $ do
         linker_ptr <- c'wasmtime_linker_new engine_ptr
-        funPtrsRef <- newIORef []
+        funPtrArcsRef <- newIORef []
         linkerFP <- Foreign.Concurrent.newForeignPtr linker_ptr $ do
           c'wasmtime_linker_delete linker_ptr
-          readIORef funPtrsRef >>= mapM_ freeHaskellFunPtr
+          readIORef funPtrArcsRef >>= mapM_ freeArc
         pure
           Linker
             { linkerForeignPtr = linkerFP,
-              linkerFunPtrs = funPtrsRef
+              linkerFunPtrArcs = funPtrArcsRef
             }
 
 -- | Configures whether this linker allows later definitions to shadow previous
@@ -2623,7 +2627,7 @@ linkerDefineFunc linker modName name f =
         withCStringLen name $ \(name_ptr, name_sz) ->
           withFuncType funcType $ \functype_ptr -> do
             callback_funptr :: FunPtr FuncCallback <-
-              newFuncCallbackFunPtr (linkerFunPtrs linker) callback
+              newFuncCallbackFunPtrArc (linkerFunPtrArcs linker) callback
             c'wasmtime_linker_define_func
               linker_ptr
               mod_name_ptr
@@ -2774,8 +2778,14 @@ linkerInstantiate linker store m =
   unsafeIOToPrim $
     withLinker linker $ \linker_ptr ->
       withStore store $ \ctx_ptr ->
-        withModule m $ \mod_ptr ->
-          alloca $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
+        withModule m $ \mod_ptr -> do
+          inst_frgn_ptr :: ForeignPtr C'wasmtime_instance_t <- mallocForeignPtr
+          mask_ $ do
+            arcs <- readIORef $ linkerFunPtrArcs linker
+            mapM_ incArc arcs
+            Foreign.Concurrent.addForeignPtrFinalizer inst_frgn_ptr $
+              mapM_ freeArc arcs
+          withForeignPtr inst_frgn_ptr $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
             allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
               c'wasmtime_linker_instantiate
                 linker_ptr
@@ -2786,7 +2796,7 @@ linkerInstantiate linker store m =
                 >>= checkWasmtimeError
               trap_ptr <- peek trap_ptr_ptr
               if trap_ptr == nullPtr
-                then Right . Instance <$> peek inst_ptr
+                then pure $ Right $ Instance inst_frgn_ptr
                 else Left <$> newTrapFromPtr trap_ptr
 
 -- | Defines automatic instantiations of a 'Module' in the given 'Linker'.
@@ -2821,6 +2831,40 @@ linkerModule linker store modName m =
               (fromIntegral mod_name_sz)
               mod_ptr
               >>= try . checkWasmtimeError
+
+--------------------------------------------------------------------------------
+-- Arcs
+--------------------------------------------------------------------------------
+
+-- | A thread-safe reference count paired with a finalizer.
+data Arc = Arc
+  { arcRcRef :: IORef Int,
+    arcFinalizer :: IO ()
+  }
+
+-- | Returns a new 'Arc' with a reference count of 1 and the given finalizer.
+newArc :: IO () -> IO Arc
+newArc finalize = do
+  rcRef <- newIORef 1
+  pure
+    Arc
+      { arcRcRef = rcRef,
+        arcFinalizer = finalize
+      }
+
+-- | Atomically increment the reference count in the given 'Arc'.
+incArc :: Arc -> IO ()
+incArc arc =
+  atomicModifyIORef (arcRcRef arc) $ \rc ->
+    let !rc' = rc + 1 in (rc', ())
+
+-- | Atomically decrement the reference count in the given 'Arc'
+-- and when it reaches 0 run the associated finalizer.
+freeArc :: Arc -> IO ()
+freeArc (Arc rcRef finalize) = do
+  rc' <- atomicModifyIORef rcRef $ \rc ->
+    let !rc' = rc - 1 in (rc', rc')
+  when (rc' == 0) finalize
 
 --------------------------------------------------------------------------------
 -- Traps
