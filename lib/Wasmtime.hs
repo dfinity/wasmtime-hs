@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
@@ -112,7 +113,7 @@ module Wasmtime
 
     -- * Types of WASM values
     ValType (..),
-    HasValType,
+    Val,
 
     -- * Functions
 
@@ -1240,22 +1241,34 @@ kindToHaskellTypeStr = \case
 
 -- | Class of Haskell types that WASM @'Func'tions@ can take as parameters or
 -- return as results or which can be retrieved from and set to @'Global's@.
-class HasValType a where
+class Val a where
   kind :: Proxy a -> C'wasm_valkind_t
 
-instance HasValType Int32 where kind _proxy = c'WASMTIME_I32
+  pokeVal :: Ptr C'wasmtime_val_t -> a -> IO ()
+  default pokeVal :: (Storable a) => Ptr C'wasmtime_val_t -> a -> IO ()
+  pokeVal val_ptr x = do
+    poke (p'wasmtime_val'kind val_ptr) $ kind $ Proxy @a
+    let p :: Ptr C'wasmtime_valunion_t
+        p = p'wasmtime_val'of val_ptr
+    poke (castPtr p) x
 
-instance HasValType Int64 where kind _proxy = c'WASMTIME_I64
+instance Val Int32 where kind _proxy = c'WASMTIME_I32
 
-instance HasValType Float where kind _proxy = c'WASMTIME_F32
+instance Val Int64 where kind _proxy = c'WASMTIME_I64
 
-instance HasValType Double where kind _proxy = c'WASMTIME_F64
+instance Val Float where kind _proxy = c'WASMTIME_F32
 
-instance HasValType Word128 where kind _proxy = c'WASMTIME_V128
+instance Val Double where kind _proxy = c'WASMTIME_F64
 
-instance HasValType C'wasmtime_func_t where kind _proxy = c'WASMTIME_FUNCREF
+instance Val Word128 where kind _proxy = c'WASMTIME_V128
 
-instance HasValType (Ptr C'wasmtime_externref_t) where kind _proxy = c'WASMTIME_EXTERNREF
+instance Val C'wasmtime_func_t where kind _proxy = c'WASMTIME_FUNCREF
+
+instance Val (Func s) where
+  kind _proxy = kind $ Proxy @C'wasmtime_func_t
+  pokeVal val_ptr = pokeVal val_ptr . getWasmtimeFunc
+
+instance Val (Ptr C'wasmtime_externref_t) where kind _proxy = c'WASMTIME_EXTERNREF
 
 -- | Class of types (of kind list of types) that can be passed and returned from
 -- WASM functions.
@@ -1273,7 +1286,7 @@ instance Vals '[] where
   pokeRawVals _raw_vals_ptr Nil = pure ()
   peekRawVals _raw_vals_ptr = pure Nil
 
-instance (HasValType v, Storable v, Vals vs) => Vals (v ': vs) where
+instance (Val v, Storable v, Vals vs) => Vals (v ': vs) where
   pokeValTypes valtypes_ptr_ptr _proxy = do
     valtype_ptr <- c'wasm_valtype_new $ kind $ Proxy @v
     poke valtypes_ptr_ptr valtype_ptr
@@ -1306,14 +1319,7 @@ instance (HasValType v, Storable v, Vals vs) => Vals (v ': vs) where
       <$> peek (castPtr raw_vals_ptr)
       <*> peekRawVals (advancePtr raw_vals_ptr 1)
 
-pokeVal :: forall r. (HasValType r, Storable r) => Ptr C'wasmtime_val_t -> r -> IO ()
-pokeVal vals_ptr r = do
-  poke (p'wasmtime_val'kind vals_ptr) $ kind $ Proxy @r
-  let p :: Ptr C'wasmtime_valunion_t
-      p = p'wasmtime_val'of vals_ptr
-  poke (castPtr p) r
-
-uncheckedPeekVal :: forall r. (HasValType r, Storable r) => Ptr C'wasmtime_val_t -> IO r
+uncheckedPeekVal :: forall r. (Val r, Storable r) => Ptr C'wasmtime_val_t -> IO r
 uncheckedPeekVal val_ptr = peek (castPtr of_ptr :: Ptr r)
   where
     of_ptr :: Ptr C'wasmtime_valunion_t
@@ -1603,7 +1609,7 @@ withGlobalType = withForeignPtr . unGlobalType
 
 -- | Returns a new 'GlobalType' with the kind of the given Haskell type and the
 -- specified 'Mutability'.
-newGlobalType :: HasValType a => Proxy a -> Mutability -> GlobalType
+newGlobalType :: Val a => Proxy a -> Mutability -> GlobalType
 newGlobalType proxy mutability = unsafePerformIO $ do
   globaltype_ptr <- newGlobalTypePtr proxy mutability
   newGlobalTypeFromPtr globaltype_ptr
@@ -1612,7 +1618,7 @@ newGlobalTypeFromPtr :: Ptr C'wasm_globaltype_t -> IO GlobalType
 newGlobalTypeFromPtr globaltype_ptr =
   GlobalType <$> newForeignPtr p'wasm_globaltype_delete globaltype_ptr
 
-newGlobalTypePtr :: forall a. HasValType a => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
+newGlobalTypePtr :: forall a. Val a => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
 newGlobalTypePtr _proxy mutability = do
   valtype_ptr <- c'wasm_valtype_new $ kind $ Proxy @a
   c'wasm_globaltype_new valtype_ptr $ toWasmMutability mutability
@@ -1681,7 +1687,7 @@ getGlobalType store global =
 -- matches the desired type @a@ of the returned 'TypedGlobal'.
 toTypedGlobal ::
   forall s m a.
-  (MonadPrim s m, HasValType a) =>
+  (MonadPrim s m, Val a) =>
   Store s ->
   Global s ->
   m (Maybe (TypedGlobal s a))
@@ -1714,7 +1720,7 @@ withTypedGlobal = with . getWasmtimeGlobal . unTypedGlobal
 -- store ('Store').
 newTypedGlobal ::
   forall s m a.
-  (MonadPrim s m, HasValType a, Storable a) =>
+  (MonadPrim s m, Val a, Storable a) =>
   Store s ->
   -- | Specifies whether the global can be mutated or not.
   Mutability ->
@@ -1738,7 +1744,7 @@ newTypedGlobal store mutability x =
 
 -- | Returns the current value of the given typed global.
 typedGlobalGet ::
-  (MonadPrim s m, HasValType a, Storable a) =>
+  (MonadPrim s m, Val a, Storable a) =>
   Store s ->
   TypedGlobal s a ->
   m a
@@ -1755,7 +1761,7 @@ typedGlobalGet store typedGlobal =
 -- Returns an error if it’s not a mutable global, or if value comes from a
 -- different store than the one provided.
 typedGlobalSet ::
-  (MonadPrim s m, HasValType a, Storable a) =>
+  (MonadPrim s m, Val a, Storable a) =>
   Store s ->
   TypedGlobal s a ->
   a ->
@@ -2456,7 +2462,7 @@ getExportedTable store inst name = (>>= fromExtern) <$> getExport store inst nam
 -- the type of the global matches the desired type @a@ ('toTypedGlobal').
 getExportedTypedGlobal ::
   forall s m a.
-  (MonadPrim s m, HasValType a) =>
+  (MonadPrim s m, Val a) =>
   Store s ->
   Instance s ->
   -- | Name of the export.
