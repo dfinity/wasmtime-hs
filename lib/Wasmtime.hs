@@ -14,7 +14,6 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE ViewPatterns #-}
 
 -- | High-level Haskell API to the wasmtime C API.
 module Wasmtime
