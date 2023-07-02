@@ -2308,9 +2308,7 @@ pokeExtern externs_ptr extern =
 --------------------------------------------------------------------------------
 
 -- | Representation of a instance in Wasmtime.
-data Instance s = Instance
-  { instanceForeignPtr :: ForeignPtr C'wasmtime_instance_t
-  }
+newtype Instance s = Instance {instanceForeignPtr :: ForeignPtr C'wasmtime_instance_t}
 
 -- | Instantiate a wasm module.
 --
@@ -2510,6 +2508,22 @@ getExportAtIndex store inst ix =
 -- | Object used to conveniently link together and instantiate wasm modules.
 data Linker s = Linker
   { linkerForeignPtr :: ForeignPtr C'wasmtime_linker_t,
+    -- We keep a mutable list of reference-counted finalizers of the
+    -- FuncCallback FunPtrs. See 'linkerDefineFunc' which adds to this list.
+    --
+    -- The reason the FunPtrs need to be reference counted is that they need to
+    -- stay alive for the lifetime of the 'Instance' returned from
+    -- 'linkerInstantiate'. Because that instance may invoke the associated host
+    -- functions.
+    --
+    -- So 'linkerInstantiate' will call 'incArc' for all the Arcs in the linker
+    -- to increment their reference counts then add a finalizer to the
+    -- ForeignPtr of the instance which calls 'freeArc' on all the Arcs to
+    -- finalize them.
+    --
+    -- In the finalizer of the 'linkerForeignPtr' we call 'freeArc' on each of
+    -- the Arcs in the list causing the FunPtr to be finalized when its
+    -- reference count reaches 0.
     linkerFunPtrArcs :: IORef [Arc]
   }
 
