@@ -968,7 +968,11 @@ newExternTypeFromPtr externtype_ptr = do
 -- memory. It’s recommended to have a 'Store' correspond roughly to the lifetime
 -- of a “main instance” that an embedding is interested in executing.
 data Store s = Store
-  { storeFinalizeRef :: !(IORef (IO ())),
+  { -- | A mutable finalizer which is used to finalize FunPtrs of
+    -- FuncCallbacks. See 'newFunc' where this finalizer is extended. This
+    -- finalizer is run in the finalizer of the 'storeForeignPtr' in 'newStore'
+    -- below.
+    storeFinalizeRef :: !(IORef (IO ())),
     storeForeignPtr :: !(ForeignPtr C'wasmtime_store_t),
     storeCtxPtr :: Ptr C'wasmtime_context_t
   }
