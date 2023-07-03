@@ -3141,11 +3141,8 @@ allocaNullPtr f = alloca $ \ptr_ptr -> do
 
 -- | Uses 'sizeOf' to copy bytes from the second pointer (source) into the first
 --  (destination); the copied areas may /not/ overlap.
-copy :: Storable a => Ptr a -> Ptr a -> IO ()
-copy dest src = copyBytes dest src (sizeOf (type_ src))
-  where
-    type_ :: Ptr a -> a
-    type_ = undefined
+copy :: forall a. Storable a => Ptr a -> Ptr a -> IO ()
+copy dest src = copyBytes dest src $ sizeOf (undefined :: a)
 
 --------------------------------------------------------------------------------
 -- HList
