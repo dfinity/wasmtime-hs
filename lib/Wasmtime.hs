@@ -974,7 +974,7 @@ data Store s = Store
     -- below.
     storeFinalizeRef :: !(IORef (IO ())),
     storeForeignPtr :: !(ForeignPtr C'wasmtime_store_t),
-    storeCtxPtr :: Ptr C'wasmtime_context_t
+    storeCtxPtr :: !(Ptr C'wasmtime_context_t)
   }
 
 -- | Creates a new store within the specified engine.
@@ -2870,8 +2870,8 @@ linkerModule linker store modName m =
 
 -- | A thread-safe reference count paired with a finalizer.
 data Arc = Arc
-  { arcRcRef :: IORef Int,
-    arcFinalizer :: IO ()
+  { arcRcRef :: !(IORef Int),
+    arcFinalizer :: !(IO ())
   }
 
 -- | Returns a new 'Arc' with a reference count of 1 and the given finalizer.
