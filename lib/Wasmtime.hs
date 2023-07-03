@@ -280,7 +280,7 @@ import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
 import Control.Applicative ((<|>))
 import Control.Exception (Exception, bracket, mask_, onException, throwIO, try)
-import Control.Monad (guard, when, (>=>))
+import Control.Monad (guard, join, when, (>=>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
 import Control.Monad.ST (ST)
@@ -305,7 +305,7 @@ import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtr, newForeignPtr, withFore
 import Foreign.Marshal.Alloc (alloca)
 import Foreign.Marshal.Array (advancePtr, allocaArray)
 import Foreign.Marshal.Utils (copyBytes)
-import Foreign.Ptr (FunPtr, Ptr, castFunPtr, castPtr, freeHaskellFunPtr, nullFunPtr, nullPtr)
+import Foreign.Ptr (FunPtr, Ptr, castPtr, freeHaskellFunPtr, nullFunPtr, nullPtr)
 import Foreign.Storable (Storable, peek, peekElemOff, poke, sizeOf)
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -968,7 +968,7 @@ newExternTypeFromPtr externtype_ptr = do
 -- memory. It’s recommended to have a 'Store' correspond roughly to the lifetime
 -- of a “main instance” that an embedding is interested in executing.
 data Store s = Store
-  { storeFunPtrs :: !(IORef [FunPtr ()]),
+  { storeFinalizeRef :: !(IORef (IO ())),
     storeForeignPtr :: !(ForeignPtr C'wasmtime_store_t),
     storeCtxPtr :: Ptr C'wasmtime_context_t
   }
@@ -979,13 +979,13 @@ newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
   wasmtime_store_ptr <- c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
   checkAllocation wasmtime_store_ptr
   wasmtime_ctx_ptr <- c'wasmtime_store_context wasmtime_store_ptr
-  funPtrsRef <- newIORef []
+  finalizeRef <- newIORef $ pure ()
   storeFP <- Foreign.Concurrent.newForeignPtr wasmtime_store_ptr $ do
     c'wasmtime_store_delete wasmtime_store_ptr
-    readIORef funPtrsRef >>= mapM_ freeHaskellFunPtr
+    join $ readIORef finalizeRef
   pure
     Store
-      { storeFunPtrs = funPtrsRef,
+      { storeFinalizeRef = finalizeRef,
         storeCtxPtr = wasmtime_ctx_ptr,
         storeForeignPtr = storeFP
       }
@@ -1378,11 +1378,11 @@ type FuncCallback =
   CSize -> -- nresults
   IO (Ptr C'wasm_trap_t)
 
-newFuncCallbackFunPtr :: IORef [FunPtr ()] -> FuncCallback -> IO (FunPtr FuncCallback)
-newFuncCallbackFunPtr ioRef callback = mask_ $ do
+newFuncCallbackFunPtr :: IORef (IO ()) -> FuncCallback -> IO (FunPtr FuncCallback)
+newFuncCallbackFunPtr finalizeRef callback = mask_ $ do
   funPtr <- mk'wasmtime_func_callback_t callback
-  atomicModifyIORef ioRef $ \(existingFunPtrs :: [FunPtr ()]) ->
-    (castFunPtr funPtr : existingFunPtrs, ())
+  atomicModifyIORef finalizeRef $ \(finalize :: IO ()) ->
+    (finalize >> freeHaskellFunPtr funPtr, ())
   pure funPtr
 
 -- | Insert a new function into the 'Store'.
@@ -1411,7 +1411,7 @@ newFunc store f =
     withStore store $ \ctx_ptr ->
       withFuncType funcType $ \functype_ptr -> do
         callback_funptr :: FunPtr FuncCallback <-
-          newFuncCallbackFunPtr (storeFunPtrs store) callback
+          newFuncCallbackFunPtr (storeFinalizeRef store) callback
         func <- MkFunc <$> mallocForeignPtr
         withFunc func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
           c'wasmtime_func_new
