@@ -16,7 +16,7 @@ main :: IO ()
 main = do
   engine <- newEngine
 
-  store <- newStore engine
+  store <- newStore engine >>= handleException
 
   helloWatPath <- getDataFileName "test/gcd.wat"
   watBytes <- B.readFile helloWatPath
@@ -27,7 +27,7 @@ main = do
 
   inst <- newInstance store myModule [] >>= handleException
 
-  Just (wasmGCD :: Int32 -> Int32 -> IO (Either Trap Int32)) <-
+  Just (wasmGCD :: Int32 -> Int32 -> IO (Either WasmException Int32)) <-
     getExportedFunction store inst "gcd"
 
   let a = 6

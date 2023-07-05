@@ -15,7 +15,7 @@ main = do
   putStrLn "Initializing..."
   engine <- newEngine
 
-  store <- newStore engine
+  store <- newStore engine >>= handleException
 
   helloWatPath <- getDataFileName "test/hello.wat"
   watBytes <- B.readFile helloWatPath
@@ -32,7 +32,7 @@ main = do
   inst <- newInstance store myModule [toExtern func] >>= handleException
 
   putStrLn "Extracting export..."
-  Just (run :: IO (Either Trap ())) <-
+  Just (run :: IO (Either WasmException ())) <-
     getExportedFunction store inst "run"
 
   putStrLn "Calling export..."

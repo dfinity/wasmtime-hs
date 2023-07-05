@@ -31,7 +31,7 @@ main = do
 
 st :: forall s. Engine -> Module -> ST s Int
 st engine myModule = do
-  store :: Store s <- newStore engine
+  Right (store :: Store s) <- newStore engine
 
   stRef :: STRef s Int <- newSTRef 1
 
@@ -39,7 +39,7 @@ st engine myModule = do
 
   Right (inst :: Instance s) <- newInstance store myModule [toExtern func]
 
-  Just (run :: ST s (Either Trap ())) <-
+  Just (run :: ST s (Either WasmException ())) <-
     getExportedFunction store inst "run"
 
   Right () <- run

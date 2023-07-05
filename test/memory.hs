@@ -19,7 +19,7 @@ main :: IO ()
 main = do
   putStrLn "Initializing..."
   engine <- newEngine
-  store <- newStore engine
+  store <- newStore engine >>= handleException
   wasm <- wasmFromPath "test/memory.wat"
 
   putStrLn "Compiling module..."
@@ -30,11 +30,11 @@ main = do
 
   putStrLn "Extracting exports..."
   Just memory <- getExportedMemory store inst "memory"
-  Just (sizeFun :: IO (Either Trap Int32)) <-
+  Just (sizeFun :: IO (Either WasmException Int32)) <-
     getExportedFunction store inst "size"
-  Just (loadFun :: Int32 -> IO (Either Trap Int32)) <-
+  Just (loadFun :: Int32 -> IO (Either WasmException Int32)) <-
     getExportedFunction store inst "load"
-  Just (storeFun :: Int32 -> Int32 -> IO (Either Trap ())) <-
+  Just (storeFun :: Int32 -> Int32 -> IO (Either WasmException ())) <-
     getExportedFunction store inst "store"
 
   putStrLn "Checking memory..."
@@ -49,13 +49,13 @@ main = do
   Right 1 <- loadFun 0x1000
   Right 4 <- loadFun 0x1003
   Right 0 <- loadFun 0x1ffff
-  Left trap_res <- loadFun 0x20000
+  Left (Trap trap_res) <- loadFun 0x20000
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
 
   putStrLn "Mutating memory..."
   Right () <- writeByte store memory 0x1003 5
   Right _ <- storeFun 0x1002 6
-  Left trap_res <- storeFun 0x20000 0
+  Left (Trap trap_res) <- storeFun 0x20000 0
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
   mem_bs <- readMemory store memory
   B.index mem_bs 0x1002 @?= 6
@@ -69,9 +69,9 @@ main = do
   0x30000 <- getMemorySizeBytes store memory
   Right 0 <- loadFun 0x20000
   Right () <- storeFun 0x20000 0
-  Left trap_res <- loadFun 0x30000
+  Left (Trap trap_res) <- loadFun 0x30000
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
-  Left trap_res <- storeFun 0x30000 0
+  Left (Trap trap_res) <- storeFun 0x30000 0
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
   Left _ <- growMemory store memory 1
   Right 3 <- growMemory store memory 0

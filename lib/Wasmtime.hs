@@ -280,10 +280,11 @@ import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
 import Control.Applicative ((<|>))
 import Control.Exception (Exception, bracket, mask_, onException, throwIO, try)
-import Control.Monad (guard, join, when, (>=>))
+import Control.Monad (guard, join, unless, when, (>=>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
 import Control.Monad.ST (ST)
+import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
 import Control.Monad.Trans.Maybe (MaybeT (MaybeT), runMaybeT)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
@@ -978,8 +979,8 @@ data Store s = Store
   }
 
 -- | Creates a new store within the specified engine.
-newStore :: MonadPrim s m => Engine -> m (Store s)
-newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ do
+newStore :: MonadPrim s m => Engine -> m (Either WasmException (Store s))
+newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ try $ do
   wasmtime_store_ptr <- c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
   checkAllocation wasmtime_store_ptr
   wasmtime_ctx_ptr <- c'wasmtime_store_context wasmtime_store_ptr
@@ -1015,9 +1016,8 @@ withStore store f = withForeignPtr (storeForeignPtr store) $ \_store_ptr ->
 -- This function will return an error if fuel consumption is not enabled via
 -- 'setConsumeFuel'.
 addFuel :: MonadPrim s m => Store s -> Word64 -> m (Either WasmtimeError ())
-addFuel store amount = unsafeIOToPrim $ withStore store $ \ctx_ptr -> try $ do
-  error_ptr <- c'wasmtime_context_add_fuel ctx_ptr amount
-  checkWasmtimeError error_ptr
+addFuel store amount = unsafeIOToPrim $ withStore store $ \ctx_ptr ->
+  c'wasmtime_context_add_fuel ctx_ptr amount >>= try . checkWasmtimeError
 
 -- | Returns the amount of fuel consumed by this store’s execution so far.
 --
@@ -1056,8 +1056,8 @@ consumeFuel ::
   m (Either WasmtimeError Word64)
 consumeFuel store amount = unsafeIOToPrim $ withStore store $ \ctx_ptr ->
   alloca $ \remaining_ptr -> try $ do
-    error_ptr <- c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
-    checkWasmtimeError error_ptr
+    c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
+      >>= checkWasmtimeError
     peek remaining_ptr
 
 --------------------------------------------------------------------------------
@@ -1110,12 +1110,12 @@ newFuncTypeFromPtr = fmap FuncType . newForeignPtr p'wasm_functype_delete
 --
 -- Prints: @Proxy @'[Int32, Float] '.->.' Proxy @'[Word128, Double, Int64]@
 newFuncType ::
-  forall f (params :: [Type]) m r (results :: [Type]).
+  forall f (params :: [Type]) m e r (results :: [Type]).
   ( Funcable f,
     Params f ~ params,
     HListable r,
     Types r ~ results,
-    Result f ~ m (Either Trap r),
+    Result f ~ m (Either e r),
     Vals params,
     Vals results,
     Len params,
@@ -1188,13 +1188,13 @@ instance Funcable b => Funcable (a -> b) where
   type Params (a -> b) = a ': Params b
   type Result (a -> b) = Result b
 
-instance (HListable r, Types r ~ results, Vals results) => Funcable (IO (Either Trap r)) where
-  type Params (IO (Either Trap r)) = '[]
-  type Result (IO (Either Trap r)) = IO (Either Trap r)
+instance (HListable r, Types r ~ results, Vals results) => Funcable (IO (Either e r)) where
+  type Params (IO (Either e r)) = '[]
+  type Result (IO (Either e r)) = IO (Either e r)
 
-instance (HListable r, Types r ~ results, Vals results) => Funcable (ST s (Either Trap r)) where
-  type Params (ST s (Either Trap r)) = '[]
-  type Result (ST s (Either Trap r)) = ST s (Either Trap r)
+instance (HListable r, Types r ~ results, Vals results) => Funcable (ST s (Either e r)) where
+  type Params (ST s (Either e r)) = '[]
+  type Result (ST s (Either e r)) = ST s (Either e r)
 
 -- | Type of values that:
 --
@@ -1517,8 +1517,8 @@ funcToFunction ::
     Params f ~ params,
     HListable r,
     Types r ~ results,
-    Result f ~ m (Either Trap r),
-    Foldr (->) (m (Either Trap r)) params ~ f,
+    Result f ~ m (Either WasmException r),
+    Foldr (->) (m (Either WasmException r)) params ~ f,
     Curry params,
     Vals params,
     Vals results,
@@ -1546,8 +1546,8 @@ callFunc ::
     Params f ~ params,
     HListable r,
     Types r ~ results,
-    Result f ~ m (Either Trap r),
-    Foldr (->) (m (Either Trap r)) params ~ f,
+    Result f ~ m (Either WasmException r),
+    Foldr (->) (m (Either WasmException r)) params ~ f,
     Curry params,
     Vals params,
     Vals results,
@@ -1562,29 +1562,25 @@ callFunc ::
   f
 callFunc store func = curryList callFuncOnParams
   where
-    callFuncOnParams :: List params -> m (Either Trap r)
+    callFuncOnParams :: List params -> m (Either WasmException r)
     callFuncOnParams params =
       unsafeIOToPrim $
         withStore store $ \ctx_ptr ->
           withFunc func $ \func_ptr ->
             allocaArray n $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
               pokeRawVals args_and_results_ptr params
-              allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> mask_ $ do
-                error_ptr <-
-                  c'wasmtime_func_call_unchecked
-                    ctx_ptr
-                    func_ptr
-                    args_and_results_ptr
-                    (fromIntegral n)
-                    trap_ptr_ptr
-                checkWasmtimeError error_ptr
-                trap_ptr <- peek trap_ptr_ptr
-                if trap_ptr == nullPtr
-                  then do
-                    results :: List results <- peekRawVals args_and_results_ptr
-                    let r = fromHList results :: r
-                    pure $ Right r
-                  else Left <$> newTrapFromPtr trap_ptr
+              handleTrap $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+                liftIO
+                  ( c'wasmtime_func_call_unchecked
+                      ctx_ptr
+                      func_ptr
+                      args_and_results_ptr
+                      (fromIntegral n)
+                      trap_ptr_ptr
+                  )
+                  >>= checkWasmtimeErrorT
+                results :: List results <- liftIO $ peekRawVals args_and_results_ptr
+                pure (fromHList results :: r)
 
     n :: Int
     n = max (len $ Proxy @params) (len $ Proxy @results)
@@ -1737,16 +1733,15 @@ newTypedGlobal ::
   m (Either WasmtimeError (TypedGlobal s a))
 newTypedGlobal store mutability x =
   unsafeIOToPrim $
-    try $
-      withStore store $ \ctx_ptr ->
-        withNewGlobalTypePtr $ \(globaltype_ptr :: Ptr C'wasm_globaltype_t) ->
-          alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
-            pokeVal val_ptr x
-            global <- MkGlobal <$> mallocForeignPtr
-            withGlobal global $ \global_ptr -> do
-              error_ptr <- c'wasmtime_global_new ctx_ptr globaltype_ptr val_ptr global_ptr
-              checkWasmtimeError error_ptr
-              pure $ TypedGlobal global
+    withStore store $ \ctx_ptr ->
+      withNewGlobalTypePtr $ \(globaltype_ptr :: Ptr C'wasm_globaltype_t) ->
+        alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
+          pokeVal val_ptr x
+          global <- MkGlobal <$> mallocForeignPtr
+          withGlobal global $ \global_ptr -> try $ do
+            c'wasmtime_global_new ctx_ptr globaltype_ptr val_ptr global_ptr
+              >>= checkWasmtimeError
+            pure $ TypedGlobal global
   where
     withNewGlobalTypePtr =
       bracket (newGlobalTypePtr (Proxy @a) mutability) c'wasm_globaltype_delete
@@ -1777,13 +1772,12 @@ typedGlobalSet ::
   m (Either WasmtimeError ())
 typedGlobalSet store typedGlobal x =
   unsafeIOToPrim $
-    try $
-      withStore store $ \ctx_ptr ->
-        withTypedGlobal typedGlobal $ \global_ptr ->
-          alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
-            pokeVal val_ptr x
-            error_ptr <- c'wasmtime_global_set ctx_ptr global_ptr val_ptr
-            checkWasmtimeError error_ptr
+    withStore store $ \ctx_ptr ->
+      withTypedGlobal typedGlobal $ \global_ptr ->
+        alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
+          pokeVal val_ptr x
+          c'wasmtime_global_set ctx_ptr global_ptr val_ptr
+            >>= try . checkWasmtimeError
 
 --------------------------------------------------------------------------------
 -- Tables
@@ -1909,12 +1903,12 @@ newTable ::
   -- if its initial size is > 0.
   Maybe TableValue ->
   m (Either WasmtimeError (Table s))
-newTable store tt mbVal = unsafeIOToPrim $
-  try $
+newTable store tt mbVal =
+  unsafeIOToPrim $
     withStore store $ \ctx_ptr ->
       withTableType tt $ \tt_ptr -> do
         table <- MkTable <$> mallocForeignPtr
-        withTable table $ \table_ptr -> do
+        withTable table $ \table_ptr -> try $ do
           error_ptr <- case mbVal of
             Nothing -> do
               c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
@@ -1937,11 +1931,11 @@ growTable ::
   -- | Optional element to fill in the new space.
   Maybe TableValue ->
   m (Either WasmtimeError Word32)
-growTable store table delta mbVal = unsafeIOToPrim $
-  try $
+growTable store table delta mbVal =
+  unsafeIOToPrim $
     withStore store $ \ctx_ptr ->
       withTable table $ \table_ptr ->
-        alloca $ \prev_size_ptr -> do
+        alloca $ \prev_size_ptr -> try $ do
           error_ptr <- case mbVal of
             Nothing ->
               c'wasmtime_table_grow ctx_ptr table_ptr (fromIntegral delta) nullPtr prev_size_ptr
@@ -1980,13 +1974,13 @@ tableSet ::
   -- | The new value
   TableValue ->
   m (Either WasmtimeError ())
-tableSet store table ix val = unsafeIOToPrim $
-  try $
+tableSet store table ix val =
+  unsafeIOToPrim $
     withStore store $ \ctx_ptr ->
       withTable table $ \table_ptr ->
-        withTableValue val $ \val_ptr -> do
-          error_ptr <- c'wasmtime_table_set ctx_ptr table_ptr ix val_ptr
-          checkWasmtimeError error_ptr
+        withTableValue val $ \val_ptr ->
+          c'wasmtime_table_set ctx_ptr table_ptr ix val_ptr
+            >>= try . checkWasmtimeError
 
 -- | Return the 'TableType' with which this table was created.
 getTableType :: Store s -> Table s -> TableType
@@ -2091,14 +2085,14 @@ newtype Memory s = MkMemory {unMemory :: ForeignPtr C'wasmtime_memory_t}
 
 -- | Create new memory with the properties described in the 'MemoryType' argument.
 newMemory :: MonadPrim s m => Store s -> MemoryType -> m (Either WasmtimeError (Memory s))
-newMemory store memtype = unsafeIOToPrim $
-  try $
+newMemory store memtype =
+  unsafeIOToPrim $
     withStore store $ \ctx_ptr ->
-      withMemoryType memtype $ \memtype_ptr -> do
+      withMemoryType memtype $ \memtype_ptr -> try $ do
         mem <- MkMemory <$> mallocForeignPtr
         withMemory mem $ \mem_ptr -> do
-          error_ptr <- c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
-          checkWasmtimeError error_ptr
+          c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
+            >>= checkWasmtimeError
           pure mem
 
 withMemory :: Memory s -> (Ptr C'wasmtime_memory_t -> IO a) -> IO a
@@ -2133,13 +2127,13 @@ growMemory ::
   -- | Delta
   Word64 ->
   m (Either WasmtimeError Word64)
-growMemory store mem delta = unsafeIOToPrim $
-  try $
+growMemory store mem delta =
+  unsafeIOToPrim $
     withStore store $ \ctx_ptr ->
       withMemory mem $ \mem_ptr ->
-        alloca $ \before_size_ptr -> do
-          error_ptr <- c'wasmtime_memory_grow ctx_ptr mem_ptr delta before_size_ptr
-          checkWasmtimeError error_ptr
+        alloca $ \before_size_ptr -> try $ do
+          c'wasmtime_memory_grow ctx_ptr mem_ptr delta before_size_ptr
+            >>= checkWasmtimeError
           peek before_size_ptr
 
 -- | Takes a continuation which can mutate the linear memory. The continuation
@@ -2340,7 +2334,7 @@ newInstance ::
   -- relatively low level, and 'newInstanceLinked' is provided for a more
   -- ergonomic name-based resolution API.
   Vector (Extern s) ->
-  m (Either Trap (Instance s))
+  m (Either WasmException (Instance s))
 -- TODO: don't throw the WasmtimeError but return it via Either
 newInstance store m externs = unsafeIOToPrim $
   withStore store $ \ctx_ptr ->
@@ -2348,19 +2342,18 @@ newInstance store m externs = unsafeIOToPrim $
       withExterns externs $ \externs_ptr n -> do
         inst <- Instance <$> mallocForeignPtr
         withInstance inst $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
-          allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
-            c'wasmtime_instance_new
-              ctx_ptr
-              mod_ptr
-              externs_ptr
-              n
-              inst_ptr
-              trap_ptr_ptr
-              >>= checkWasmtimeError
-            trap_ptr <- peek trap_ptr_ptr
-            if trap_ptr == nullPtr
-              then pure $ Right inst
-              else Left <$> newTrapFromPtr trap_ptr
+          handleTrap $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+            liftIO
+              ( c'wasmtime_instance_new
+                  ctx_ptr
+                  mod_ptr
+                  externs_ptr
+                  n
+                  inst_ptr
+                  trap_ptr_ptr
+              )
+              >>= checkWasmtimeErrorT
+            pure inst
 
 withInstance :: Instance s -> (Ptr C'wasmtime_instance_t -> IO a) -> IO a
 withInstance = withForeignPtr . unInstance
@@ -2424,8 +2417,8 @@ getExportedFunction ::
     Params f ~ params,
     HListable r,
     Types r ~ results,
-    Result f ~ m (Either Trap r),
-    Foldr (->) (m (Either Trap r)) params ~ f,
+    Result f ~ m (Either WasmException r),
+    Foldr (->) (m (Either WasmException r)) params ~ f,
     Curry params,
     Vals params,
     Vals results,
@@ -2805,7 +2798,7 @@ linkerInstantiate ::
   Store s ->
   -- | The module that is being instantiated.
   Module ->
-  m (Either Trap (Instance s))
+  m (Either WasmException (Instance s))
 -- TODO: don't throw the WasmtimeError but return it via Either
 linkerInstantiate linker store m =
   unsafeIOToPrim $
@@ -2819,18 +2812,17 @@ linkerInstantiate linker store m =
             Foreign.Concurrent.addForeignPtrFinalizer inst_frgn_ptr $
               mapM_ freeArc arcs
           withForeignPtr inst_frgn_ptr $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
-            allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
-              c'wasmtime_linker_instantiate
-                linker_ptr
-                ctx_ptr
-                mod_ptr
-                inst_ptr
-                trap_ptr_ptr
-                >>= checkWasmtimeError
-              trap_ptr <- peek trap_ptr_ptr
-              if trap_ptr == nullPtr
-                then pure $ Right $ Instance inst_frgn_ptr
-                else Left <$> newTrapFromPtr trap_ptr
+            handleTrap $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+              liftIO
+                ( c'wasmtime_linker_instantiate
+                    linker_ptr
+                    ctx_ptr
+                    mod_ptr
+                    inst_ptr
+                    trap_ptr_ptr
+                )
+                >>= checkWasmtimeErrorT
+              pure $ Instance inst_frgn_ptr
 
 -- | Defines automatic instantiations of a 'Module' in the given 'Linker'.
 --
@@ -2906,7 +2898,7 @@ freeArc (Arc rcRef finalize) = do
 -- trap, which immediately aborts execution. Traps cannot be handled
 -- by WebAssembly code, but are reported to the outside environment,
 -- where they will be caught.
-newtype Trap = Trap {unTrap :: ForeignPtr C'wasm_trap_t}
+newtype Trap = MkTrap {unTrap :: ForeignPtr C'wasm_trap_t}
 
 -- | A trap with a given message.
 newTrap :: String -> Trap
@@ -2914,7 +2906,7 @@ newTrap msg = unsafePerformIO $ withCStringLen msg $ \(p, n) ->
   mask_ $ c'wasmtime_trap_new p (fromIntegral n) >>= newTrapFromPtr
 
 newTrapFromPtr :: Ptr C'wasm_trap_t -> IO Trap
-newTrapFromPtr = fmap Trap . newForeignPtr p'wasm_trap_delete
+newTrapFromPtr = fmap MkTrap . newForeignPtr p'wasm_trap_delete
 
 withTrap :: Trap -> (Ptr C'wasm_trap_t -> IO a) -> IO a
 withTrap = withForeignPtr . unTrap
@@ -3014,6 +3006,19 @@ trapTrace trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
     c'wasm_frame_vec_delete frame_vec_ptr
     pure vec
 
+handleTrap ::
+  (Ptr (Ptr C'wasm_trap_t) -> ExceptT WasmException IO a) ->
+  IO (Either WasmException a)
+handleTrap f =
+  allocaNullPtr $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) ->
+    mask_ $
+      runExceptT $ do
+        x <- f trap_ptr_ptr
+        trap_ptr <- liftIO $ peek trap_ptr_ptr
+        unless (trap_ptr == nullPtr) $
+          liftIO (newTrapFromPtr trap_ptr) >>= throwE . Trap
+        pure x
+
 --------------------------------------------------------------------------------
 -- Frames
 --------------------------------------------------------------------------------
@@ -3074,6 +3079,8 @@ frameModuleOffset frame = unsafePerformIO $ withFrame frame c'wasm_frame_module_
 data WasmException
   = -- | Thrown if a WASM object (like an 'Engine' or 'Store') could not be allocated.
     AllocationFailed
+  | WasmtimeError WasmtimeError
+  | Trap Trap
   deriving (Show)
 
 instance Exception WasmException
@@ -3082,15 +3089,20 @@ checkAllocation :: Ptr a -> IO ()
 checkAllocation ptr = when (ptr == nullPtr) $ throwIO AllocationFailed
 
 -- | Errors generated by Wasmtime.
-newtype WasmtimeError = WasmtimeError {unWasmtimeError :: ForeignPtr C'wasmtime_error_t}
+newtype WasmtimeError = MkWasmtimeError {unWasmtimeError :: ForeignPtr C'wasmtime_error_t}
 
 newWasmtimeErrorFromPtr :: Ptr C'wasmtime_error_t -> IO WasmtimeError
-newWasmtimeErrorFromPtr = fmap WasmtimeError . newForeignPtr p'wasmtime_error_delete
+newWasmtimeErrorFromPtr = fmap MkWasmtimeError . newForeignPtr p'wasmtime_error_delete
 
 checkWasmtimeError :: Ptr C'wasmtime_error_t -> IO ()
 checkWasmtimeError error_ptr = when (error_ptr /= nullPtr) $ do
   wasmtimeError <- newWasmtimeErrorFromPtr error_ptr
   throwIO wasmtimeError
+
+checkWasmtimeErrorT :: Ptr C'wasmtime_error_t -> ExceptT WasmException IO ()
+checkWasmtimeErrorT error_ptr = when (error_ptr /= nullPtr) $ do
+  wasmtimeError <- liftIO $ newWasmtimeErrorFromPtr error_ptr
+  throwE $ WasmtimeError wasmtimeError
 
 withWasmtimeError :: WasmtimeError -> (Ptr C'wasmtime_error_t -> IO a) -> IO a
 withWasmtimeError = withForeignPtr . unWasmtimeError
