@@ -1455,7 +1455,7 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
   let actualNrOfArgs = fromIntegral nargs
   if actualNrOfArgs /= expectedNrOfArgs
     then
-      error $
+      newTrapPtr $
         "Expected "
           ++ show expectedNrOfArgs
           ++ " number of arguments but got "
@@ -1464,9 +1464,9 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
     else do
       mbParams <- runMaybeT $ peekVals params_ptr
       case mbParams of
-        Nothing -> error "ValType mismatch!"
+        Nothing -> newTrapPtr "ValType mismatch!"
         Just (params :: List params) -> do
-          e <- unsafePrimToIO $ (uncurryList f :: List params -> m (Either Trap r)) params
+          e <- unsafePrimToIO $ callFunctionOnParams params
           case e of
             Left trap ->
               -- As the docs of <wasmtime_func_callback_t> mention:
@@ -1483,9 +1483,8 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
               let n = fromIntegral nresults
               if n == expectedNrOfResults
                 then pokeVals result_ptr (toHList r) $> nullPtr
-                else do
-                  -- TODO: use throwIO or trap!
-                  error $
+                else
+                  newTrapPtr $
                     "Expected the number of results to be "
                       ++ show expectedNrOfResults
                       ++ " but got "
@@ -1494,6 +1493,9 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
   where
     expectedNrOfArgs = len $ Proxy @params
     expectedNrOfResults = len $ Proxy @results
+
+    callFunctionOnParams :: List params -> m (Either Trap r)
+    callFunctionOnParams = uncurryList f
 
 -- | Converts a 'Func' into the Haskell function @f@.
 --
@@ -2900,8 +2902,12 @@ newtype Trap = MkTrap {unTrap :: ForeignPtr C'wasm_trap_t}
 
 -- | A trap with a given message.
 newTrap :: String -> Trap
-newTrap msg = unsafePerformIO $ withCStringLen msg $ \(p, n) ->
-  mask_ $ c'wasmtime_trap_new p (fromIntegral n) >>= newTrapFromPtr
+newTrap msg = unsafePerformIO $ mask_ $ newTrapPtr msg >>= newTrapFromPtr
+
+newTrapPtr :: String -> IO (Ptr C'wasm_trap_t)
+newTrapPtr msg =
+  withCStringLen msg $ \(p, n) ->
+    c'wasmtime_trap_new p (fromIntegral n)
 
 newTrapFromPtr :: Ptr C'wasm_trap_t -> IO Trap
 newTrapFromPtr = fmap MkTrap . newForeignPtr p'wasm_trap_delete
