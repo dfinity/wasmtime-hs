@@ -2335,7 +2335,6 @@ newInstance ::
   -- ergonomic name-based resolution API.
   Vector (Extern s) ->
   m (Either WasmException (Instance s))
--- TODO: don't throw the WasmtimeError but return it via Either
 newInstance store m externs = unsafeIOToPrim $
   withStore store $ \ctx_ptr ->
     withModule m $ \mod_ptr ->
@@ -2799,7 +2798,6 @@ linkerInstantiate ::
   -- | The module that is being instantiated.
   Module ->
   m (Either WasmException (Instance s))
--- TODO: don't throw the WasmtimeError but return it via Either
 linkerInstantiate linker store m =
   unsafeIOToPrim $
     withLinker linker $ \linker_ptr ->
