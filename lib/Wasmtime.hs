@@ -1508,7 +1508,7 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
 -- mbGCD <- 'funcToFunction' store someExportedGcdFunc
 -- case mbGCD of
 --   Nothing -> error "gcd did not have the expected type!"
---   Just (wasmGCD :: Int32 -> Int32 -> IO (Either Trap Int32)) -> do
+--   Just (wasmGCD :: Int32 -> Int32 -> IO (Either WasmException Int32)) -> do
 --     -- Call gcd on its two Int32 arguments:
 --     r <- wasmGCD 6 27
 --     print r -- prints "Right 3"
