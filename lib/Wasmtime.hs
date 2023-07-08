@@ -1174,9 +1174,7 @@ unmarshalValTypeVec :: Ptr C'wasm_valtype_vec_t -> IO (V.Vector ValType)
 unmarshalValTypeVec valtype_vec_ptr = do
   sz :: CSize <- peek $ p'wasm_valtype_vec_t'size valtype_vec_ptr
   dt :: Ptr (Ptr C'wasm_valtype_t) <- peek $ p'wasm_valtype_vec_t'data valtype_vec_ptr
-  V.generateM (fromIntegral sz) $ \ix -> do
-    cur_valtype_ptr <- peekElemOff dt ix
-    fromWasmKind <$> unsafe'c'wasm_valtype_kind cur_valtype_ptr
+  V.generateM (fromIntegral sz) $ peekElemOff dt >=> fmap fromWasmKind . unsafe'c'wasm_valtype_kind
 
 -- | Class of Haskell functions / actions that can be imported into and exported
 -- from WASM modules.
