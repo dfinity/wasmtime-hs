@@ -17,24 +17,24 @@ import Data.WideWord.Word128 (Word128)
 
 #synonym_t wasmtime_externref_t , <wasmtime_externref>
 
-#ccall wasmtime_externref_new , \
+#ccall_unsafe wasmtime_externref_new , \
   Ptr () -> \
   FunPtr (Ptr () -> IO ()) -> \
   IO (Ptr <wasmtime_externref_t>)
 
-#ccall wasmtime_externref_data , \
+#ccall_unsafe wasmtime_externref_data , \
   Ptr <wasmtime_externref_t> -> IO (Ptr ())
 
-#ccall wasmtime_externref_clone , \
+#ccall_unsafe wasmtime_externref_clone , \
   Ptr <wasmtime_externref_t> -> IO (Ptr <wasmtime_externref_t>)
 
-#ccall wasmtime_externref_delete , \
+#ccall_unsafe wasmtime_externref_delete , \
   Ptr <wasmtime_externref_t> -> IO ()
 
-#ccall wasmtime_externref_from_raw , \
+#ccall_unsafe wasmtime_externref_from_raw , \
   Ptr <wasmtime_context_t> -> Ptr () -> IO (Ptr <wasmtime_externref_t>)
 
-#ccall wasmtime_externref_to_raw , \
+#ccall_unsafe wasmtime_externref_to_raw , \
   Ptr <wasmtime_context_t> -> \
   Ptr <wasmtime_externref_t> -> \
   IO (Ptr ())
@@ -82,8 +82,8 @@ import Data.WideWord.Word128 (Word128)
 
 #synonym_t wasmtime_val_t , <wasmtime_val>
 
-#ccall wasmtime_val_delete , \
+#ccall_unsafe wasmtime_val_delete , \
   Ptr <wasmtime_val_t> -> IO ()
 
-#ccall wasmtime_val_copy , \
+#ccall_unsafe wasmtime_val_copy , \
   Ptr <wasmtime_val_t> -> Ptr <wasmtime_val_t> -> IO ()

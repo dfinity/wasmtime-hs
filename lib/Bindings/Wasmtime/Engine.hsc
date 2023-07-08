@@ -10,4 +10,4 @@ module Bindings.Wasmtime.Engine where
 
 import Bindings.Wasm
 
-#ccall wasmtime_engine_increment_epoch , Ptr <wasm_engine_t> -> IO ()
+#ccall_unsafe wasmtime_engine_increment_epoch , Ptr <wasm_engine_t> -> IO ()

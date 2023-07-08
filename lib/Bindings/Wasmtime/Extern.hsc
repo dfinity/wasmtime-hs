@@ -63,9 +63,9 @@ import Data.Word (Word64)
 
 #synonym_t wasmtime_extern_t , <wasmtime_extern>
 
-#ccall wasmtime_extern_delete , Ptr <wasmtime_extern_t> -> IO ()
+#ccall_unsafe wasmtime_extern_delete , Ptr <wasmtime_extern_t> -> IO ()
 
-#ccall wasmtime_extern_type , \
+#ccall_unsafe wasmtime_extern_type , \
   Ptr <wasmtime_context_t> -> \
   Ptr <wasmtime_extern_t> -> \
   IO (Ptr <wasm_externtype_t>)

@@ -21,15 +21,15 @@ import Data.Word (Word64)
 
 #synonym_t wasmtime_context_t , <wasmtime_context>
 
-#ccall wasmtime_store_new , \
+#ccall_unsafe wasmtime_store_new , \
   Ptr <wasm_engine_t> -> \
   Ptr a -> \
   FunPtr (Ptr a -> IO ()) -> \
   IO (Ptr <wasmtime_store_t>)
 
-#ccall wasmtime_store_context , Ptr <wasmtime_store_t> -> IO (Ptr <wasmtime_context_t>)
+#ccall_unsafe wasmtime_store_context , Ptr <wasmtime_store_t> -> IO (Ptr <wasmtime_context_t>)
 
-#ccall wasmtime_store_limiter , \
+#ccall_unsafe wasmtime_store_limiter , \
   Ptr <wasmtime_store_t> -> \
   Int64 -> \
   Int64 -> \
@@ -38,38 +38,38 @@ import Data.Word (Word64)
   Int64 -> \
   IO ()
 
-#ccall wasmtime_store_delete , Ptr <wasmtime_store_t> -> IO ()
+#ccall_unsafe wasmtime_store_delete , Ptr <wasmtime_store_t> -> IO ()
 
-#ccall wasmtime_context_get_data , \
+#ccall_unsafe wasmtime_context_get_data , \
   Ptr <wasmtime_context_t> -> IO (Ptr ())
 
-#ccall wasmtime_context_set_data , \
+#ccall_unsafe wasmtime_context_set_data , \
   Ptr <wasmtime_context_t> -> Ptr () -> IO ()
 
-#ccall wasmtime_context_gc , \
+#ccall_unsafe wasmtime_context_gc , \
   Ptr <wasmtime_context_t> -> IO ()
 
-#ccall wasmtime_context_add_fuel , \
+#ccall_unsafe wasmtime_context_add_fuel , \
   Ptr <wasmtime_context_t> -> Word64 -> IO (Ptr <wasmtime_error_t>)
 
-#ccall wasmtime_context_fuel_consumed ,\
+#ccall_unsafe wasmtime_context_fuel_consumed ,\
   Ptr <wasmtime_context_t> -> Ptr Word64 -> IO Bool
 
 -- Specified in docs but not present in libwasmtime
--- #ccall wasmtime_context_fuel_remaining , \
+-- #ccall_unsafe wasmtime_context_fuel_remaining , \
 --   Ptr <wasmtime_context_t> -> Ptr Word64 -> IO Bool
 
-#ccall wasmtime_context_consume_fuel , \
+#ccall_unsafe wasmtime_context_consume_fuel , \
   Ptr <wasmtime_context_t> -> Word64 -> Ptr Word64 -> IO (Ptr <wasmtime_error_t>)
 
-#ccall wasmtime_context_set_wasi, \
+#ccall_unsafe wasmtime_context_set_wasi, \
   Ptr <wasmtime_context_t> -> Ptr <wasi_config_t> -> IO (Ptr <wasmtime_error_t>)
 
-#ccall wasmtime_context_set_epoch_deadline , \
+#ccall_unsafe wasmtime_context_set_epoch_deadline , \
   Ptr <wasmtime_context_t> -> Word64 -> IO ()
 
 -- Specified in docs but not present in libwasmtime
--- #ccall wasmtime_store_epoch_deadline_callback , \
+-- #ccall_unsafe wasmtime_store_epoch_deadline_callback , \
 --   Ptr <wasmtime_store_t> ->\
 --   FunPtr (Ptr <wasmtime_context_t> -> Ptr () -> Ptr Word64 -> IO (Ptr <wasmtime_error_t>)) -> \
 --   Ptr () \

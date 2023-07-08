@@ -40,7 +40,7 @@ import Bindings.Wasmtime.Store
   CSize -> \
   IO (Ptr <wasm_trap_t>)
 
-#ccall wasmtime_func_new , \
+#ccall_unsafe wasmtime_func_new , \
   Ptr <wasmtime_context_t> -> \
   Ptr <wasm_functype_t> -> \
   <wasmtime_func_callback_t> -> \
@@ -56,7 +56,7 @@ import Bindings.Wasmtime.Store
   CSize -> \
   IO (Ptr <wasm_trap_t>)
 
-#ccall wasmtime_func_new_unchecked , \
+#ccall_unsafe wasmtime_func_new_unchecked , \
   Ptr <wasmtime_context_t> -> \
   Ptr <wasm_functype_t> -> \
   <wasmtime_func_unchecked_callback_t> -> \
@@ -65,7 +65,7 @@ import Bindings.Wasmtime.Store
   Ptr <wasmtime_func_t> -> \
   IO ()
 
-#ccall wasmtime_func_type , \
+#ccall_unsafe wasmtime_func_type , \
   Ptr <wasmtime_context_t> -> \
   Ptr <wasmtime_func_t> -> \
   IO (Ptr <wasm_functype_t>)
@@ -88,22 +88,22 @@ import Bindings.Wasmtime.Store
   Ptr (Ptr <wasm_trap_t>) -> \
   IO (Ptr <wasmtime_error_t>)
 
-#ccall wasmtime_caller_export_get , \
+#ccall_unsafe wasmtime_caller_export_get , \
   Ptr <wasmtime_caller_t> -> \
   Ptr CChar -> \
   CSize -> \
   Ptr <wasmtime_extern_t> -> \
   IO Bool
 
-#ccall wasmtime_caller_context , Ptr <wasmtime_caller_t> -> IO (Ptr <wasmtime_context_t>)
+#ccall_unsafe wasmtime_caller_context , Ptr <wasmtime_caller_t> -> IO (Ptr <wasmtime_context_t>)
 
-#ccall wasmtime_func_from_raw , \
+#ccall_unsafe wasmtime_func_from_raw , \
   Ptr <wasmtime_context_t> -> \
   Ptr () -> \
   Ptr <wasmtime_func_t> -> \
   IO ()
 
-#ccall wasmtime_func_to_raw , \
+#ccall_unsafe wasmtime_func_to_raw , \
   Ptr <wasmtime_context_t> -> \
   Ptr <wasmtime_func_t> -> \
   IO (Ptr ())

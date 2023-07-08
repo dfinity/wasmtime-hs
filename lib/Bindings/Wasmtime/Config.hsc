@@ -12,7 +12,6 @@ import Bindings.Wasm
 import Bindings.Wasmtime.Error
 import Data.Word (Word64)
 
-
 #synonym_t wasmtime_strategy_t , Word8
 #synonym_t wasmtime_opt_level_t , Word8
 #synonym_t wasmtime_profiling_strategy_t , Word8
@@ -32,37 +31,27 @@ import Data.Word (Word64)
 #num WASMTIME_PROFILING_STRATEGY_VTUNE
 #num WASMTIME_PROFILING_STRATEGY_PERFMAP
 
-
-#ccall 	wasmtime_config_debug_info_set ,                      Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_consume_fuel_set ,                    Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_epoch_interruption_set ,              Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_max_wasm_stack_set ,                  Ptr <wasm_config_t> -> CSize -> IO ()
-#ccall 	wasmtime_config_wasm_threads_set ,                    Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_wasm_reference_types_set ,            Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_wasm_simd_set ,                       Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_wasm_relaxed_simd_set ,               Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_wasm_relaxed_simd_deterministic_set , Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_wasm_bulk_memory_set ,                Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_wasm_multi_value_set ,                Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_wasm_multi_memory_set ,               Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_wasm_memory64_set ,                   Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_strategy_set ,                        Ptr <wasm_config_t> -> <wasmtime_strategy_t> -> IO ()
-#ccall 	wasmtime_config_parallel_compilation_set ,            Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_cranelift_debug_verifier_set ,        Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_cranelift_nan_canonicalization_set ,  Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_cranelift_opt_level_set ,             Ptr <wasm_config_t> -> <wasmtime_opt_level_t> -> IO ()
-#ccall 	wasmtime_config_profiler_set ,                        Ptr <wasm_config_t> -> <wasmtime_profiling_strategy_t> -> IO ()
--- #ccall 	wasmtime_config_static_memory_forced_set ,            Ptr <wasm_config_t> -> Bool -> IO ()
-#ccall 	wasmtime_config_static_memory_maximum_size_set ,      Ptr <wasm_config_t> -> Word64 -> IO ()
-#ccall 	wasmtime_config_static_memory_guard_size_set ,        Ptr <wasm_config_t> -> Word64 -> IO ()
-#ccall 	wasmtime_config_dynamic_memory_guard_size_set ,       Ptr <wasm_config_t> -> Word64 -> IO ()
-#ccall  wasmtime_config_cache_config_load ,                   Ptr <wasm_config_t> -> Ptr CChar -> IO (Ptr <wasmtime_error_t)
-
-
-
-
-
-
-
-
-
+#ccall_unsafe 	wasmtime_config_debug_info_set ,                      Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_consume_fuel_set ,                    Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_epoch_interruption_set ,              Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_max_wasm_stack_set ,                  Ptr <wasm_config_t> -> CSize -> IO ()
+#ccall_unsafe 	wasmtime_config_wasm_threads_set ,                    Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_wasm_reference_types_set ,            Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_wasm_simd_set ,                       Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_wasm_relaxed_simd_set ,               Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_wasm_relaxed_simd_deterministic_set , Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_wasm_bulk_memory_set ,                Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_wasm_multi_value_set ,                Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_wasm_multi_memory_set ,               Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_wasm_memory64_set ,                   Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_strategy_set ,                        Ptr <wasm_config_t> -> <wasmtime_strategy_t> -> IO ()
+#ccall_unsafe 	wasmtime_config_parallel_compilation_set ,            Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_cranelift_debug_verifier_set ,        Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_cranelift_nan_canonicalization_set ,  Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_cranelift_opt_level_set ,             Ptr <wasm_config_t> -> <wasmtime_opt_level_t> -> IO ()
+#ccall_unsafe 	wasmtime_config_profiler_set ,                        Ptr <wasm_config_t> -> <wasmtime_profiling_strategy_t> -> IO ()
+-- #ccall_unsafe 	wasmtime_config_static_memory_forced_set ,            Ptr <wasm_config_t> -> Bool -> IO ()
+#ccall_unsafe 	wasmtime_config_static_memory_maximum_size_set ,      Ptr <wasm_config_t> -> Word64 -> IO ()
+#ccall_unsafe 	wasmtime_config_static_memory_guard_size_set ,        Ptr <wasm_config_t> -> Word64 -> IO ()
+#ccall_unsafe 	wasmtime_config_dynamic_memory_guard_size_set ,       Ptr <wasm_config_t> -> Word64 -> IO ()
+#ccall_unsafe   wasmtime_config_cache_config_load ,                   Ptr <wasm_config_t> -> Ptr CChar -> IO (Ptr <wasmtime_error_t)
