@@ -974,8 +974,7 @@ data Store s = Store
     -- finalizer is run in the finalizer of the 'storeForeignPtr' in 'newStore'
     -- below.
     storeFinalizeRef :: !(IORef (IO ())),
-    storeForeignPtr :: !(ForeignPtr C'wasmtime_store_t),
-    storeCtxPtr :: !(Ptr C'wasmtime_context_t)
+    storeForeignPtr :: !(ForeignPtr C'wasmtime_context_t)
   }
 
 -- | Creates a new store within the specified engine.
@@ -985,19 +984,17 @@ newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ tr
   checkAllocation wasmtime_store_ptr
   wasmtime_ctx_ptr <- unsafe'c'wasmtime_store_context wasmtime_store_ptr
   finalizeRef <- newIORef $ pure ()
-  storeFP <- Foreign.Concurrent.newForeignPtr wasmtime_store_ptr $ do
+  storeFP <- Foreign.Concurrent.newForeignPtr wasmtime_ctx_ptr $ do
     unsafe'c'wasmtime_store_delete wasmtime_store_ptr
     join $ readIORef finalizeRef
   pure
     Store
       { storeFinalizeRef = finalizeRef,
-        storeCtxPtr = wasmtime_ctx_ptr,
         storeForeignPtr = storeFP
       }
 
 withStore :: Store s -> (Ptr C'wasmtime_context_t -> IO a) -> IO a
-withStore store f = withForeignPtr (storeForeignPtr store) $ \_store_ptr ->
-  f $ storeCtxPtr store
+withStore = withForeignPtr . storeForeignPtr
 
 -- | Adds fuel to this 'Store' for wasm to consume while executing.
 --
