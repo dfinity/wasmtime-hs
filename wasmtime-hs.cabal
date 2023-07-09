@@ -66,6 +66,7 @@ test-suite inc-st
     build-depends:    bytestring
     build-depends:    primitive
     build-depends:    wasmtime-hs
+    build-depends:    tasty-hunit >= 0.10.0
 
 test-suite hello
     import:           warnings
@@ -108,7 +109,6 @@ test-suite memory
     build-depends:    bytestring
     build-depends:    primitive
     build-depends:    wasmtime-hs
-    build-depends:    tasty >= 1.4.3
     build-depends:    tasty-hunit >= 0.10.0
 
 test-suite fuel
@@ -124,7 +124,6 @@ test-suite fuel
     build-depends:    bytestring
     build-depends:    primitive
     build-depends:    wasmtime-hs
-    build-depends:    tasty >= 1.4.3
     build-depends:    tasty-hunit >= 0.10.0
 
 test-suite memtest
@@ -140,7 +139,6 @@ test-suite memtest
     build-depends:    bytestring
     build-depends:    primitive
     build-depends:    wasmtime-hs
-    build-depends:    tasty >= 1.4.3
     build-depends:    tasty-hunit >= 0.10.0
 
 test-suite linker-hello

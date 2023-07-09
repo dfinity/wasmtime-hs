@@ -26,7 +26,7 @@ main = do
   myModule <- handleException $ newModule engine wasm
 
   putStrLn "Creating callback..."
-  func <- newFunc store hello
+  func <- newFuncUnchecked store hello
 
   putStrLn "Instantiating module..."
   inst <- newInstance store myModule [toExtern func] >>= handleException

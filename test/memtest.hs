@@ -29,8 +29,8 @@ main = do
     myModule <- handleException $ newModule engine wasm
 
     for_ ([1 .. 10] :: [Int32]) $ \i -> do
-      fIo <- newFunc s ioImp
-      fPure <- newFunc s pureImp
+      fIo <- newFuncUnchecked s ioImp
+      fPure <- newFuncUnchecked s pureImp
 
       inst <- newInstance s myModule [toExtern fIo, toExtern fPure] >>= handleException
 

@@ -133,6 +133,7 @@ module Wasmtime
     Func,
     getFuncType,
     newFunc,
+    newFuncUnchecked,
     funcToFunction,
 
     -- * Globals
@@ -1380,11 +1381,18 @@ type FuncCallback =
 newFuncCallbackFunPtr :: IORef (IO ()) -> FuncCallback -> IO (FunPtr FuncCallback)
 newFuncCallbackFunPtr finalizeRef callback = mask_ $ do
   funPtr <- mk'wasmtime_func_callback_t callback
-  atomicModifyIORef finalizeRef $ \(finalize :: IO ()) ->
-    (finalize >> freeHaskellFunPtr funPtr, ())
+  registerFreeHaskellFunPtr finalizeRef funPtr
   pure funPtr
 
--- | Insert a new function into the 'Store'.
+registerFreeHaskellFunPtr :: IORef (IO ()) -> FunPtr a -> IO ()
+registerFreeHaskellFunPtr finalizeRef funPtr =
+  atomicModifyIORef finalizeRef $ \(finalize :: IO ()) ->
+    (finalize >> freeHaskellFunPtr funPtr, ())
+
+-- | Creates a new host-defined function.
+--
+-- Inserts a host-defined function into the 'Store' provided which can be used to
+-- then instantiate a module with or define within a 'Linker'.
 newFunc ::
   forall f (params :: [Type]) m s r (results :: [Type]).
   ( Funcable f,
@@ -1447,7 +1455,6 @@ mkCallback ::
   f ->
   FuncCallback
 mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
-  let actualNrOfArgs = fromIntegral nargs
   if actualNrOfArgs /= expectedNrOfArgs
     then
       newTrapPtr $
@@ -1486,6 +1493,128 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
                       ++ show n
                       ++ "!"
   where
+    actualNrOfArgs = fromIntegral nargs
+
+    expectedNrOfArgs = len $ Proxy @params
+    expectedNrOfResults = len $ Proxy @results
+
+    callFunctionOnParams :: List params -> m (Either Trap r)
+    callFunctionOnParams = uncurryList f
+
+type FuncUncheckedCallback =
+  Ptr () -> -- env
+  Ptr C'wasmtime_caller_t -> -- caller
+  Ptr C'wasmtime_val_raw_t -> -- args
+  CSize -> -- nargs
+  IO (Ptr C'wasm_trap_t)
+
+newFuncUncheckedCallbackFunPtr ::
+  IORef (IO ()) -> FuncUncheckedCallback -> IO (FunPtr FuncUncheckedCallback)
+newFuncUncheckedCallbackFunPtr finalizeRef uncheckedCallback = mask_ $ do
+  funPtr <- mk'wasmtime_func_unchecked_callback_t uncheckedCallback
+  registerFreeHaskellFunPtr finalizeRef funPtr
+  pure funPtr
+
+-- | Creates a new host function in the same manner of 'newFunc', but the
+-- function-to-call has no type information available at runtime.
+newFuncUnchecked ::
+  forall f (params :: [Type]) m s r (results :: [Type]).
+  ( Funcable f,
+    Params f ~ params,
+    HListable r,
+    Types r ~ results,
+    Result f ~ m (Either Trap r),
+    Foldr (->) (m (Either Trap r)) params ~ f,
+    Curry params,
+    Vals params,
+    Vals results,
+    Len params,
+    Len results,
+    MonadPrim s m,
+    PrimBase m
+  ) =>
+  Store s ->
+  -- | 'Funcable' Haskell function.
+  f ->
+  m (Func s)
+newFuncUnchecked store f =
+  unsafeIOToPrim $
+    withStore store $ \ctx_ptr ->
+      withFuncType funcType $ \functype_ptr -> do
+        unchecked_callback_funptr :: FunPtr FuncUncheckedCallback <-
+          newFuncUncheckedCallbackFunPtr (storeFinalizeRef store) uncheckedCallback
+        func <- MkFunc <$> mallocForeignPtr
+        withFunc func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+          unsafe'c'wasmtime_func_new_unchecked
+            ctx_ptr
+            functype_ptr
+            unchecked_callback_funptr
+            nullPtr
+            nullFunPtr
+            func_ptr
+          pure func
+  where
+    funcType :: FuncType
+    funcType = newFuncType $ Proxy @f
+
+    uncheckedCallback :: FuncUncheckedCallback
+    uncheckedCallback = mkUncheckedCallback f
+
+mkUncheckedCallback ::
+  forall f (params :: [Type]) m s r (results :: [Type]).
+  ( Funcable f,
+    Params f ~ params,
+    HListable r,
+    Types r ~ results,
+    Result f ~ m (Either Trap r),
+    Foldr (->) (m (Either Trap r)) params ~ f,
+    Curry params,
+    Vals params,
+    Vals results,
+    Len params,
+    Len results,
+    MonadPrim s m,
+    PrimBase m
+  ) =>
+  f ->
+  FuncUncheckedCallback
+mkUncheckedCallback f _env _caller args_and_results_ptr num_args_and_results = do
+  if n < expectedNrOfArgs
+    then
+      newTrapPtr $
+        "Expected "
+          ++ show expectedNrOfArgs
+          ++ " number of arguments but got "
+          ++ show n
+          ++ "!"
+    else do
+      params :: List params <- peekRawVals args_and_results_ptr
+      e <- unsafePrimToIO $ callFunctionOnParams params
+      case e of
+        Left trap ->
+          -- As the docs of <wasmtime_func_callback_t> mention:
+          --
+          -- > This callback can optionally return a wasm_trap_t indicating
+          -- > that a trap should be raised in WebAssembly. It's expected
+          -- > that in this case the caller relinquishes ownership of the
+          -- > trap and it is passed back to the engine.
+          --
+          -- Since trap is a ForeignPtr which will be garbage collected
+          -- later we need to copy the trap to safely hand it to the engine.
+          withTrap trap unsafe'c'wasm_trap_copy
+        Right r -> do
+          if n >= expectedNrOfResults
+            then pokeRawVals args_and_results_ptr (toHList r) $> nullPtr
+            else
+              newTrapPtr $
+                "Expected the number of results to be "
+                  ++ show expectedNrOfResults
+                  ++ " but got "
+                  ++ show n
+                  ++ "!"
+  where
+    n = fromIntegral num_args_and_results
+
     expectedNrOfArgs = len $ Proxy @params
     expectedNrOfResults = len $ Proxy @results
 
