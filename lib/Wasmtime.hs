@@ -16,6 +16,8 @@
 {-# LANGUAGE UndecidableInstances #-}
 
 -- | High-level Haskell API to the wasmtime C API.
+--
+-- <<wasmtime-hs.png wasmtime-hs logo>>
 module Wasmtime
   ( -- * Engine
     Engine,

@@ -12,6 +12,7 @@ category:           System
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
 data-files:         test/*.wat
+extra-doc-files:    *.png
 
 common warnings
     ghc-options: -Wall
