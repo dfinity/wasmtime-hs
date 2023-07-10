@@ -15,4 +15,4 @@ import Bindings.Wasmtime.Error
 #num WASMTIME_VERSION_MINOR
 #num WASMTIME_VERSION_PATCH
 
-#ccall wasmtime_wat2wasm , Ptr CChar -> CSize -> Ptr <wasm_byte_vec_t> -> IO (Ptr <wasmtime_error_t>)
+#ccall_unsafe wasmtime_wat2wasm , Ptr CChar -> CSize -> Ptr <wasm_byte_vec_t> -> IO (Ptr <wasmtime_error_t>)

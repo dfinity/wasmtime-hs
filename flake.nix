@@ -19,7 +19,7 @@
 
         # TODO: filter source to only include files added to git and strip flake.* files.
         src = ./.;
-        wasmtime-hs = haskellPackages.callCabal2nix "wasmtime" src { };
+        wasmtime-hs = haskellPackages.callCabal2nix "wasmtime-hs" src { };
 
         # Builds one of the C examples from $wasmtime/examples.
         c_example = name: pkgs.runCommandCC name

@@ -31,7 +31,7 @@ import Data.Word (Word64)
   Ptr (Ptr <wasm_trap_t>) -> \
   IO (Ptr <wasmtime_error_t>)
 
-#ccall wasmtime_instance_export_get , \
+#ccall_unsafe wasmtime_instance_export_get , \
   Ptr <wasmtime_context_t> -> \
   Ptr <wasmtime_instance_t> -> \
   Ptr CChar -> \
@@ -39,7 +39,7 @@ import Data.Word (Word64)
   Ptr <wasmtime_extern_t> -> \
   IO Bool
 
-#ccall wasmtime_instance_export_nth  , \
+#ccall_unsafe wasmtime_instance_export_nth  , \
   Ptr <wasmtime_context_t> -> \
   Ptr <wasmtime_instance_t> -> \
   CSize -> \

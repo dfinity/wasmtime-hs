@@ -3,42 +3,41 @@
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 
 -- | Haskell translation of: https://docs.wasmtime.dev/examples-c-hello-world.html
+-- but using a 'Linker' to define the "hello" function.
 module Main (main) where
 
 import Control.Exception (Exception, throwIO)
 import qualified Data.ByteString as B
 import Paths_wasmtime_hs (getDataFileName)
+import System.Mem (performGC)
 import Wasmtime
 
 main :: IO ()
 main = do
-  putStrLn "Initializing..."
   engine <- newEngine
 
-  store <- newStore engine >>= handleException
+  linker <- newLinker engine
+  linkerDefineFunc linker "" "hello" hello >>= handleException
 
   helloWatPath <- getDataFileName "test/hello.wat"
   watBytes <- B.readFile helloWatPath
 
   wasm <- handleException $ wat2wasm watBytes
 
-  putStrLn "Compiling module..."
   myModule <- handleException $ newModule engine wasm
 
-  putStrLn "Creating callback..."
-  func <- newFuncUnchecked store hello
+  store <- newStore engine >>= handleException
 
-  putStrLn "Instantiating module..."
-  inst <- newInstance store myModule [toExtern func] >>= handleException
+  inst <- linkerInstantiate linker store myModule >>= handleException
 
-  putStrLn "Extracting export..."
+  -- Force the linker to be garbage collected to test if calling "run" and thus
+  -- "hello" still works as expected.
+  performGC
+
   Just (run :: IO (Either WasmException ())) <-
     getExportedFunction store inst "run"
 
-  putStrLn "Calling export..."
   run >>= handleException
-
-  putStrLn "All finished!"
 
 hello :: IO (Either Trap ())
 hello =

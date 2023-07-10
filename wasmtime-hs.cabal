@@ -1,5 +1,5 @@
 cabal-version:      3.0
-name:               wasmtime
+name:               wasmtime-hs
 version:            0.0.0.0
 synopsis:           Haskell bindings to the wasmtime WASM engine
 homepage:           https://github.com/dfinity/wasmtime-hs
@@ -12,6 +12,11 @@ category:           System
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
 data-files:         test/*.wat
+extra-doc-files:    *.png
+description:
+  High-level Haskell API to wasmtime via its C API.
+
+  <<wasmtime-hs.png wasmtime-hs logo>>
 
 common warnings
     ghc-options: -Wall
@@ -30,6 +35,7 @@ library
     other-modules:    Bindings.Wasmtime.Extern
     other-modules:    Bindings.Wasmtime.Func
     other-modules:    Bindings.Wasmtime.Instance
+    other-modules:    Bindings.Wasmtime.Linker
     other-modules:    Bindings.Wasmtime.Module
     other-modules:    Bindings.Wasmtime.Store
     other-modules:    Bindings.Wasmtime.Trap
@@ -38,15 +44,13 @@ library
     other-modules:    Bindings.Wasmtime.Table
     other-modules:    Bindings.Wasmtime.Global
 
-    build-depends:    base >=4.15
-    build-depends:    bindings-DSL >= 1.0.25
-    build-depends:    bytestring >= 0.11.4
-    build-depends:    primitive >= 0.7.3
-    build-depends:    transformers >= 0.5.6
-    build-depends:    vector >= 0.12.3
-    build-depends:    wide-word >= 0.1.5
-    build-depends:    tasty >= 1.4.3
-    build-depends:    tasty-hunit >= 0.10.0
+    build-depends:    base >=4.15 && < 5
+    build-depends:    bindings-DSL >= 1.0.25 && < 2
+    build-depends:    bytestring >= 0.11.4 && < 1
+    build-depends:    primitive >= 0.7.3 && < 0.9
+    build-depends:    transformers >= 0.5.6 && < 0.7
+    build-depends:    vector >= 0.12.3 && < 0.14
+    build-depends:    wide-word >= 0.1.5 && < 0.2
 
     default-language: Haskell2010
 
@@ -61,12 +65,13 @@ test-suite inc-st
     default-language: Haskell2010
     hs-source-dirs:   test
     main-is:          inc-st.hs
-    other-modules:    Paths_wasmtime
+    other-modules:    Paths_wasmtime_hs
 
     build-depends:    base >=4.15
     build-depends:    bytestring
     build-depends:    primitive
-    build-depends:    wasmtime
+    build-depends:    wasmtime-hs
+    build-depends:    tasty-hunit >= 0.10.0
 
 test-suite hello
     import:           warnings
@@ -75,12 +80,12 @@ test-suite hello
     default-language: Haskell2010
     hs-source-dirs:   test
     main-is:          hello.hs
-    other-modules:    Paths_wasmtime
+    other-modules:    Paths_wasmtime_hs
 
     build-depends:    base >=4.15
     build-depends:    bytestring
     build-depends:    primitive
-    build-depends:    wasmtime
+    build-depends:    wasmtime-hs
 
 test-suite gcd
     import:           warnings
@@ -89,12 +94,12 @@ test-suite gcd
     default-language: Haskell2010
     hs-source-dirs:   test
     main-is:          gcd.hs
-    other-modules:    Paths_wasmtime
+    other-modules:    Paths_wasmtime_hs
 
     build-depends:    base >=4.15
     build-depends:    bytestring
     build-depends:    primitive
-    build-depends:    wasmtime
+    build-depends:    wasmtime-hs
 
 test-suite memory
     import:           warnings
@@ -103,13 +108,12 @@ test-suite memory
     default-language: Haskell2010
     hs-source-dirs:   test
     main-is:          memory.hs
-    other-modules:    Paths_wasmtime
+    other-modules:    Paths_wasmtime_hs
 
     build-depends:    base >=4.15
     build-depends:    bytestring
     build-depends:    primitive
-    build-depends:    wasmtime
-    build-depends:    tasty >= 1.4.3
+    build-depends:    wasmtime-hs
     build-depends:    tasty-hunit >= 0.10.0
 
 test-suite fuel
@@ -119,13 +123,12 @@ test-suite fuel
     default-language: Haskell2010
     hs-source-dirs:   test
     main-is:          fuel.hs
-    other-modules:    Paths_wasmtime
+    other-modules:    Paths_wasmtime_hs
 
     build-depends:    base >=4.15
     build-depends:    bytestring
     build-depends:    primitive
-    build-depends:    wasmtime
-    build-depends:    tasty >= 1.4.3
+    build-depends:    wasmtime-hs
     build-depends:    tasty-hunit >= 0.10.0
 
 test-suite memtest
@@ -135,11 +138,24 @@ test-suite memtest
     default-language: Haskell2010
     hs-source-dirs:   test
     main-is:          memtest.hs
-    other-modules:    Paths_wasmtime
+    other-modules:    Paths_wasmtime_hs
 
     build-depends:    base >=4.15
     build-depends:    bytestring
     build-depends:    primitive
-    build-depends:    wasmtime
-    build-depends:    tasty >= 1.4.3
+    build-depends:    wasmtime-hs
     build-depends:    tasty-hunit >= 0.10.0
+
+test-suite linker-hello
+    import:           warnings
+    type:             exitcode-stdio-1.0
+
+    default-language: Haskell2010
+    hs-source-dirs:   test
+    main-is:          linker-hello.hs
+    other-modules:    Paths_wasmtime_hs
+
+    build-depends:    base >=4.15
+    build-depends:    bytestring
+    build-depends:    primitive
+    build-depends:    wasmtime-hs

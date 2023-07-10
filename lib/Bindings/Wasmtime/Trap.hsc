@@ -25,10 +25,10 @@ import Bindings.Wasm
 #num WASMTIME_TRAP_CODE_INTERRUPT
 #num WASMTIME_TRAP_CODE_OUT_OF_FUEL
 
-#ccall wasmtime_trap_new , Ptr CChar -> CSize -> IO (Ptr <wasm_trap_t>)
+#ccall_unsafe wasmtime_trap_new , Ptr CChar -> CSize -> IO (Ptr <wasm_trap_t>)
 
-#ccall wasmtime_trap_code , Ptr <wasm_trap_t> -> Ptr <wasmtime_trap_code_t> -> IO Bool
+#ccall_unsafe wasmtime_trap_code , Ptr <wasm_trap_t> -> Ptr <wasmtime_trap_code_t> -> IO Bool
 
-#ccall wasmtime_frame_func_name , Ptr <wasm_frame_t> -> IO (Ptr <wasm_name_t>)
+#ccall_unsafe wasmtime_frame_func_name , Ptr <wasm_frame_t> -> IO (Ptr <wasm_name_t>)
 
-#ccall wasmtime_frame_module_name , Ptr <wasm_frame_t> -> IO (Ptr <wasm_name_t>)
+#ccall_unsafe wasmtime_frame_module_name , Ptr <wasm_frame_t> -> IO (Ptr <wasm_name_t>)

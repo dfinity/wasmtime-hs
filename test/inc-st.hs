@@ -9,7 +9,8 @@ import Control.Exception (Exception, throwIO)
 import Control.Monad.ST (ST, runST)
 import qualified Data.ByteString as B
 import Data.STRef
-import Paths_wasmtime (getDataFileName)
+import Paths_wasmtime_hs (getDataFileName)
+import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 
 main :: IO ()
@@ -24,25 +25,23 @@ main = do
 
   myModule :: Module <- handleException $ newModule engine wasm
 
-  let x :: Int
-      x = runST (st engine myModule)
+  let i :: Int
+      i = runST (st engine myModule)
 
-  print x
+  i @?= 2
 
 st :: forall s. Engine -> Module -> ST s Int
 st engine myModule = do
-  store :: Store s <- newStore engine
-
-  ctx :: Context s <- storeContext store
+  Right (store :: Store s) <- newStore engine
 
   stRef :: STRef s Int <- newSTRef 1
 
-  func :: Func s <- newFunc ctx $ inc stRef
+  func :: Func s <- newFuncUnchecked store $ inc stRef
 
-  Right (inst :: Instance s) <- newInstance ctx myModule [toExtern func]
+  Right (inst :: Instance s) <- newInstance store myModule [toExtern func]
 
-  Just (run :: ST s (Either Trap ())) <-
-    getExportedFunction ctx inst "run"
+  Just (run :: ST s (Either WasmException ())) <-
+    getExportedFunction store inst "run"
 
   Right () <- run
 

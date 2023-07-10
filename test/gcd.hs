@@ -8,7 +8,7 @@ module Main (main) where
 import Control.Exception (Exception, throwIO)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
-import Paths_wasmtime (getDataFileName)
+import Paths_wasmtime_hs (getDataFileName)
 import Text.Printf (printf)
 import Wasmtime
 
@@ -16,9 +16,7 @@ main :: IO ()
 main = do
   engine <- newEngine
 
-  store <- newStore engine
-
-  ctx <- storeContext store
+  store <- newStore engine >>= handleException
 
   helloWatPath <- getDataFileName "test/gcd.wat"
   watBytes <- B.readFile helloWatPath
@@ -27,10 +25,10 @@ main = do
 
   myModule <- handleException $ newModule engine wasm
 
-  inst <- newInstance ctx myModule [] >>= handleException
+  inst <- newInstance store myModule [] >>= handleException
 
-  Just (wasmGCD :: Int32 -> Int32 -> IO (Either Trap Int32)) <-
-    getExportedFunction ctx inst "gcd"
+  Just (wasmGCD :: Int32 -> Int32 -> IO (Either WasmException Int32)) <-
+    getExportedFunction store inst "gcd"
 
   let a = 6
       b = 27

@@ -11,7 +11,7 @@ import Control.Monad.Primitive (MonadPrim)
 import qualified Data.ByteString as B
 import Data.Int (Int32)
 import Data.Word (Word8)
-import Paths_wasmtime (getDataFileName)
+import Paths_wasmtime_hs (getDataFileName)
 import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 
@@ -19,29 +19,28 @@ main :: IO ()
 main = do
   putStrLn "Initializing..."
   engine <- newEngine
-  store <- newStore engine
-  ctx <- storeContext store
+  store <- newStore engine >>= handleException
   wasm <- wasmFromPath "test/memory.wat"
 
   putStrLn "Compiling module..."
   myModule <- handleWasmtimeError $ newModule engine wasm
 
   putStrLn "Instantiating module..."
-  inst <- newInstance ctx myModule [] >>= handleException
+  inst <- newInstance store myModule [] >>= handleException
 
   putStrLn "Extracting exports..."
-  Just memory <- getExportedMemory ctx inst "memory"
-  Just (sizeFun :: IO (Either Trap Int32)) <-
-    getExportedFunction ctx inst "size"
-  Just (loadFun :: Int32 -> IO (Either Trap Int32)) <-
-    getExportedFunction ctx inst "load"
-  Just (storeFun :: Int32 -> Int32 -> IO (Either Trap ())) <-
-    getExportedFunction ctx inst "store"
+  Just memory <- getExportedMemory store inst "memory"
+  Just (sizeFun :: IO (Either WasmException Int32)) <-
+    getExportedFunction store inst "size"
+  Just (loadFun :: Int32 -> IO (Either WasmException Int32)) <-
+    getExportedFunction store inst "load"
+  Just (storeFun :: Int32 -> Int32 -> IO (Either WasmException ())) <-
+    getExportedFunction store inst "store"
 
   putStrLn "Checking memory..."
-  2 <- getMemorySizePages ctx memory
-  0x20000 <- getMemorySizeBytes ctx memory
-  mem_bs <- readMemory ctx memory
+  2 <- getMemorySizePages store memory
+  0x20000 <- getMemorySizeBytes store memory
+  mem_bs <- readMemory store memory
   B.head mem_bs @?= 0
   B.index mem_bs 0x1000 @?= 1
   B.index mem_bs 0x1003 @?= 4
@@ -50,37 +49,37 @@ main = do
   Right 1 <- loadFun 0x1000
   Right 4 <- loadFun 0x1003
   Right 0 <- loadFun 0x1ffff
-  Left trap_res <- loadFun 0x20000
+  Left (Trap trap_res) <- loadFun 0x20000
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
 
   putStrLn "Mutating memory..."
-  Right () <- writeByte ctx memory 0x1003 5
+  Right () <- writeByte store memory 0x1003 5
   Right _ <- storeFun 0x1002 6
-  Left trap_res <- storeFun 0x20000 0
+  Left (Trap trap_res) <- storeFun 0x20000 0
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
-  mem_bs <- readMemory ctx memory
+  mem_bs <- readMemory store memory
   B.index mem_bs 0x1002 @?= 6
   B.index mem_bs 0x1003 @?= 5
   Right 6 <- loadFun 0x1002
   Right 5 <- loadFun 0x1003
 
   putStrLn "Growing memory..."
-  Right 2 <- growMemory ctx memory 1
-  3 <- getMemorySizePages ctx memory
-  0x30000 <- getMemorySizeBytes ctx memory
+  Right 2 <- growMemory store memory 1
+  3 <- getMemorySizePages store memory
+  0x30000 <- getMemorySizeBytes store memory
   Right 0 <- loadFun 0x20000
   Right () <- storeFun 0x20000 0
-  Left trap_res <- loadFun 0x30000
+  Left (Trap trap_res) <- loadFun 0x30000
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
-  Left trap_res <- storeFun 0x30000 0
+  Left (Trap trap_res) <- storeFun 0x30000 0
   trapCode trap_res @?= Just TRAP_CODE_MEMORY_OUT_OF_BOUNDS
-  Left _ <- growMemory ctx memory 1
-  Right 3 <- growMemory ctx memory 0
+  Left _ <- growMemory store memory 1
+  Right 3 <- growMemory store memory 0
 
   putStrLn "Creating stand-alone memory..."
   let mem_type = newMemoryType 5 (Just 5) Bit32
-  Right memory2 <- newMemory ctx mem_type
-  5 <- getMemorySizePages ctx memory2
+  Right memory2 <- newMemory store mem_type
+  5 <- getMemorySizePages store memory2
 
   putStrLn "Shutting down..."
   putStrLn "Done."
@@ -98,9 +97,9 @@ wasmFromPath path = do
 
 writeByte ::
   MonadPrim s m =>
-  Context s ->
+  Store s ->
   Memory s ->
   Int ->
   Word8 ->
   m (Either MemoryAccessError ())
-writeByte ctx mem offset byte = writeMemory ctx mem offset $ B.singleton byte
+writeByte store mem offset byte = writeMemory store mem offset $ B.singleton byte
