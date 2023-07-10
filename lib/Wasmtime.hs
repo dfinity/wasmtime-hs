@@ -1243,12 +1243,40 @@ class Val a where
   kind :: Proxy a -> C'wasm_valkind_t
 
   pokeVal :: Ptr C'wasmtime_val_t -> a -> IO ()
+  peekVal :: Ptr C'wasmtime_val_t -> MaybeT IO a
+  uncheckedPeekVal :: Ptr C'wasmtime_val_t -> IO a
+
+  pokeRawVal :: Store s -> Ptr C'wasmtime_val_raw_t -> a -> IO ()
+  peekRawVal :: Store s -> Ptr C'wasmtime_val_raw_t -> IO a
+
   default pokeVal :: (Storable a) => Ptr C'wasmtime_val_t -> a -> IO ()
   pokeVal val_ptr x = do
     poke (p'wasmtime_val'kind val_ptr) $ kind $ Proxy @a
     let p :: Ptr C'wasmtime_valunion_t
         p = p'wasmtime_val'of val_ptr
     poke (castPtr p) x
+
+  default peekVal :: (Storable a) => Ptr C'wasmtime_val_t -> MaybeT IO a
+  peekVal val_ptr = do
+    k :: C'wasmtime_valkind_t <- liftIO $ peek $ p'wasmtime_val'kind val_ptr
+    guard $ kind (Proxy @a) == k
+    liftIO $ uncheckedPeekVal val_ptr
+
+  default uncheckedPeekVal :: (Storable a) => Ptr C'wasmtime_val_t -> IO a
+  uncheckedPeekVal val_ptr = do
+    let valunion_ptr :: Ptr C'wasmtime_valunion_t
+        valunion_ptr = p'wasmtime_val'of val_ptr
+
+        hs_val_ptr :: Ptr a
+        hs_val_ptr = castPtr valunion_ptr
+
+    peek hs_val_ptr
+
+  default pokeRawVal :: (Storable a) => Store s -> Ptr C'wasmtime_val_raw_t -> a -> IO ()
+  pokeRawVal _store = poke . castPtr
+
+  default peekRawVal :: (Storable a) => Store s -> Ptr C'wasmtime_val_raw_t -> IO a
+  peekRawVal _store = peek . castPtr
 
 instance Val Int32 where kind _proxy = c'WASMTIME_I32
 
@@ -1271,6 +1299,30 @@ instance Val (Func s) where
           p = p'wasmtime_val'of val_ptr
       copy (castPtr p) func_ptr
 
+  peekVal val_ptr = do
+    k :: C'wasmtime_valkind_t <- liftIO $ peek $ p'wasmtime_val'kind val_ptr
+    guard $ kind (Proxy @(Func s)) == k
+    liftIO $ uncheckedPeekVal val_ptr
+
+  uncheckedPeekVal val_ptr = do
+    func <- MkFunc <$> mallocForeignPtr
+    withFunc func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+      copy func_ptr $ castPtr $ p'wasmtime_val'of val_ptr
+      pure func
+
+  pokeRawVal store val_raw_ptr func =
+    withStore store $ \ctx_ptr ->
+      withFunc func $ unsafe'c'wasmtime_func_to_raw ctx_ptr >=> copy (castPtr val_raw_ptr)
+
+  peekRawVal store val_raw_ptr =
+    withStore store $ \ctx_ptr -> do
+      func <- MkFunc <$> mallocForeignPtr
+      withFunc func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+        let raw_func_ptr :: Ptr ()
+            raw_func_ptr = castPtr val_raw_ptr
+        unsafe'c'wasmtime_func_from_raw ctx_ptr raw_func_ptr func_ptr
+        pure func
+
 instance Val (Ptr C'wasmtime_externref_t) where kind _proxy = c'WASMTIME_EXTERNREF
 
 -- | Class of types (of kind list of types) that can be passed and returned from
@@ -1279,17 +1331,17 @@ class Vals (v :: [Type]) where
   pokeValTypes :: Ptr (Ptr C'wasm_valtype_t) -> Proxy v -> IO ()
   pokeVals :: Ptr C'wasmtime_val_t -> List v -> IO ()
   peekVals :: Ptr C'wasmtime_val_t -> MaybeT IO (List v)
-  pokeRawVals :: Ptr C'wasmtime_val_raw_t -> List v -> IO ()
-  peekRawVals :: Ptr C'wasmtime_val_raw_t -> IO (List v)
+  pokeRawVals :: Store s -> Ptr C'wasmtime_val_raw_t -> List v -> IO ()
+  peekRawVals :: Store s -> Ptr C'wasmtime_val_raw_t -> IO (List v)
 
 instance Vals '[] where
   pokeValTypes _valtypes_ptr_ptr _proxy = pure ()
   pokeVals _vals_ptr Nil = pure ()
   peekVals _vals_ptr = pure Nil
-  pokeRawVals _raw_vals_ptr Nil = pure ()
-  peekRawVals _raw_vals_ptr = pure Nil
+  pokeRawVals _store _raw_vals_ptr Nil = pure ()
+  peekRawVals _store _raw_vals_ptr = pure Nil
 
-instance (Val v, Storable v, Vals vs) => Vals (v ': vs) where
+instance (Val v, Vals vs) => Vals (v ': vs) where
   pokeValTypes valtypes_ptr_ptr _proxy = do
     valtype_ptr <- unsafe'c'wasm_valtype_new $ kind $ Proxy @v
     poke valtypes_ptr_ptr valtype_ptr
@@ -1299,34 +1351,19 @@ instance (Val v, Storable v, Vals vs) => Vals (v ': vs) where
     pokeVal vals_ptr v
     pokeVals (advancePtr vals_ptr 1) vs
 
-  peekVals vals_ptr = do
-    k :: C'wasmtime_valkind_t <- liftIO $ peek $ p'wasmtime_val'kind vals_ptr
-    guard $ kind (Proxy @v) == k
-
-    let valunion_ptr :: Ptr C'wasmtime_valunion_t
-        valunion_ptr = p'wasmtime_val'of vals_ptr
-
-        val_ptr :: Ptr v
-        val_ptr = castPtr valunion_ptr
-
+  peekVals vals_ptr =
     (:.)
-      <$> liftIO (peek val_ptr)
+      <$> peekVal vals_ptr
       <*> peekVals (advancePtr vals_ptr 1)
 
-  pokeRawVals raw_vals_ptr (v :. vs) = do
-    poke (castPtr raw_vals_ptr) v
-    pokeRawVals (advancePtr raw_vals_ptr 1) vs
+  pokeRawVals store raw_vals_ptr (v :. vs) = do
+    pokeRawVal store raw_vals_ptr v
+    pokeRawVals store (advancePtr raw_vals_ptr 1) vs
 
-  peekRawVals raw_vals_ptr =
+  peekRawVals store raw_vals_ptr =
     (:.)
-      <$> peek (castPtr raw_vals_ptr)
-      <*> peekRawVals (advancePtr raw_vals_ptr 1)
-
-uncheckedPeekVal :: forall r. (Val r, Storable r) => Ptr C'wasmtime_val_t -> IO r
-uncheckedPeekVal val_ptr = peek (castPtr of_ptr :: Ptr r)
-  where
-    of_ptr :: Ptr C'wasmtime_valunion_t
-    of_ptr = p'wasmtime_val'of val_ptr
+      <$> peekRawVal store raw_vals_ptr
+      <*> peekRawVals store (advancePtr raw_vals_ptr 1)
 
 peekTableVal :: Ptr C'wasmtime_val_t -> IO TableValue
 peekTableVal val_ptr = do
@@ -1558,7 +1595,7 @@ newFuncUnchecked store f =
     funcType = newFuncType $ Proxy @f
 
     uncheckedCallback :: FuncUncheckedCallback
-    uncheckedCallback = mkUncheckedCallback f
+    uncheckedCallback = mkUncheckedCallback store f
 
 mkUncheckedCallback ::
   forall f (params :: [Type]) m s r (results :: [Type]).
@@ -1576,9 +1613,10 @@ mkUncheckedCallback ::
     MonadPrim s m,
     PrimBase m
   ) =>
+  Store s ->
   f ->
   FuncUncheckedCallback
-mkUncheckedCallback f _env _caller args_and_results_ptr num_args_and_results = do
+mkUncheckedCallback store f _env _caller args_and_results_ptr num_args_and_results = do
   if n < expectedNrOfArgs
     then
       newTrapPtr $
@@ -1588,7 +1626,7 @@ mkUncheckedCallback f _env _caller args_and_results_ptr num_args_and_results = d
           ++ show n
           ++ "!"
     else do
-      params :: List params <- peekRawVals args_and_results_ptr
+      params :: List params <- peekRawVals store args_and_results_ptr
       e <- unsafePrimToIO $ callFunctionOnParams params
       case e of
         Left trap ->
@@ -1604,7 +1642,7 @@ mkUncheckedCallback f _env _caller args_and_results_ptr num_args_and_results = d
           withTrap trap unsafe'c'wasm_trap_copy
         Right r -> do
           if n >= expectedNrOfResults
-            then pokeRawVals args_and_results_ptr (toHList r) $> nullPtr
+            then pokeRawVals store args_and_results_ptr (toHList r) $> nullPtr
             else
               newTrapPtr $
                 "Expected the number of results to be "
@@ -1694,7 +1732,7 @@ callFunc store func = curryList callFuncOnParams
         withStore store $ \ctx_ptr ->
           withFunc func $ \func_ptr ->
             allocaArray n $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
-              pokeRawVals args_and_results_ptr params
+              pokeRawVals store args_and_results_ptr params
               handleTrap $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
                 liftIO
                   ( c'wasmtime_func_call_unchecked
@@ -1705,7 +1743,7 @@ callFunc store func = curryList callFuncOnParams
                       trap_ptr_ptr
                   )
                   >>= checkWasmtimeErrorT
-                results :: List results <- liftIO $ peekRawVals args_and_results_ptr
+                results :: List results <- liftIO $ peekRawVals store args_and_results_ptr
                 pure (fromHList results :: r)
 
     n :: Int
@@ -1850,7 +1888,7 @@ withTypedGlobal = withGlobal . unTypedGlobal
 -- store ('Store').
 newTypedGlobal ::
   forall s m a.
-  (MonadPrim s m, Val a, Storable a) =>
+  (MonadPrim s m, Val a) =>
   Store s ->
   -- | Specifies whether the global can be mutated or not.
   Mutability ->
@@ -1874,7 +1912,7 @@ newTypedGlobal store mutability x =
 
 -- | Returns the current value of the given typed global.
 typedGlobalGet ::
-  (MonadPrim s m, Val a, Storable a) =>
+  (MonadPrim s m, Val a) =>
   Store s ->
   TypedGlobal s a ->
   m a
@@ -1891,7 +1929,7 @@ typedGlobalGet store typedGlobal =
 -- Returns an error if it’s not a mutable global, or if value comes from a
 -- different store than the one provided.
 typedGlobalSet ::
-  (MonadPrim s m, Val a, Storable a) =>
+  (MonadPrim s m, Val a) =>
   Store s ->
   TypedGlobal s a ->
   a ->

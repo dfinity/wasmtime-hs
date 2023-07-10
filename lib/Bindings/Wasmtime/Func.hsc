@@ -95,7 +95,8 @@ import Bindings.Wasmtime.Store
   Ptr <wasmtime_extern_t> -> \
   IO Bool
 
-#ccall_unsafe wasmtime_caller_context , Ptr <wasmtime_caller_t> -> IO (Ptr <wasmtime_context_t>)
+#ccall_unsafe wasmtime_caller_context , \
+  Ptr <wasmtime_caller_t> -> IO (Ptr <wasmtime_context_t>)
 
 #ccall_unsafe wasmtime_func_from_raw , \
   Ptr <wasmtime_context_t> -> \
