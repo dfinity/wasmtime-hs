@@ -13,6 +13,10 @@ build-type:         Simple
 extra-doc-files:    CHANGELOG.md
 data-files:         test/*.wat
 extra-doc-files:    *.png
+description:
+  High-level Haskell API to wasmtime via its C API.
+
+  <<wasmtime-hs.png wasmtime-hs logo>>
 
 common warnings
     ghc-options: -Wall

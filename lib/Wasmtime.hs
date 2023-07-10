@@ -15,7 +15,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
--- | High-level Haskell API to the wasmtime C API.
+-- | High-level Haskell API to the <https://wasmtime.dev/ wasmtime> C API.
 --
 -- <<wasmtime-hs.png wasmtime-hs logo>>
 module Wasmtime
