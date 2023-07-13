@@ -1650,8 +1650,7 @@ funcToFunction ::
   forall f m s.
   ( Funcable f,
     Action f ~ m (Either WasmException (Result f)),
-    MonadPrim s m,
-    PrimBase m
+    MonadPrim s m
   ) =>
   Store s ->
   -- | WASM function.
@@ -1670,8 +1669,7 @@ callFunc ::
   forall f m s.
   ( Funcable f,
     Action f ~ m (Either WasmException (Result f)),
-    MonadPrim s m,
-    PrimBase m
+    MonadPrim s m
   ) =>
   Store s ->
   -- | See 'funcToFunction'.
@@ -2529,8 +2527,7 @@ getExportedFunction ::
   forall f m s.
   ( Funcable f,
     Action f ~ m (Either WasmException (Result f)),
-    MonadPrim s m,
-    PrimBase m
+    MonadPrim s m
   ) =>
   Store s ->
   Instance s ->
