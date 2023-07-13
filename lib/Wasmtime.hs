@@ -1524,7 +1524,7 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
     expectedNrOfArgs = len $ Proxy @(Params f)
     expectedNrOfResults = len $ Proxy @(Types (Result f))
 
-    callFunctionOnParams :: List (Params f) -> Action f
+    callFunctionOnParams :: List (Params f) -> m (Either Trap (Result f))
     callFunctionOnParams = uncurryList f
 
 type FuncUncheckedCallback =
@@ -1627,7 +1627,7 @@ mkUncheckedCallback store f _env _caller args_and_results_ptr num_args_and_resul
     expectedNrOfArgs = len $ Proxy @(Params f)
     expectedNrOfResults = len $ Proxy @(Types (Result f))
 
-    callFunctionOnParams :: List (Params f) -> Action f
+    callFunctionOnParams :: List (Params f) -> m (Either Trap (Result f))
     callFunctionOnParams = uncurryList f
 
 -- | Converts a 'Func' into the Haskell function @f@.
