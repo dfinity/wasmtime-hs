@@ -1110,21 +1110,12 @@ newFuncTypeFromPtr = fmap FuncType . newForeignPtr unsafe'p'wasm_functype_delete
 --
 -- Prints: @Proxy @'[Int32, Float] '.->.' Proxy @'[Word128, Double, Int64]@
 newFuncType ::
-  forall f (params :: [Type]) m e r (results :: [Type]).
-  ( Funcable f,
-    Params f ~ params,
-    HListable r,
-    Types r ~ results,
-    Result f ~ m (Either e r),
-    Vals params,
-    Vals results,
-    Len params,
-    Len results
-  ) =>
+  forall f.
+  (Funcable f) =>
   -- | Proxy of the Haskell function type @f@.
   Proxy f ->
   FuncType
-newFuncType _proxy = Proxy @params .->. Proxy @results
+newFuncType _proxy = Proxy @(Params f) .->. Proxy @(Types (Result f))
 
 infixr 0 .->.
 
@@ -1178,21 +1169,35 @@ unmarshalValTypeVec valtype_vec_ptr = do
 
 -- | Class of Haskell functions / actions that can be imported into and exported
 -- from WASM modules.
-class Funcable f where
+class
+  ( Vals (Params f),
+    Vals (Types (Result f)),
+    Len (Params f),
+    Len (Types (Result f)),
+    HListable (Result f),
+    Curry (Params f),
+    f ~ Foldr (->) (Action f) (Params f)
+  ) =>
+  Funcable f
+  where
   type Params f :: [Type]
+  type Action f :: Type
   type Result f :: Type
 
-instance Funcable b => Funcable (a -> b) where
+instance (Val a, Funcable b) => Funcable (a -> b) where
   type Params (a -> b) = a ': Params b
+  type Action (a -> b) = Action b
   type Result (a -> b) = Result b
 
-instance (HListable r, Types r ~ results, Vals results) => Funcable (IO (Either e r)) where
+instance (HListable r, Vals (Types r), Len (Types r)) => Funcable (IO (Either e r)) where
   type Params (IO (Either e r)) = '[]
-  type Result (IO (Either e r)) = IO (Either e r)
+  type Action (IO (Either e r)) = IO (Either e r)
+  type Result (IO (Either e r)) = r
 
-instance (HListable r, Types r ~ results, Vals results) => Funcable (ST s (Either e r)) where
+instance (HListable r, Vals (Types r), Len (Types r)) => Funcable (ST s (Either e r)) where
   type Params (ST s (Either e r)) = '[]
-  type Result (ST s (Either e r)) = ST s (Either e r)
+  type Action (ST s (Either e r)) = ST s (Either e r)
+  type Result (ST s (Either e r)) = r
 
 -- | Type of values that:
 --
@@ -1433,18 +1438,9 @@ registerFreeHaskellFunPtr finalizeRef funPtr =
 -- Inserts a host-defined function into the 'Store' provided which can be used to
 -- then instantiate a module with or define within a 'Linker'.
 newFunc ::
-  forall f (params :: [Type]) m s r (results :: [Type]).
+  forall f m s.
   ( Funcable f,
-    Params f ~ params,
-    HListable r,
-    Types r ~ results,
-    Result f ~ m (Either Trap r),
-    Foldr (->) (m (Either Trap r)) params ~ f,
-    Curry params,
-    Vals params,
-    Vals results,
-    Len params,
-    Len results,
+    Action f ~ m (Either Trap (Result f)),
     MonadPrim s m,
     PrimBase m
   ) =>
@@ -1476,18 +1472,9 @@ newFunc store f =
     callback = mkCallback f
 
 mkCallback ::
-  forall f (params :: [Type]) m s r (results :: [Type]).
+  forall f m s.
   ( Funcable f,
-    Params f ~ params,
-    HListable r,
-    Types r ~ results,
-    Result f ~ m (Either Trap r),
-    Foldr (->) (m (Either Trap r)) params ~ f,
-    Curry params,
-    Vals params,
-    Vals results,
-    Len params,
-    Len results,
+    Action f ~ m (Either Trap (Result f)),
     MonadPrim s m,
     PrimBase m
   ) =>
@@ -1506,7 +1493,7 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
       mbParams <- runMaybeT $ peekVals params_ptr
       case mbParams of
         Nothing -> newTrapPtr "ValType mismatch!"
-        Just (params :: List params) -> do
+        Just params -> do
           e <- unsafePrimToIO $ callFunctionOnParams params
           case e of
             Left trap ->
@@ -1534,10 +1521,10 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
   where
     actualNrOfArgs = fromIntegral nargs
 
-    expectedNrOfArgs = len $ Proxy @params
-    expectedNrOfResults = len $ Proxy @results
+    expectedNrOfArgs = len $ Proxy @(Params f)
+    expectedNrOfResults = len $ Proxy @(Types (Result f))
 
-    callFunctionOnParams :: List params -> m (Either Trap r)
+    callFunctionOnParams :: List (Params f) -> m (Either Trap (Result f))
     callFunctionOnParams = uncurryList f
 
 type FuncUncheckedCallback =
@@ -1557,18 +1544,9 @@ newFuncUncheckedCallbackFunPtr finalizeRef uncheckedCallback = mask_ $ do
 -- | Creates a new host function in the same manner of 'newFunc', but the
 -- function-to-call has no type information available at runtime.
 newFuncUnchecked ::
-  forall f (params :: [Type]) m s r (results :: [Type]).
+  forall f m s.
   ( Funcable f,
-    Params f ~ params,
-    HListable r,
-    Types r ~ results,
-    Result f ~ m (Either Trap r),
-    Foldr (->) (m (Either Trap r)) params ~ f,
-    Curry params,
-    Vals params,
-    Vals results,
-    Len params,
-    Len results,
+    Action f ~ m (Either Trap (Result f)),
     MonadPrim s m,
     PrimBase m
   ) =>
@@ -1600,18 +1578,9 @@ newFuncUnchecked store f =
     uncheckedCallback = mkUncheckedCallback store f
 
 mkUncheckedCallback ::
-  forall f (params :: [Type]) m s r (results :: [Type]).
+  forall f m s.
   ( Funcable f,
-    Params f ~ params,
-    HListable r,
-    Types r ~ results,
-    Result f ~ m (Either Trap r),
-    Foldr (->) (m (Either Trap r)) params ~ f,
-    Curry params,
-    Vals params,
-    Vals results,
-    Len params,
-    Len results,
+    Action f ~ m (Either Trap (Result f)),
     MonadPrim s m,
     PrimBase m
   ) =>
@@ -1628,7 +1597,7 @@ mkUncheckedCallback store f _env _caller args_and_results_ptr num_args_and_resul
           ++ show n
           ++ "!"
     else do
-      params :: List params <- peekRawVals store args_and_results_ptr
+      params <- peekRawVals store args_and_results_ptr
       e <- unsafePrimToIO $ callFunctionOnParams params
       case e of
         Left trap ->
@@ -1655,10 +1624,10 @@ mkUncheckedCallback store f _env _caller args_and_results_ptr num_args_and_resul
   where
     n = fromIntegral num_args_and_results
 
-    expectedNrOfArgs = len $ Proxy @params
-    expectedNrOfResults = len $ Proxy @results
+    expectedNrOfArgs = len $ Proxy @(Params f)
+    expectedNrOfResults = len $ Proxy @(Types (Result f))
 
-    callFunctionOnParams :: List params -> m (Either Trap r)
+    callFunctionOnParams :: List (Params f) -> m (Either Trap (Result f))
     callFunctionOnParams = uncurryList f
 
 -- | Converts a 'Func' into the Haskell function @f@.
@@ -1678,20 +1647,10 @@ mkUncheckedCallback store f _env _caller args_and_results_ptr num_args_and_resul
 --     print r -- prints "Right 3"
 -- @
 funcToFunction ::
-  forall f (params :: [Type]) m s r (results :: [Type]).
+  forall f m s.
   ( Funcable f,
-    Params f ~ params,
-    HListable r,
-    Types r ~ results,
-    Result f ~ m (Either WasmException r),
-    Foldr (->) (m (Either WasmException r)) params ~ f,
-    Curry params,
-    Vals params,
-    Vals results,
-    Len params,
-    Len results,
-    MonadPrim s m,
-    PrimBase m
+    Action f ~ m (Either WasmException (Result f)),
+    MonadPrim s m
   ) =>
   Store s ->
   -- | WASM function.
@@ -1707,20 +1666,10 @@ funcToFunction store func = do
     expectedFuncType = newFuncType $ Proxy @f
 
 callFunc ::
-  forall f (params :: [Type]) m s r (results :: [Type]).
+  forall f m s.
   ( Funcable f,
-    Params f ~ params,
-    HListable r,
-    Types r ~ results,
-    Result f ~ m (Either WasmException r),
-    Foldr (->) (m (Either WasmException r)) params ~ f,
-    Curry params,
-    Vals params,
-    Vals results,
-    Len params,
-    Len results,
-    MonadPrim s m,
-    PrimBase m
+    Action f ~ m (Either WasmException (Result f)),
+    MonadPrim s m
   ) =>
   Store s ->
   -- | See 'funcToFunction'.
@@ -1728,7 +1677,7 @@ callFunc ::
   f
 callFunc store func = curryList callFuncOnParams
   where
-    callFuncOnParams :: List params -> m (Either WasmException r)
+    callFuncOnParams :: List (Params f) -> m (Either WasmException (Result f))
     callFuncOnParams params =
       unsafeIOToPrim $
         withStore store $ \ctx_ptr ->
@@ -1745,11 +1694,9 @@ callFunc store func = curryList callFuncOnParams
                       trap_ptr_ptr
                   )
                   >>= checkWasmtimeErrorT
-                results :: List results <- liftIO $ peekRawVals store args_and_results_ptr
-                pure (fromHList results :: r)
-
+                fmap fromHList $ liftIO $ peekRawVals store args_and_results_ptr
     n :: Int
-    n = max (len $ Proxy @params) (len $ Proxy @results)
+    n = max (len $ Proxy @(Params f)) (len $ Proxy @(Types (Result f)))
 
 --------------------------------------------------------------------------------
 -- Globals
@@ -2577,20 +2524,10 @@ fromExternPtr extern_ptr = do
 -- the 'Func' to the Haskell function @f@ in case their types match
 -- ('funcToFunction').
 getExportedFunction ::
-  forall f (params :: [Type]) m s r (results :: [Type]).
+  forall f m s.
   ( Funcable f,
-    Params f ~ params,
-    HListable r,
-    Types r ~ results,
-    Result f ~ m (Either WasmException r),
-    Foldr (->) (m (Either WasmException r)) params ~ f,
-    Curry params,
-    Vals params,
-    Vals results,
-    Len params,
-    Len results,
-    MonadPrim s m,
-    PrimBase m
+    Action f ~ m (Either WasmException (Result f)),
+    MonadPrim s m
   ) =>
   Store s ->
   Instance s ->
@@ -2788,18 +2725,9 @@ linkerDefine linker store modName name extern =
 -- For more information about name resolution consult the
 -- <https://docs.wasmtime.dev/api/wasmtime/struct.Linker.html#name-resolution Rust documentation>.
 linkerDefineFunc ::
-  forall f (params :: [Type]) m s r (results :: [Type]).
+  forall f m s.
   ( Funcable f,
-    Params f ~ params,
-    HListable r,
-    Types r ~ results,
-    Result f ~ m (Either Trap r),
-    Foldr (->) (m (Either Trap r)) params ~ f,
-    Curry params,
-    Vals params,
-    Vals results,
-    Len params,
-    Len results,
+    Action f ~ m (Either Trap (Result f)),
     MonadPrim s m,
     PrimBase m
   ) =>
