@@ -1115,15 +1115,7 @@ newFuncType ::
   -- | Proxy of the Haskell function type @f@.
   Proxy f ->
   FuncType
-newFuncType _proxy = funcType
-  where
-    funcType ::
-      forall (params :: [Type]) (results :: [Type]).
-      ( Params f ~ params,
-        Results f ~ results
-      ) =>
-      FuncType
-    funcType = Proxy @params .->. Proxy @results
+newFuncType _proxy = Proxy @(Params f) .->. Proxy @(Types (Result f))
 
 infixr 0 .->.
 
@@ -1179,11 +1171,10 @@ unmarshalValTypeVec valtype_vec_ptr = do
 -- from WASM modules.
 class
   ( Vals (Params f),
-    Vals (Results f),
+    Vals (Types (Result f)),
     Len (Params f),
-    Len (Results f),
+    Len (Types (Result f)),
     HListable (Result f),
-    Types (Result f) ~ Results f,
     Curry (Params f),
     f ~ Foldr (->) (Action f) (Params f)
   ) =>
@@ -1192,25 +1183,21 @@ class
   type Params f :: [Type]
   type Action f :: Type
   type Result f :: Type
-  type Results f :: [Type]
 
 instance (Val a, Funcable b) => Funcable (a -> b) where
   type Params (a -> b) = a ': Params b
   type Action (a -> b) = Action b
   type Result (a -> b) = Result b
-  type Results (a -> b) = Results b
 
 instance (HListable r, Vals (Types r), Len (Types r)) => Funcable (IO (Either e r)) where
   type Params (IO (Either e r)) = '[]
   type Action (IO (Either e r)) = IO (Either e r)
   type Result (IO (Either e r)) = r
-  type Results (IO (Either e r)) = Types r
 
 instance (HListable r, Vals (Types r), Len (Types r)) => Funcable (ST s (Either e r)) where
   type Params (ST s (Either e r)) = '[]
   type Action (ST s (Either e r)) = ST s (Either e r)
   type Result (ST s (Either e r)) = r
-  type Results (ST s (Either e r)) = Types r
 
 -- | Type of values that:
 --
@@ -1523,7 +1510,7 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
             Right (r :: Result f) -> do
               let n = fromIntegral nresults
               if n == expectedNrOfResults
-                then pokeVals result_ptr (toHList r :: List (Results f)) $> nullPtr
+                then pokeVals result_ptr (toHList r :: List (Types (Result f))) $> nullPtr
                 else
                   newTrapPtr $
                     "Expected the number of results to be "
@@ -1535,7 +1522,7 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
     actualNrOfArgs = fromIntegral nargs
 
     expectedNrOfArgs = len $ Proxy @(Params f)
-    expectedNrOfResults = len $ Proxy @(Results f)
+    expectedNrOfResults = len $ Proxy @(Types (Result f))
 
     callFunctionOnParams :: List (Params f) -> Action f
     callFunctionOnParams = uncurryList f
@@ -1638,7 +1625,7 @@ mkUncheckedCallback store f _env _caller args_and_results_ptr num_args_and_resul
     n = fromIntegral num_args_and_results
 
     expectedNrOfArgs = len $ Proxy @(Params f)
-    expectedNrOfResults = len $ Proxy @(Results f)
+    expectedNrOfResults = len $ Proxy @(Types (Result f))
 
     callFunctionOnParams :: List (Params f) -> Action f
     callFunctionOnParams = uncurryList f
@@ -1709,11 +1696,11 @@ callFunc store func = curryList callFuncOnParams
                       trap_ptr_ptr
                   )
                   >>= checkWasmtimeErrorT
-                results :: List (Results f) <- liftIO $ peekRawVals store args_and_results_ptr
+                results :: List (Types (Result f)) <- liftIO $ peekRawVals store args_and_results_ptr
                 pure (fromHList results :: Result f)
 
     n :: Int
-    n = max (len $ Proxy @(Params f)) (len $ Proxy @(Results f))
+    n = max (len $ Proxy @(Params f)) (len $ Proxy @(Types (Result f)))
 
 --------------------------------------------------------------------------------
 -- Globals
