@@ -1493,7 +1493,7 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
       mbParams <- runMaybeT $ peekVals params_ptr
       case mbParams of
         Nothing -> newTrapPtr "ValType mismatch!"
-        Just (params :: List (Params f)) -> do
+        Just params -> do
           e <- unsafePrimToIO $ callFunctionOnParams params
           case e of
             Left trap ->
@@ -1507,10 +1507,10 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
               -- Since trap is a ForeignPtr which will be garbage collected
               -- later we need to copy the trap to safely hand it to the engine.
               withTrap trap unsafe'c'wasm_trap_copy
-            Right (r :: Result f) -> do
+            Right r -> do
               let n = fromIntegral nresults
               if n == expectedNrOfResults
-                then pokeVals result_ptr (toHList r :: List (Types (Result f))) $> nullPtr
+                then pokeVals result_ptr (toHList r) $> nullPtr
                 else
                   newTrapPtr $
                     "Expected the number of results to be "
@@ -1597,7 +1597,7 @@ mkUncheckedCallback store f _env _caller args_and_results_ptr num_args_and_resul
           ++ show n
           ++ "!"
     else do
-      params :: List (Params f) <- peekRawVals store args_and_results_ptr
+      params <- peekRawVals store args_and_results_ptr
       e <- unsafePrimToIO $ callFunctionOnParams params
       case e of
         Left trap ->
@@ -1696,9 +1696,7 @@ callFunc store func = curryList callFuncOnParams
                       trap_ptr_ptr
                   )
                   >>= checkWasmtimeErrorT
-                results :: List (Types (Result f)) <- liftIO $ peekRawVals store args_and_results_ptr
-                pure (fromHList results :: Result f)
-
+                fmap fromHList $ liftIO $ peekRawVals store args_and_results_ptr
     n :: Int
     n = max (len $ Proxy @(Params f)) (len $ Proxy @(Types (Result f)))
 
