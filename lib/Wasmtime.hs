@@ -380,7 +380,6 @@ instance Semigroup Config where
 
 instance Monoid Config where
   mempty = Config $ \_cfg_ptr -> pure ()
-  mappend = (<>)
 
 setConfig :: (Ptr C'wasm_config_t -> a -> IO ()) -> a -> Config
 setConfig f x = Config $ \cfg_ptr -> f cfg_ptr x
