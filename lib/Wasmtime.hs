@@ -3,8 +3,10 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
@@ -120,7 +122,7 @@ module Wasmtime
     -- ** FuncTypes
     FuncType,
     newFuncType,
-    (.->.),
+    (...->...),
     funcTypeParams,
     funcTypeResults,
     Vals,
@@ -331,14 +333,14 @@ data WordLength = Bit32 | Bit64
 -- | Compilation environment and configuration.
 newtype Engine = Engine {unEngine :: ForeignPtr C'wasm_engine_t}
 
+instance HasForeignPtr Engine C'wasm_engine_t where
+  getForeignPtr = unEngine
+
 newEngine :: IO Engine
 newEngine = mask_ $ do
   engine_ptr <- unsafe'c'wasm_engine_new
   checkAllocation engine_ptr
   Engine <$> newForeignPtr unsafe'p'wasm_engine_delete engine_ptr
-
-withEngine :: Engine -> (Ptr C'wasm_engine_t -> IO a) -> IO a
-withEngine = withForeignPtr . unEngine
 
 -- | Create an 'Engine' by modifying the default 'Config'.
 newEngineWithConfig :: Config -> IO Engine
@@ -356,7 +358,7 @@ newEngineWithConfig cfg = mask_ $ do
 -- force WebAssembly code to trap if the current epoch goes beyond the 'Store'
 -- configured epoch deadline.
 incrementEngineEpoch :: Engine -> IO ()
-incrementEngineEpoch engine = withEngine engine unsafe'c'wasmtime_engine_increment_epoch
+incrementEngineEpoch engine = withObj engine unsafe'c'wasmtime_engine_increment_epoch
 
 --------------------------------------------------------------------------------
 -- Config
@@ -609,7 +611,7 @@ unsafeWasmFromBytes = Wasm
 wasmFromBytes :: Engine -> B.ByteString -> Either WasmtimeError Wasm
 wasmFromBytes engine inp@(BI.BS inp_fp inp_size) =
   unsafePerformIO $
-    withEngine engine $ \engine_ptr ->
+    withObj engine $ \engine_ptr ->
       withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
         try $ do
           unsafe'c'wasmtime_module_validate engine_ptr inp_ptr (fromIntegral inp_size)
@@ -639,6 +641,9 @@ wat2wasm (BI.BS inp_fp inp_size) =
 -- ready to be instantiated and can be inspected for imports/exports.
 newtype Module = Module {unModule :: ForeignPtr C'wasmtime_module_t}
 
+instance HasForeignPtr Module C'wasmtime_module_t where
+  getForeignPtr = unModule
+
 newModuleFromPtr :: Ptr C'wasmtime_module_t -> IO Module
 newModuleFromPtr = fmap Module . newForeignPtr unsafe'p'wasmtime_module_delete
 
@@ -647,7 +652,7 @@ newModule :: Engine -> Wasm -> Either WasmtimeError Module
 newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
   try $
     withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
-      withEngine engine $ \engine_ptr ->
+      withObj engine $ \engine_ptr ->
         allocaNullPtr $ \module_ptr_ptr -> mask_ $ do
           unsafe'c'wasmtime_module_new
             engine_ptr
@@ -657,15 +662,12 @@ newModule engine (Wasm (BI.BS inp_fp inp_size)) = unsafePerformIO $
             >>= checkWasmtimeError
           peek module_ptr_ptr >>= newModuleFromPtr
 
-withModule :: Module -> (Ptr C'wasmtime_module_t -> IO a) -> IO a
-withModule = withForeignPtr . unModule
-
 -- | This function serializes compiled module artifacts as blob data.
 serializeModule :: Module -> Either WasmtimeError B.ByteString
 serializeModule m =
   unsafePerformIO $
     try $
-      withModule m $ \module_ptr ->
+      withObj m $ \module_ptr ->
         withByteVecToByteString $
           unsafe'c'wasmtime_module_serialize module_ptr >=> checkWasmtimeError
 
@@ -678,7 +680,7 @@ deserializeModule :: Engine -> B.ByteString -> Either WasmtimeError Module
 deserializeModule engine (BI.BS inp_fp inp_size) =
   unsafePerformIO $
     try $
-      withEngine engine $ \engine_ptr ->
+      withObj engine $ \engine_ptr ->
         withForeignPtr inp_fp $ \(inp_ptr :: Ptr Word8) ->
           allocaNullPtr $ \module_ptr_ptr -> mask_ $ do
             unsafe'c'wasmtime_module_deserialize
@@ -696,6 +698,9 @@ deserializeModule engine (BI.BS inp_fp inp_size) =
 -- | Type of an import.
 newtype ImportType = ImportType {unImportType :: ForeignPtr C'wasm_importtype_t}
 
+instance HasForeignPtr ImportType C'wasm_importtype_t where
+  getForeignPtr = unImportType
+
 instance Show ImportType where
   showsPrec p it =
     showParen (p > appPrec) $
@@ -711,9 +716,6 @@ instance Show ImportType where
       showsArg :: forall a. Show a => a -> ShowS
       showsArg = showsPrec (appPrec + 1)
 
-withImportType :: ImportType -> (Ptr C'wasm_importtype_t -> IO a) -> IO a
-withImportType = withForeignPtr . unImportType
-
 newImportTypeFromPtr :: Ptr C'wasm_importtype_t -> IO ImportType
 newImportTypeFromPtr = fmap ImportType . newForeignPtr unsafe'p'wasm_importtype_delete
 
@@ -721,7 +723,7 @@ newImportTypeFromPtr = fmap ImportType . newForeignPtr unsafe'p'wasm_importtype_
 moduleImports :: Module -> Vector ImportType
 moduleImports m =
   unsafePerformIO $
-    withModule m $ \mod_ptr ->
+    withObj m $ \mod_ptr ->
       alloca $ \(importtype_vec_ptr :: Ptr C'wasm_importtype_vec_t) -> mask_ $ do
         -- Ownership of the wasm_importtype_vec_t is passed to the caller
         -- so we have to copy the contained wasm_importtype_t elements
@@ -769,14 +771,14 @@ maybeWithNameFromString (Just name) f = withNameFromString name f
 importTypeModule :: ImportType -> String
 importTypeModule importType =
   unsafePerformIO $
-    withImportType importType $
+    withObj importType $
       unsafe'c'wasm_importtype_module >=> peekByteVecAsString
 
 -- | Returns the name this import is importing from.
 importTypeName :: ImportType -> Maybe String
 importTypeName importType =
   unsafePerformIO $
-    withImportType importType $ \importtype_ptr -> do
+    withObj importType $ \importtype_ptr -> do
       name_ptr <- unsafe'c'wasm_importtype_name importtype_ptr
       if name_ptr == nullPtr
         then pure Nothing
@@ -786,7 +788,7 @@ importTypeName importType =
 importTypeType :: ImportType -> ExternType
 importTypeType importType =
   unsafePerformIO $
-    withImportType importType $
+    withObj importType $
       unsafe'c'wasm_importtype_type >=> newExternTypeFromPtr
 
 --------------------------------------------------------------------------------
@@ -795,6 +797,9 @@ importTypeType importType =
 
 -- | Type of an export.
 newtype ExportType = ExportType {unExportType :: ForeignPtr C'wasm_exporttype_t}
+
+instance HasForeignPtr ExportType C'wasm_exporttype_t where
+  getForeignPtr = unExportType
 
 instance Show ExportType where
   showsPrec p et =
@@ -809,9 +814,6 @@ instance Show ExportType where
       showsArg :: forall a. Show a => a -> ShowS
       showsArg = showsPrec (appPrec + 1)
 
-withExportType :: ExportType -> (Ptr C'wasm_exporttype_t -> IO a) -> IO a
-withExportType = withForeignPtr . unExportType
-
 newExportTypeFromPtr :: Ptr C'wasm_exporttype_t -> IO ExportType
 newExportTypeFromPtr = fmap ExportType . newForeignPtr unsafe'p'wasm_exporttype_delete
 
@@ -819,7 +821,7 @@ newExportTypeFromPtr = fmap ExportType . newForeignPtr unsafe'p'wasm_exporttype_
 moduleExports :: Module -> Vector ExportType
 moduleExports m =
   unsafePerformIO $
-    withModule m $ \mod_ptr ->
+    withObj m $ \mod_ptr ->
       alloca $ \(exporttype_vec_ptr :: Ptr C'wasm_exporttype_vec_t) -> mask_ $ do
         -- Ownership of the wasm_exporttype_vec_t is passed to the caller
         -- so we have to copy the contained wasm_exporttype_t elements
@@ -851,14 +853,14 @@ newExportType name externType =
 exportTypeName :: ExportType -> String
 exportTypeName exportType =
   unsafePerformIO $
-    withExportType exportType $
+    withObj exportType $
       unsafe'c'wasm_exporttype_name >=> peekByteVecAsString
 
 -- | Returns the type of this export.
 exportTypeType :: ExportType -> ExternType
 exportTypeType exportType =
   unsafePerformIO $
-    withExportType exportType $
+    withObj exportType $
       unsafe'c'wasm_exporttype_type >=> newExternTypeFromPtr
 
 --------------------------------------------------------------------------------
@@ -878,13 +880,13 @@ data ExternType
 externTypeToPtr :: ExternType -> IO (Ptr C'wasm_externtype_t)
 externTypeToPtr = \case
   ExternFuncType funcType ->
-    withFuncType funcType $ unsafe'c'wasm_functype_as_externtype >=> unsafe'c'wasm_externtype_copy
+    withObj funcType $ unsafe'c'wasm_functype_as_externtype >=> unsafe'c'wasm_externtype_copy
   ExternGlobalType globalType ->
-    withGlobalType globalType $ unsafe'c'wasm_globaltype_as_externtype >=> unsafe'c'wasm_externtype_copy
+    withObj globalType $ unsafe'c'wasm_globaltype_as_externtype >=> unsafe'c'wasm_externtype_copy
   ExternTableType tableType ->
-    withTableType tableType $ unsafe'c'wasm_tabletype_as_externtype >=> unsafe'c'wasm_externtype_copy
+    withObj tableType $ unsafe'c'wasm_tabletype_as_externtype >=> unsafe'c'wasm_externtype_copy
   ExternMemoryType memoryType ->
-    withMemoryType memoryType $ unsafe'c'wasm_memorytype_as_externtype >=> unsafe'c'wasm_externtype_copy
+    withObj memoryType $ unsafe'c'wasm_memorytype_as_externtype >=> unsafe'c'wasm_externtype_copy
 
 newExternTypeFromPtr :: Ptr C'wasm_externtype_t -> IO ExternType
 newExternTypeFromPtr externtype_ptr = do
@@ -979,9 +981,12 @@ data Store s = Store
     storeForeignPtr :: !(ForeignPtr C'wasmtime_context_t)
   }
 
+instance HasForeignPtr (Store s) C'wasmtime_context_t where
+  getForeignPtr = storeForeignPtr
+
 -- | Creates a new store within the specified engine.
 newStore :: MonadPrim s m => Engine -> m (Either WasmException (Store s))
-newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ try $ do
+newStore engine = unsafeIOToPrim $ withObj engine $ \engine_ptr -> mask_ $ try $ do
   wasmtime_store_ptr <- unsafe'c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
   checkAllocation wasmtime_store_ptr
   wasmtime_ctx_ptr <- unsafe'c'wasmtime_store_context wasmtime_store_ptr
@@ -994,9 +999,6 @@ newStore engine = unsafeIOToPrim $ withEngine engine $ \engine_ptr -> mask_ $ tr
       { storeFinalizeRef = finalizeRef,
         storeForeignPtr = storeFP
       }
-
-withStore :: Store s -> (Ptr C'wasmtime_context_t -> IO a) -> IO a
-withStore = withForeignPtr . storeForeignPtr
 
 -- | Adds fuel to this 'Store' for wasm to consume while executing.
 --
@@ -1015,7 +1017,7 @@ withStore = withForeignPtr . storeForeignPtr
 -- This function will return an error if fuel consumption is not enabled via
 -- 'setConsumeFuel'.
 addFuel :: MonadPrim s m => Store s -> Word64 -> m (Either WasmtimeError ())
-addFuel store amount = unsafeIOToPrim $ withStore store $ \ctx_ptr ->
+addFuel store amount = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
   unsafe'c'wasmtime_context_add_fuel ctx_ptr amount >>= try . checkWasmtimeError
 
 -- | Returns the amount of fuel consumed by this store’s execution so far.
@@ -1024,7 +1026,7 @@ addFuel store amount = unsafeIOToPrim $ withStore store $ \ctx_ptr ->
 -- will return 'Nothing'. Also note that fuel, if enabled, must be originally
 -- configured via 'addFuel'.
 fuelConsumed :: MonadPrim s m => Store s -> m (Maybe Word64)
-fuelConsumed store = unsafeIOToPrim $ withStore store $ \ctx_ptr ->
+fuelConsumed store = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
   alloca $ \amount_ptr -> do
     res <- unsafe'c'wasmtime_context_fuel_consumed ctx_ptr amount_ptr
     if not res
@@ -1053,7 +1055,7 @@ consumeFuel ::
   -- | Amount of @fuel@ to consume.
   Word64 ->
   m (Either WasmtimeError Word64)
-consumeFuel store amount = unsafeIOToPrim $ withStore store $ \ctx_ptr ->
+consumeFuel store amount = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
   alloca $ \remaining_ptr -> try $ do
     unsafe'c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
       >>= checkWasmtimeError
@@ -1068,6 +1070,9 @@ consumeFuel store amount = unsafeIOToPrim $ withStore store $ \ctx_ptr ->
 -- WebAssembly functions can have 0 or more parameters and results.
 newtype FuncType = FuncType {unFuncType :: ForeignPtr C'wasm_functype_t}
 
+instance HasForeignPtr FuncType C'wasm_functype_t where
+  getForeignPtr = unFuncType
+
 -- | Two @'FuncType's@ are considered equal if their 'funcTypeParams' and
 -- 'funcTypeResults' are equal.
 instance Eq FuncType where
@@ -1079,7 +1084,7 @@ instance Show FuncType where
   showsPrec p ft =
     showParen (p > arrowPrec) $
       showValTypes (funcTypeParams ft)
-        . showString " .->. "
+        . showString " ...->... "
         . showValTypes (funcTypeResults ft)
     where
       arrowPrec = 0
@@ -1089,9 +1094,6 @@ instance Show FuncType where
         showString "Proxy @'["
           . showString (intercalate ", " $ map kindToHaskellTypeStr $ V.toList kinds)
           . showString "]"
-
-withFuncType :: FuncType -> (Ptr C'wasm_functype_t -> IO a) -> IO a
-withFuncType = withForeignPtr . unFuncType
 
 newFuncTypeFromPtr :: Ptr C'wasm_functype_t -> IO FuncType
 newFuncTypeFromPtr = fmap FuncType . newForeignPtr unsafe'p'wasm_functype_delete
@@ -1107,21 +1109,21 @@ newFuncTypeFromPtr = fmap FuncType . newForeignPtr unsafe'p'wasm_functype_delete
 -- print funcType
 -- @
 --
--- Prints: @Proxy @'[Int32, Float] '.->.' Proxy @'[Word128, Double, Int64]@
+-- Prints: @Proxy @'[Int32, Float] '...->...' Proxy @'[Word128, Double, Int64]@
 newFuncType ::
   forall f.
   (Funcable f) =>
   -- | Proxy of the Haskell function type @f@.
   Proxy f ->
   FuncType
-newFuncType _proxy = Proxy @(Params f) .->. Proxy @(Types (Result f))
+newFuncType _proxy = Proxy @(Params f) ...->... Proxy @(Types (Result f))
 
-infixr 0 .->.
+infixr 0 ...->...
 
 -- | Creates a new function type with the given parameter and result types.
 --
 -- See 'newFuncType' for creating a 'FuncType' from a Haskell function.
-(.->.) ::
+(...->...) ::
   forall (params :: [Type]) (results :: [Type]).
   (Vals params, Vals results, Len params, Len results) =>
   -- | Parameter kinds
@@ -1129,7 +1131,7 @@ infixr 0 .->.
   -- | Result kinds
   Proxy results ->
   FuncType
-params .->. results = unsafePerformIO $
+params ...->... results = unsafePerformIO $
   mask_ $
     withValTypeVec params $ \(params_ptr :: Ptr C'wasm_valtype_vec_t) ->
       withValTypeVec results $ \(results_ptr :: Ptr C'wasm_valtype_vec_t) ->
@@ -1153,12 +1155,12 @@ withValTypeVec types f =
 -- | Returns the vector of parameters of this function type.
 funcTypeParams :: FuncType -> V.Vector ValType
 funcTypeParams funcType =
-  unsafePerformIO $ withFuncType funcType $ unsafe'c'wasm_functype_params >=> unmarshalValTypeVec
+  unsafePerformIO $ withObj funcType $ unsafe'c'wasm_functype_params >=> unmarshalValTypeVec
 
 -- | Returns the vector of results of this function type.
 funcTypeResults :: FuncType -> V.Vector ValType
 funcTypeResults funcType =
-  unsafePerformIO $ withFuncType funcType $ unsafe'c'wasm_functype_results >=> unmarshalValTypeVec
+  unsafePerformIO $ withObj funcType $ unsafe'c'wasm_functype_results >=> unmarshalValTypeVec
 
 unmarshalValTypeVec :: Ptr C'wasm_valtype_vec_t -> IO (V.Vector ValType)
 unmarshalValTypeVec valtype_vec_ptr = do
@@ -1299,7 +1301,7 @@ instance Val C'wasmtime_func_t where kind _proxy = c'WASMTIME_FUNCREF
 instance Val (Func s) where
   kind _proxy = kind $ Proxy @C'wasmtime_func_t
   pokeVal val_ptr func =
-    withFunc func $ \func_ptr -> do
+    withObj func $ \func_ptr -> do
       poke (p'wasmtime_val'kind val_ptr) $ kind $ Proxy @(Func s)
       let p :: Ptr C'wasmtime_valunion_t
           p = p'wasmtime_val'of val_ptr
@@ -1312,18 +1314,18 @@ instance Val (Func s) where
 
   uncheckedPeekVal val_ptr = do
     func <- MkFunc <$> mallocForeignPtr
-    withFunc func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+    withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
       copy func_ptr $ castPtr $ p'wasmtime_val'of val_ptr
       pure func
 
   pokeRawVal store val_raw_ptr func =
-    withStore store $ \ctx_ptr ->
-      withFunc func $ unsafe'c'wasmtime_func_to_raw ctx_ptr >=> copy (castPtr val_raw_ptr)
+    withObj store $ \ctx_ptr ->
+      withObj func $ unsafe'c'wasmtime_func_to_raw ctx_ptr >=> copy (castPtr val_raw_ptr)
 
   peekRawVal store val_raw_ptr =
-    withStore store $ \ctx_ptr -> do
+    withObj store $ \ctx_ptr -> do
       func <- MkFunc <$> mallocForeignPtr
-      withFunc func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+      withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
         let raw_func_ptr :: Ptr ()
             raw_func_ptr = castPtr val_raw_ptr
         unsafe'c'wasmtime_func_from_raw ctx_ptr raw_func_ptr func_ptr
@@ -1377,7 +1379,7 @@ peekTableVal val_ptr = do
   if
       | k == c'WASMTIME_FUNCREF -> do
           func <- MkFunc <$> mallocForeignPtr
-          withFunc func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+          withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
             copy func_ptr (castPtr of_ptr)
             pure $ FuncRefValue func
       | k == c'WASMTIME_EXTERNREF ->
@@ -1400,15 +1402,15 @@ peekTableVal val_ptr = do
 -- the wrong store then it may trigger an assertion to abort the process.
 newtype Func s = MkFunc {unFunc :: ForeignPtr C'wasmtime_func_t}
 
-withFunc :: Func s -> (Ptr C'wasmtime_func_t -> IO a) -> IO a
-withFunc = withForeignPtr . unFunc
+instance HasForeignPtr (Func s) C'wasmtime_func_t where
+  getForeignPtr = unFunc
 
 -- | Returns the type of the given function.
 getFuncType :: MonadPrim s m => Store s -> Func s -> m FuncType
 getFuncType store func =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withFunc func $ \func_ptr ->
+    withObj store $ \ctx_ptr ->
+      withObj func $ \func_ptr ->
         mask_ $
           unsafe'c'wasmtime_func_type ctx_ptr func_ptr >>= newFuncTypeFromPtr
 
@@ -1449,12 +1451,12 @@ newFunc ::
   m (Func s)
 newFunc store f =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withFuncType funcType $ \functype_ptr -> do
+    withObj store $ \ctx_ptr ->
+      withObj funcType $ \functype_ptr -> do
         callback_funptr :: FunPtr FuncCallback <-
           newFuncCallbackFunPtr (storeFinalizeRef store) callback
         func <- MkFunc <$> mallocForeignPtr
-        withFunc func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+        withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
           unsafe'c'wasmtime_func_new
             ctx_ptr
             functype_ptr
@@ -1505,7 +1507,7 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
               --
               -- Since trap is a ForeignPtr which will be garbage collected
               -- later we need to copy the trap to safely hand it to the engine.
-              withTrap trap unsafe'c'wasm_trap_copy
+              withObj trap unsafe'c'wasm_trap_copy
             Right r -> do
               let n = fromIntegral nresults
               if n == expectedNrOfResults
@@ -1555,12 +1557,12 @@ newFuncUnchecked ::
   m (Func s)
 newFuncUnchecked store f =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withFuncType funcType $ \functype_ptr -> do
+    withObj store $ \ctx_ptr ->
+      withObj funcType $ \functype_ptr -> do
         unchecked_callback_funptr :: FunPtr FuncUncheckedCallback <-
           newFuncUncheckedCallbackFunPtr (storeFinalizeRef store) uncheckedCallback
         func <- MkFunc <$> mallocForeignPtr
-        withFunc func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+        withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
           unsafe'c'wasmtime_func_new_unchecked
             ctx_ptr
             functype_ptr
@@ -1609,7 +1611,7 @@ mkUncheckedCallback store f _env _caller args_and_results_ptr num_args_and_resul
           --
           -- Since trap is a ForeignPtr which will be garbage collected
           -- later we need to copy the trap to safely hand it to the engine.
-          withTrap trap unsafe'c'wasm_trap_copy
+          withObj trap unsafe'c'wasm_trap_copy
         Right r -> do
           if n >= expectedNrOfResults
             then pokeRawVals store args_and_results_ptr (toHList r) $> nullPtr
@@ -1679,8 +1681,8 @@ callFunc store func = curryList callFuncOnParams
     callFuncOnParams :: List (Params f) -> m (Either WasmException (Result f))
     callFuncOnParams params =
       unsafeIOToPrim $
-        withStore store $ \ctx_ptr ->
-          withFunc func $ \func_ptr ->
+        withObj store $ \ctx_ptr ->
+          withObj func $ \func_ptr ->
             allocaArray n $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
               pokeRawVals store args_and_results_ptr params
               handleTrap $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
@@ -1704,6 +1706,9 @@ callFunc store func = curryList callFuncOnParams
 -- | The type of a global.
 newtype GlobalType = GlobalType {unGlobalType :: ForeignPtr C'wasm_globaltype_t}
 
+instance HasForeignPtr GlobalType C'wasm_globaltype_t where
+  getForeignPtr = unGlobalType
+
 instance Eq GlobalType where
   gt1 == gt2 =
     globalTypeValType gt1 == globalTypeValType gt2
@@ -1720,9 +1725,6 @@ instance Show GlobalType where
 
       ty = kindToHaskellTypeStr $ globalTypeValType gt
       mut = globalTypeMutability gt
-
-withGlobalType :: GlobalType -> (Ptr C'wasm_globaltype_t -> IO a) -> IO a
-withGlobalType = withForeignPtr . unGlobalType
 
 -- | Returns a new 'GlobalType' with the kind of the given Haskell type and the
 -- specified 'Mutability'.
@@ -1763,7 +1765,7 @@ fromWasmMutability m = error $ "Unknown wasm_mutability_t " ++ show m ++ "!"
 -- | Returns the 'ValType' of the given 'GlobalType'.
 globalTypeValType :: GlobalType -> ValType
 globalTypeValType globalType = unsafePerformIO $
-  withGlobalType globalType $ \globalType_ptr -> do
+  withObj globalType $ \globalType_ptr -> do
     valtype_ptr <- unsafe'c'wasm_globaltype_content globalType_ptr
     fromWasmKind <$> unsafe'c'wasm_valtype_kind valtype_ptr
 
@@ -1771,7 +1773,7 @@ globalTypeValType globalType = unsafePerformIO $
 globalTypeMutability :: GlobalType -> Mutability
 globalTypeMutability globalType =
   unsafePerformIO $
-    withGlobalType globalType $
+    withObj globalType $
       fmap fromWasmMutability . unsafe'c'wasm_globaltype_mutability
 
 -- | A WebAssembly global value which can be read and written to.
@@ -1787,15 +1789,15 @@ globalTypeMutability globalType =
 -- accident then methods will panic.
 newtype Global s = MkGlobal {unGlobal :: ForeignPtr C'wasmtime_global_t}
 
-withGlobal :: Global s -> (Ptr C'wasmtime_global_t -> IO a) -> IO a
-withGlobal = withForeignPtr . unGlobal
+instance HasForeignPtr (Global s) C'wasmtime_global_t where
+  getForeignPtr = unGlobal
 
 -- | Returns the wasm type of the specified global.
 getGlobalType :: (MonadPrim s m) => Store s -> Global s -> m GlobalType
 getGlobalType store global =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withGlobal global $ \global_ptr -> mask_ $ do
+    withObj store $ \ctx_ptr ->
+      withObj global $ \global_ptr -> mask_ $ do
         globaltype_ptr <- unsafe'c'wasmtime_global_type ctx_ptr global_ptr
         newGlobalTypeFromPtr globaltype_ptr
 
@@ -1821,8 +1823,8 @@ newtype TypedGlobal s a = TypedGlobal
     unTypedGlobal :: Global s
   }
 
-withTypedGlobal :: TypedGlobal s a -> (Ptr C'wasmtime_global_t -> IO b) -> IO b
-withTypedGlobal = withGlobal . unTypedGlobal
+instance HasForeignPtr (TypedGlobal s a) C'wasmtime_global_t where
+  getForeignPtr = unGlobal . unTypedGlobal
 
 -- | Creates a new WebAssembly global value with the 'GlobalType' corresponding
 -- to the type of the given Haskell value and the specified 'Mutability'. The
@@ -1845,12 +1847,12 @@ newTypedGlobal ::
   m (Either WasmtimeError (TypedGlobal s a))
 newTypedGlobal store mutability x =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
+    withObj store $ \ctx_ptr ->
       withNewGlobalTypePtr $ \(globaltype_ptr :: Ptr C'wasm_globaltype_t) ->
         alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
           pokeVal val_ptr x
           global <- MkGlobal <$> mallocForeignPtr
-          withGlobal global $ \global_ptr -> try $ do
+          withObj global $ \global_ptr -> try $ do
             unsafe'c'wasmtime_global_new ctx_ptr globaltype_ptr val_ptr global_ptr
               >>= checkWasmtimeError
             pure $ TypedGlobal global
@@ -1866,8 +1868,8 @@ typedGlobalGet ::
   m a
 typedGlobalGet store typedGlobal =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withTypedGlobal typedGlobal $ \global_ptr ->
+    withObj store $ \ctx_ptr ->
+      withObj typedGlobal $ \global_ptr ->
         alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
           unsafe'c'wasmtime_global_get ctx_ptr global_ptr val_ptr
           uncheckedPeekVal val_ptr
@@ -1884,8 +1886,8 @@ typedGlobalSet ::
   m (Either WasmtimeError ())
 typedGlobalSet store typedGlobal x =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withTypedGlobal typedGlobal $ \global_ptr ->
+    withObj store $ \ctx_ptr ->
+      withObj typedGlobal $ \global_ptr ->
         alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
           pokeVal val_ptr x
           unsafe'c'wasmtime_global_set ctx_ptr global_ptr val_ptr
@@ -1901,6 +1903,9 @@ typedGlobalSet store typedGlobal x =
 -- externref.  The most common use for tables is a function table through which
 -- call_indirect can invoke other functions.
 newtype TableType = TableType {getWasmtimeTableType :: ForeignPtr C'wasm_tabletype_t}
+
+instance HasForeignPtr TableType C'wasm_tabletype_t where
+  getForeignPtr = getWasmtimeTableType
 
 instance Eq TableType where
   tt1 == tt2 =
@@ -1922,9 +1927,6 @@ instance Show TableType where
 
       tableRefType = tableTypeElement tt
       tableLimits = tableTypeLimits tt
-
-withTableType :: TableType -> (Ptr C'wasm_tabletype_t -> IO a) -> IO a
-withTableType = withForeignPtr . getWasmtimeTableType
 
 newTableTypeFromPtr :: Ptr C'wasm_tabletype_t -> IO TableType
 newTableTypeFromPtr = fmap TableType . newForeignPtr unsafe'p'wasm_tabletype_delete
@@ -1962,7 +1964,7 @@ newTableType tableRefType limits = unsafePerformIO $
 -- | Returns the element type of this table
 tableTypeElement :: TableType -> TableRefType
 tableTypeElement tt = unsafePerformIO $
-  withTableType tt $ \tt_ptr -> do
+  withObj tt $ \tt_ptr -> do
     valtype_ptr <- unsafe'c'wasm_tabletype_element tt_ptr
     valkind <- unsafe'c'wasm_valtype_kind valtype_ptr
     if
@@ -1977,7 +1979,7 @@ tableTypeElement tt = unsafePerformIO $
 -- | Returns the minimum and maximum size of this tabletype
 tableTypeLimits :: TableType -> TableLimits
 tableTypeLimits tt = unsafePerformIO $
-  withTableType tt $ \tt_ptr -> do
+  withObj tt $ \tt_ptr -> do
     limits_ptr <- unsafe'c'wasm_tabletype_limits tt_ptr
     limits' <- peek limits_ptr
     pure
@@ -1993,8 +1995,8 @@ tableTypeLimits tt = unsafePerformIO $
 -- For more information, see <https://docs.rs/wasmtime/latest/wasmtime/struct.Table.html>.
 newtype Table s = MkTable {unTable :: ForeignPtr C'wasmtime_table_t}
 
-withTable :: Table s -> (Ptr C'wasmtime_table_t -> IO a) -> IO a
-withTable = withForeignPtr . unTable
+instance HasForeignPtr (Table s) C'wasmtime_table_t where
+  getForeignPtr = unTable
 
 -- | Tables can contain function references or extern references
 data TableValue = forall s. FuncRefValue (Func s) | ExternRefValue (Ptr C'wasmtime_externref_t)
@@ -2017,10 +2019,10 @@ newTable ::
   m (Either WasmtimeError (Table s))
 newTable store tt mbVal =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withTableType tt $ \tt_ptr -> do
+    withObj store $ \ctx_ptr ->
+      withObj tt $ \tt_ptr -> do
         table <- MkTable <$> mallocForeignPtr
-        withTable table $ \table_ptr -> try $ do
+        withObj table $ \table_ptr -> try $ do
           error_ptr <- case mbVal of
             Nothing -> do
               unsafe'c'wasmtime_table_new ctx_ptr tt_ptr nullPtr table_ptr
@@ -2045,8 +2047,8 @@ growTable ::
   m (Either WasmtimeError Word32)
 growTable store table delta mbVal =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withTable table $ \table_ptr ->
+    withObj store $ \ctx_ptr ->
+      withObj table $ \table_ptr ->
         alloca $ \prev_size_ptr -> try $ do
           error_ptr <- case mbVal of
             Nothing ->
@@ -2066,8 +2068,8 @@ tableGet ::
   Word32 ->
   m (Maybe TableValue)
 tableGet store table ix = unsafeIOToPrim $
-  withStore store $ \ctx_ptr ->
-    withTable table $ \table_ptr ->
+  withObj store $ \ctx_ptr ->
+    withObj table $ \table_ptr ->
       alloca $ \(val_ptr :: Ptr C'wasmtime_val_t) -> do
         success <- unsafe'c'wasmtime_table_get ctx_ptr table_ptr ix val_ptr
         if not success
@@ -2088,8 +2090,8 @@ tableSet ::
   m (Either WasmtimeError ())
 tableSet store table ix val =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withTable table $ \table_ptr ->
+    withObj store $ \ctx_ptr ->
+      withObj table $ \table_ptr ->
         withTableValue val $ \val_ptr ->
           unsafe'c'wasmtime_table_set ctx_ptr table_ptr ix val_ptr
             >>= try . checkWasmtimeError
@@ -2097,8 +2099,8 @@ tableSet store table ix val =
 -- | Return the 'TableType' with which this table was created.
 getTableType :: Store s -> Table s -> TableType
 getTableType store table = unsafePerformIO $
-  withStore store $ \ctx_ptr ->
-    withTable table $ \table_ptr ->
+  withObj store $ \ctx_ptr ->
+    withObj table $ \table_ptr ->
       mask_ $
         unsafe'c'wasmtime_table_type ctx_ptr table_ptr >>= newTableTypeFromPtr
 
@@ -2111,6 +2113,9 @@ getTableType store table = unsafePerformIO $
 -- Memories are described in units of pages (64KB) and represent contiguous
 -- chunks of addressable memory.
 newtype MemoryType = MemoryType {unMemoryType :: ForeignPtr C'wasm_memorytype_t}
+
+instance HasForeignPtr MemoryType C'wasm_memorytype_t where
+  getForeignPtr = unMemoryType
 
 instance Eq MemoryType where
   mt1 == mt2 =
@@ -2158,17 +2163,14 @@ newMemoryType mini mbMax wordLen = unsafePerformIO $ mask_ $ do
     (max_present, maxi) = maybe (False, 0) (True,) mbMax
     is64 = wordLen == Bit64
 
-withMemoryType :: MemoryType -> (Ptr C'wasm_memorytype_t -> IO a) -> IO a
-withMemoryType = withForeignPtr . unMemoryType
-
 -- | Returns the minimum number of pages of this memory descriptor.
 getMin :: MemoryType -> Word64
-getMin mt = unsafePerformIO $ withMemoryType mt unsafe'c'wasmtime_memorytype_minimum
+getMin mt = unsafePerformIO $ withObj mt unsafe'c'wasmtime_memorytype_minimum
 
 -- | Returns the maximum number of pages of this memory descriptor, if one was set.
 getMax :: MemoryType -> Maybe Word64
 getMax mt = unsafePerformIO $
-  withMemoryType mt $ \mem_type_ptr ->
+  withObj mt $ \mem_type_ptr ->
     alloca $ \(max_ptr :: Ptr Word64) -> do
       maxPresent <- unsafe'c'wasmtime_memorytype_maximum mem_type_ptr max_ptr
       if not maxPresent
@@ -2177,7 +2179,7 @@ getMax mt = unsafePerformIO $
 
 -- | Returns false if the memory is 32 bit and true if it is 64 bit.
 is64Memory :: MemoryType -> Bool
-is64Memory mt = unsafePerformIO $ withMemoryType mt unsafe'c'wasmtime_memorytype_is64
+is64Memory mt = unsafePerformIO $ withObj mt unsafe'c'wasmtime_memorytype_is64
 
 -- | Returns Bit32 or Bit64 :: 'WordLength'
 wordLength :: MemoryType -> WordLength
@@ -2195,40 +2197,40 @@ wordLength mt = if is64Memory mt then Bit64 else Bit32
 -- Memories, like other wasm items, are owned by a 'Store'.
 newtype Memory s = MkMemory {unMemory :: ForeignPtr C'wasmtime_memory_t}
 
+instance HasForeignPtr (Memory s) C'wasmtime_memory_t where
+  getForeignPtr = unMemory
+
 -- | Create new memory with the properties described in the 'MemoryType' argument.
 newMemory :: MonadPrim s m => Store s -> MemoryType -> m (Either WasmtimeError (Memory s))
 newMemory store memtype =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withMemoryType memtype $ \memtype_ptr -> try $ do
+    withObj store $ \ctx_ptr ->
+      withObj memtype $ \memtype_ptr -> try $ do
         mem <- MkMemory <$> mallocForeignPtr
-        withMemory mem $ \mem_ptr -> do
+        withObj mem $ \mem_ptr -> do
           unsafe'c'wasmtime_memory_new ctx_ptr memtype_ptr mem_ptr
             >>= checkWasmtimeError
           pure mem
 
-withMemory :: Memory s -> (Ptr C'wasmtime_memory_t -> IO a) -> IO a
-withMemory = withForeignPtr . unMemory
-
 -- | Returns the 'MemoryType' descriptor for this memory.
 getMemoryType :: Store s -> Memory s -> MemoryType
 getMemoryType store mem = unsafePerformIO $
-  withStore store $ \ctx_ptr ->
-    withMemory mem $ \mem_ptr -> mask_ $ do
+  withObj store $ \ctx_ptr ->
+    withObj mem $ \mem_ptr -> mask_ $ do
       memtype_ptr <- unsafe'c'wasmtime_memory_type ctx_ptr mem_ptr
       MemoryType <$> newForeignPtr unsafe'p'wasm_memorytype_delete memtype_ptr
 
 -- | Returns the linear memory size in bytes. Always a multiple of 64KB (65536).
 getMemorySizeBytes :: MonadPrim s m => Store s -> Memory s -> m Word64
 getMemorySizeBytes store mem = unsafeIOToPrim $
-  withStore store $ \ctx_ptr ->
-    withMemory mem (fmap fromIntegral . unsafe'c'wasmtime_memory_data_size ctx_ptr)
+  withObj store $ \ctx_ptr ->
+    withObj mem (fmap fromIntegral . unsafe'c'wasmtime_memory_data_size ctx_ptr)
 
 -- | Returns the length of the linear memory in WebAssembly pages
 getMemorySizePages :: MonadPrim s m => Store s -> Memory s -> m Word64
 getMemorySizePages store mem = unsafeIOToPrim $
-  withStore store $ \ctx_ptr ->
-    withMemory mem $ \mem_ptr ->
+  withObj store $ \ctx_ptr ->
+    withObj mem $ \mem_ptr ->
       unsafe'c'wasmtime_memory_size ctx_ptr mem_ptr
 
 -- | Grow the linar memory by delta number of pages. Return the size before.
@@ -2241,8 +2243,8 @@ growMemory ::
   m (Either WasmtimeError Word64)
 growMemory store mem delta =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withMemory mem $ \mem_ptr ->
+    withObj store $ \ctx_ptr ->
+      withObj mem $ \mem_ptr ->
         alloca $ \before_size_ptr -> try $ do
           unsafe'c'wasmtime_memory_grow ctx_ptr mem_ptr delta before_size_ptr
             >>= checkWasmtimeError
@@ -2257,8 +2259,8 @@ growMemory store mem delta =
 -- similar in the continuation!
 unsafeWithMemory :: Store s -> Memory s -> (Ptr Word8 -> Size -> IO a) -> IO a
 unsafeWithMemory store mem f =
-  withStore store $ \ctx_ptr ->
-    withMemory mem $ \mem_ptr -> do
+  withObj store $ \ctx_ptr ->
+    withObj mem $ \mem_ptr -> do
       mem_size <- fromIntegral <$> unsafe'c'wasmtime_memory_data_size ctx_ptr mem_ptr
       mem_data_ptr <- unsafe'c'wasmtime_memory_data ctx_ptr mem_ptr
       f mem_data_ptr mem_size
@@ -2337,9 +2339,7 @@ data Extern (s :: Type)
   | Memory (Memory s)
 
 -- | Class of types that can be imported and exported from @'Instance's@.
-class (Storable (CType e)) => Externable (e :: Type -> Type) where
-  type CType e :: Type
-
+class Externable (e :: Type -> Type) where
   -- | Turn any externable value (like a 'Func') into the 'Extern' container.
   toExtern :: e s -> Extern s
 
@@ -2347,52 +2347,38 @@ class (Storable (CType e)) => Externable (e :: Type -> Type) where
   -- of the correct type.
   fromExtern :: Extern s -> Maybe (e s)
 
-  withExternable :: e s -> (Ptr (CType e) -> IO a) -> IO a
-
   externKind :: Proxy e -> C'wasmtime_extern_kind_t
 
 instance Externable Func where
-  type CType Func = C'wasmtime_func
-
   toExtern = Func
 
   fromExtern (Func func) = Just func
   fromExtern _ = Nothing
 
-  withExternable = withFunc
   externKind _proxy = c'WASMTIME_EXTERN_FUNC
 
 instance Externable Memory where
-  type CType Memory = C'wasmtime_memory_t
-
   toExtern = Memory
 
   fromExtern (Memory mem) = Just mem
   fromExtern _ = Nothing
 
-  withExternable = withMemory
   externKind _proxy = c'WASMTIME_EXTERN_MEMORY
 
 instance Externable Table where
-  type CType Table = C'wasmtime_table_t
-
   toExtern = Table
 
   fromExtern (Table table) = Just table
   fromExtern _ = Nothing
 
-  withExternable = withTable
   externKind _proxy = c'WASMTIME_EXTERN_TABLE
 
 instance Externable Global where
-  type CType Global = C'wasmtime_global_t
-
   toExtern = Global
 
   fromExtern (Global global) = Just global
   fromExtern _ = Nothing
 
-  withExternable = withGlobal
   externKind _proxy = c'WASMTIME_EXTERN_GLOBAL
 
 withExtern :: Extern s -> (Ptr C'wasmtime_extern_t -> IO a) -> IO a
@@ -2405,7 +2391,8 @@ withExterns externs f = allocaArray n $ \externs_ptr0 ->
   let pokeExternsFrom ix
         | ix == n = f externs_ptr0 $ fromIntegral n
         | otherwise = do
-            pokeExtern (advancePtr externs_ptr0 ix) $ V.unsafeIndex externs ix
+            let extern = V.unsafeIndex externs ix
+            pokeExtern (advancePtr externs_ptr0 ix) extern
             pokeExternsFrom (ix + 1)
    in pokeExternsFrom 0
   where
@@ -2419,10 +2406,14 @@ pokeExtern externs_ptr extern =
     Table table -> pokeExternable table
     Memory memory -> pokeExternable memory
   where
-    pokeExternable :: forall e s. Externable e => e s -> IO ()
+    pokeExternable ::
+      forall e s c'obj.
+      (Externable e, HasForeignPtr (e s) c'obj, Storable c'obj) =>
+      e s ->
+      IO ()
     pokeExternable e = do
       poke (p'wasmtime_extern'kind externs_ptr) $ externKind (Proxy @e)
-      withExternable e $ copy (castPtr $ p'wasmtime_extern'of externs_ptr)
+      withObj e $ copy (castPtr $ p'wasmtime_extern'of externs_ptr)
 
 --------------------------------------------------------------------------------
 -- Instances
@@ -2430,6 +2421,9 @@ pokeExtern externs_ptr extern =
 
 -- | Representation of a instance in Wasmtime.
 newtype Instance s = Instance {unInstance :: ForeignPtr C'wasmtime_instance_t}
+
+instance HasForeignPtr (Instance s) C'wasmtime_instance_t where
+  getForeignPtr = unInstance
 
 -- | Instantiate a wasm module.
 --
@@ -2448,11 +2442,11 @@ newInstance ::
   Vector (Extern s) ->
   m (Either WasmException (Instance s))
 newInstance store m externs = unsafeIOToPrim $
-  withStore store $ \ctx_ptr ->
-    withModule m $ \mod_ptr ->
+  withObj store $ \ctx_ptr ->
+    withObj m $ \mod_ptr ->
       withExterns externs $ \externs_ptr n -> do
         inst <- Instance <$> mallocForeignPtr
-        withInstance inst $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
+        withObj inst $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
           handleTrap $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
             liftIO
               ( c'wasmtime_instance_new
@@ -2466,14 +2460,11 @@ newInstance store m externs = unsafeIOToPrim $
               >>= checkWasmtimeErrorT
             pure inst
 
-withInstance :: Instance s -> (Ptr C'wasmtime_instance_t -> IO a) -> IO a
-withInstance = withForeignPtr . unInstance
-
 -- | Get an export by name from an instance.
 getExport :: MonadPrim s m => Store s -> Instance s -> String -> m (Maybe (Extern s))
 getExport store inst name = unsafeIOToPrim $
-  withStore store $ \ctx_ptr ->
-    withInstance inst $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
+  withObj store $ \ctx_ptr ->
+    withObj inst $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
       withCStringLen name $ \(name_ptr, sz) ->
         alloca $ \(extern_ptr :: Ptr C'wasmtime_extern) -> do
           found <-
@@ -2492,16 +2483,16 @@ fromExternPtr extern_ptr = do
   k <- peek kind_ptr
 
   let fromCExtern ::
-        forall e s.
-        (Externable e) =>
-        (ForeignPtr (CType e) -> e s) ->
+        forall e s c'obj.
+        (Externable e, HasForeignPtr (e s) c'obj, Storable c'obj) =>
+        (ForeignPtr c'obj -> e s) ->
         MaybeT IO (Extern s)
       fromCExtern constr = do
         guard $ k == externKind (Proxy @e)
         liftIO $ do
           let ex_ptr = castPtr of_ptr
           ex <- constr <$> mallocForeignPtr
-          withExternable ex $ \(e_ptr :: Ptr (CType e)) -> do
+          withObj ex $ \(e_ptr :: Ptr c'obj) -> do
             copy e_ptr ex_ptr
           pure $ toExtern ex
 
@@ -2588,8 +2579,8 @@ getExportAtIndex ::
   m (Maybe (String, Extern s))
 getExportAtIndex store inst ix =
   unsafeIOToPrim $
-    withStore store $ \ctx_ptr ->
-      withInstance inst $ \inst_ptr ->
+    withObj store $ \ctx_ptr ->
+      withObj inst $ \inst_ptr ->
         alloca $ \(name_ptr_ptr :: Ptr (Ptr CChar)) ->
           alloca $ \(name_len_ptr :: Ptr CSize) ->
             alloca $ \(extern_ptr :: Ptr C'wasmtime_extern) -> do
@@ -2655,7 +2646,7 @@ withLinker = withForeignPtr . linkerForeignPtr
 newLinker :: MonadPrim s m => Engine -> m (Linker s)
 newLinker engine =
   unsafeIOToPrim $
-    withEngine engine $ \engine_ptr ->
+    withObj engine $ \engine_ptr ->
       mask_ $ do
         linker_ptr <- unsafe'c'wasmtime_linker_new engine_ptr
         funPtrArcsRef <- newIORef []
@@ -2702,7 +2693,7 @@ linkerDefine ::
 linkerDefine linker store modName name extern =
   unsafeIOToPrim $
     withLinker linker $ \linker_ptr ->
-      withStore store $ \ctx_ptr ->
+      withObj store $ \ctx_ptr ->
         withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
           withCStringLen name $ \(name_ptr, name_sz) ->
             withExtern extern $
@@ -2743,7 +2734,7 @@ linkerDefineFunc linker modName name f =
     withLinker linker $ \linker_ptr ->
       withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
         withCStringLen name $ \(name_ptr, name_sz) ->
-          withFuncType funcType $ \functype_ptr -> do
+          withObj funcType $ \functype_ptr -> do
             callback_funptr :: FunPtr FuncCallback <-
               newFuncCallbackFunPtrArc (linkerFunPtrArcsRef linker) callback
             unsafe'c'wasmtime_linker_define_func
@@ -2786,9 +2777,9 @@ linkerDefineInstance ::
 linkerDefineInstance linker store name inst =
   unsafeIOToPrim $
     withLinker linker $ \linker_ptr ->
-      withStore store $ \ctx_ptr ->
+      withObj store $ \ctx_ptr ->
         withCStringLen name $ \(name_ptr, name_sz) ->
-          withInstance inst $
+          withObj inst $
             unsafe'c'wasmtime_linker_define_instance
               linker_ptr
               ctx_ptr
@@ -2830,7 +2821,7 @@ linkerGet ::
 linkerGet linker store modName name =
   unsafeIOToPrim $
     withLinker linker $ \linker_ptr ->
-      withStore store $ \ctx_ptr ->
+      withObj store $ \ctx_ptr ->
         withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
           withCStringLen name $ \(name_ptr, name_sz) ->
             alloca $ \(extern_ptr :: Ptr C'wasmtime_extern) -> do
@@ -2863,10 +2854,10 @@ linkerGetDefault ::
 linkerGetDefault linker store name =
   unsafeIOToPrim $
     withLinker linker $ \linker_ptr ->
-      withStore store $ \ctx_ptr ->
+      withObj store $ \ctx_ptr ->
         withCStringLen name $ \(name_ptr, name_sz) -> do
           func <- MkFunc <$> mallocForeignPtr
-          withFunc func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> try $ do
+          withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> try $ do
             unsafe'c'wasmtime_linker_get_default
               linker_ptr
               ctx_ptr
@@ -2894,8 +2885,8 @@ linkerInstantiate ::
 linkerInstantiate linker store m =
   unsafeIOToPrim $
     withLinker linker $ \linker_ptr ->
-      withStore store $ \ctx_ptr ->
-        withModule m $ \mod_ptr -> do
+      withObj store $ \ctx_ptr ->
+        withObj m $ \mod_ptr -> do
           inst_frgn_ptr :: ForeignPtr C'wasmtime_instance_t <- mallocForeignPtr
           mask_ $ do
             arcs <- readIORef $ linkerFunPtrArcsRef linker
@@ -2937,9 +2928,9 @@ linkerModule ::
 linkerModule linker store modName m =
   unsafeIOToPrim $
     withLinker linker $ \linker_ptr ->
-      withStore store $ \ctx_ptr ->
+      withObj store $ \ctx_ptr ->
         withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
-          withModule m $
+          withObj m $
             unsafe'c'wasmtime_linker_module
               linker_ptr
               ctx_ptr
@@ -2989,6 +2980,9 @@ freeArc (Arc rcRef finalize) = do
 -- where they will be caught.
 newtype Trap = MkTrap {unTrap :: ForeignPtr C'wasm_trap_t}
 
+instance HasForeignPtr Trap C'wasm_trap_t where
+  getForeignPtr = unTrap
+
 -- | A trap with a given message.
 newTrap :: String -> Trap
 newTrap msg = unsafePerformIO $ mask_ $ newTrapPtr msg >>= newTrapFromPtr
@@ -3001,12 +2995,9 @@ newTrapPtr msg =
 newTrapFromPtr :: Ptr C'wasm_trap_t -> IO Trap
 newTrapFromPtr = fmap MkTrap . newForeignPtr unsafe'p'wasm_trap_delete
 
-withTrap :: Trap -> (Ptr C'wasm_trap_t -> IO a) -> IO a
-withTrap = withForeignPtr . unTrap
-
 instance Show Trap where
   show trap = unsafePerformIO $
-    withTrap trap $ \trap_ptr ->
+    withObj trap $ \trap_ptr ->
       alloca $ \(wasm_msg_ptr :: Ptr C'wasm_message_t) -> do
         unsafe'c'wasm_trap_message trap_ptr wasm_msg_ptr
         peekByteVecAsString wasm_msg_ptr
@@ -3019,7 +3010,7 @@ instance Exception Trap
 -- triggered while executing Wasm. Returns 'Nothing' otherwise,
 -- i.e. when the trap was created using 'newTrap' for example.
 trapCode :: Trap -> Maybe TrapCode
-trapCode trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
+trapCode trap = unsafePerformIO $ withObj trap $ \trap_ptr ->
   alloca $ \code_ptr -> do
     isInstructionTrap <- unsafe'c'wasmtime_trap_code trap_ptr code_ptr
     if isInstructionTrap
@@ -3079,7 +3070,7 @@ trapOrigin :: Trap -> Maybe Frame
 trapOrigin trap =
   unsafePerformIO $
     mask_ $
-      withTrap trap $
+      withObj trap $
         unsafe'c'wasm_trap_origin >=> withNonNullPtr newFrameFromPtr
 
 -- | Returns the trace of wasm frames for this trap.
@@ -3088,7 +3079,7 @@ trapOrigin trap =
 -- function at the front of the vector and the base function on the stack at the
 -- end.
 trapTrace :: Trap -> Vector Frame
-trapTrace trap = unsafePerformIO $ withTrap trap $ \trap_ptr ->
+trapTrace trap = unsafePerformIO $ withObj trap $ \trap_ptr ->
   alloca $ \(frame_vec_ptr :: Ptr C'wasm_frame_vec_t) -> mask_ $ do
     unsafe'c'wasm_trap_trace trap_ptr frame_vec_ptr
     sz :: CSize <- peek $ p'wasm_frame_vec_t'size frame_vec_ptr
@@ -3121,11 +3112,11 @@ handleTrap f =
 -- Can be retrieved using 'trapOrigin' or 'trapTrace'.
 newtype Frame = Frame {unFrame :: ForeignPtr C'wasm_frame_t}
 
+instance HasForeignPtr Frame C'wasm_frame_t where
+  getForeignPtr = unFrame
+
 newFrameFromPtr :: Ptr C'wasm_frame_t -> IO Frame
 newFrameFromPtr = fmap Frame . newForeignPtr unsafe'p'wasm_frame_delete
-
-withFrame :: Frame -> (Ptr C'wasm_frame_t -> IO a) -> IO a
-withFrame = withForeignPtr . unFrame
 
 -- | Returns 'Just' a human-readable name for this frame's function.
 --
@@ -3134,7 +3125,7 @@ withFrame = withForeignPtr . unFrame
 frameFuncName :: Frame -> Maybe String
 frameFuncName frame =
   unsafePerformIO $
-    withFrame frame $
+    withObj frame $
       unsafe'c'wasmtime_frame_func_name
         >=> withNonNullPtr peekByteVecAsString
 
@@ -3145,24 +3136,24 @@ frameFuncName frame =
 frameModuleName :: Frame -> Maybe String
 frameModuleName frame =
   unsafePerformIO $
-    withFrame frame $
+    withObj frame $
       unsafe'c'wasmtime_frame_module_name
         >=> withNonNullPtr peekByteVecAsString
 
 -- | Returns the function index in the original wasm module that this
 -- frame corresponds to.
 frameFuncIndex :: Frame -> Word32
-frameFuncIndex frame = unsafePerformIO $ withFrame frame unsafe'c'wasm_frame_func_index
+frameFuncIndex frame = unsafePerformIO $ withObj frame unsafe'c'wasm_frame_func_index
 
 -- | Returns the byte offset from the beginning of the function in the
 -- original wasm file to the instruction this frame points to.
 frameFuncOffset :: Frame -> Word32
-frameFuncOffset frame = unsafePerformIO $ withFrame frame unsafe'c'wasm_frame_func_offset
+frameFuncOffset frame = unsafePerformIO $ withObj frame unsafe'c'wasm_frame_func_offset
 
 -- | Returns the byte offset from the beginning of the original wasm
 -- file to the instruction this frame points to.
 frameModuleOffset :: Frame -> Word32
-frameModuleOffset frame = unsafePerformIO $ withFrame frame unsafe'c'wasm_frame_module_offset
+frameModuleOffset frame = unsafePerformIO $ withObj frame unsafe'c'wasm_frame_module_offset
 
 --------------------------------------------------------------------------------
 -- Errors
@@ -3184,6 +3175,9 @@ checkAllocation ptr = when (ptr == nullPtr) $ throwIO AllocationFailed
 -- | Errors generated by Wasmtime.
 newtype WasmtimeError = MkWasmtimeError {unWasmtimeError :: ForeignPtr C'wasmtime_error_t}
 
+instance HasForeignPtr WasmtimeError C'wasmtime_error_t where
+  getForeignPtr = unWasmtimeError
+
 newWasmtimeErrorFromPtr :: Ptr C'wasmtime_error_t -> IO WasmtimeError
 newWasmtimeErrorFromPtr = fmap MkWasmtimeError . newForeignPtr unsafe'p'wasmtime_error_delete
 
@@ -3197,14 +3191,11 @@ checkWasmtimeErrorT error_ptr = when (error_ptr /= nullPtr) $ do
   wasmtimeError <- liftIO $ newWasmtimeErrorFromPtr error_ptr
   throwE $ WasmtimeError wasmtimeError
 
-withWasmtimeError :: WasmtimeError -> (Ptr C'wasmtime_error_t -> IO a) -> IO a
-withWasmtimeError = withForeignPtr . unWasmtimeError
-
 instance Exception WasmtimeError
 
 instance Show WasmtimeError where
   show wasmtimeError = unsafePerformIO $
-    withWasmtimeError wasmtimeError $ \error_ptr ->
+    withObj wasmtimeError $ \error_ptr ->
       alloca $ \(wasm_name_ptr :: Ptr C'wasm_name_t) -> do
         unsafe'c'wasmtime_error_message error_ptr wasm_name_ptr
         msg <- peekByteVecAsString wasm_name_ptr
@@ -3214,6 +3205,12 @@ instance Show WasmtimeError where
 --------------------------------------------------------------------------------
 -- Utils
 --------------------------------------------------------------------------------
+
+class HasForeignPtr obj c'obj | obj -> c'obj where
+  getForeignPtr :: obj -> ForeignPtr c'obj
+
+withObj :: HasForeignPtr obj c'obj => obj -> (Ptr c'obj -> IO a) -> IO a
+withObj = withForeignPtr . getForeignPtr
 
 peekByteVecAsString :: Ptr C'wasm_byte_vec_t -> IO String
 peekByteVecAsString p = do
