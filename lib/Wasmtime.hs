@@ -292,7 +292,7 @@ import Control.Monad.Trans.Maybe (MaybeT (MaybeT), runMaybeT)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Internal as BI
 import Data.Functor (($>))
-import Data.IORef (IORef, atomicModifyIORef, newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int32, Int64)
 import Data.Kind (Type)
 import Data.List (intercalate)
@@ -1431,7 +1431,7 @@ newFuncCallbackFunPtr finalizeRef callback = mask_ $ do
 registerFreeHaskellFunPtr :: IORef (IO ()) -> FunPtr a -> IO ()
 registerFreeHaskellFunPtr finalizeRef funPtr =
   atomicModifyIORef finalizeRef $ \(finalize :: IO ()) ->
-    (finalize >> freeHaskellFunPtr funPtr, ())
+    (freeHaskellFunPtr funPtr >> finalize, ())
 
 -- | Creates a new host-defined function.
 --
@@ -2970,15 +2970,13 @@ newArc finalize = do
 
 -- | Atomically increment the reference count in the given 'Arc'.
 incArc :: Arc -> IO ()
-incArc arc =
-  atomicModifyIORef (arcRcRef arc) $ \rc ->
-    let !rc' = rc + 1 in (rc', ())
+incArc arc = atomicModifyIORef' (arcRcRef arc) $ \rc -> (rc + 1, ())
 
 -- | Atomically decrement the reference count in the given 'Arc'
 -- and when it reaches 0 run the associated finalizer.
 freeArc :: Arc -> IO ()
 freeArc (Arc rcRef finalize) = do
-  rc' <- atomicModifyIORef rcRef $ \rc ->
+  rc' <- atomicModifyIORef' rcRef $ \rc ->
     let !rc' = rc - 1 in (rc', rc')
   when (rc' == 0) finalize
 
