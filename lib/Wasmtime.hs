@@ -2629,6 +2629,9 @@ data Linker s = Linker
     linkerFunPtrArcsRef :: IORef [Arc]
   }
 
+instance HasForeignPtr (Linker s) C'wasmtime_linker_t where
+  getForeignPtr = linkerForeignPtr
+
 -- | Given a callback, returns a function pointer to this callback and registers
 -- the finalizer of this function pointer by adding an Arc to the given list of
 -- Arcs.
@@ -2638,9 +2641,6 @@ newFuncCallbackFunPtrArc funPtrArcsRef callback = mask_ $ do
   arc <- newArc $ freeHaskellFunPtr funPtr
   atomicModifyIORef funPtrArcsRef $ \(arcs :: [Arc]) -> (arc : arcs, ())
   pure funPtr
-
-withLinker :: Linker s -> (Ptr C'wasmtime_linker_t -> IO a) -> IO a
-withLinker = withForeignPtr . linkerForeignPtr
 
 -- | Creates a new linker for the specified engine.
 newLinker :: MonadPrim s m => Engine -> m (Linker s)
@@ -2666,7 +2666,7 @@ newLinker engine =
 linkerAllowShadowing :: MonadPrim s m => Linker s -> Bool -> m ()
 linkerAllowShadowing linker allowShadowing =
   unsafeIOToPrim $
-    withLinker linker $ \linker_ptr ->
+    withObj linker $ \linker_ptr ->
       unsafe'c'wasmtime_linker_allow_shadowing linker_ptr allowShadowing
 
 type ModuleName = String
@@ -2692,7 +2692,7 @@ linkerDefine ::
   m (Either WasmtimeError ())
 linkerDefine linker store modName name extern =
   unsafeIOToPrim $
-    withLinker linker $ \linker_ptr ->
+    withObj linker $ \linker_ptr ->
       withObj store $ \ctx_ptr ->
         withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
           withCStringLen name $ \(name_ptr, name_sz) ->
@@ -2731,7 +2731,7 @@ linkerDefineFunc ::
   m (Either WasmtimeError ())
 linkerDefineFunc linker modName name f =
   unsafeIOToPrim $
-    withLinker linker $ \linker_ptr ->
+    withObj linker $ \linker_ptr ->
       withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
         withCStringLen name $ \(name_ptr, name_sz) ->
           withObj funcType $ \functype_ptr -> do
@@ -2776,7 +2776,7 @@ linkerDefineInstance ::
   m (Either WasmtimeError ())
 linkerDefineInstance linker store name inst =
   unsafeIOToPrim $
-    withLinker linker $ \linker_ptr ->
+    withObj linker $ \linker_ptr ->
       withObj store $ \ctx_ptr ->
         withCStringLen name $ \(name_ptr, name_sz) ->
           withObj inst $
@@ -2802,7 +2802,7 @@ linkerDefineInstance linker store name inst =
 linkerDefineWasi :: MonadPrim s m => Linker s -> m (Either WasmtimeError ())
 linkerDefineWasi linker =
   unsafeIOToPrim $
-    withLinker linker $
+    withObj linker $
       unsafe'c'wasmtime_linker_define_wasi
         >=> try . checkWasmtimeError
 
@@ -2820,7 +2820,7 @@ linkerGet ::
   m (Maybe (Extern s))
 linkerGet linker store modName name =
   unsafeIOToPrim $
-    withLinker linker $ \linker_ptr ->
+    withObj linker $ \linker_ptr ->
       withObj store $ \ctx_ptr ->
         withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
           withCStringLen name $ \(name_ptr, name_sz) ->
@@ -2853,7 +2853,7 @@ linkerGetDefault ::
   m (Either WasmtimeError (Func s))
 linkerGetDefault linker store name =
   unsafeIOToPrim $
-    withLinker linker $ \linker_ptr ->
+    withObj linker $ \linker_ptr ->
       withObj store $ \ctx_ptr ->
         withCStringLen name $ \(name_ptr, name_sz) -> do
           func <- MkFunc <$> mallocForeignPtr
@@ -2884,7 +2884,7 @@ linkerInstantiate ::
   m (Either WasmException (Instance s))
 linkerInstantiate linker store m =
   unsafeIOToPrim $
-    withLinker linker $ \linker_ptr ->
+    withObj linker $ \linker_ptr ->
       withObj store $ \ctx_ptr ->
         withObj m $ \mod_ptr -> do
           inst_frgn_ptr :: ForeignPtr C'wasmtime_instance_t <- mallocForeignPtr
@@ -2927,7 +2927,7 @@ linkerModule ::
   m (Either WasmtimeError ())
 linkerModule linker store modName m =
   unsafeIOToPrim $
-    withLinker linker $ \linker_ptr ->
+    withObj linker $ \linker_ptr ->
       withObj store $ \ctx_ptr ->
         withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
           withObj m $
