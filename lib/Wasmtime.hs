@@ -1175,7 +1175,10 @@ setEpochDeadlineCallback store action =
     callback _ctx_ptr _env epoch_ptr = do
       r <- unsafePrimToIO action
       case r of
-        Left wasmtimeError -> withObj wasmtimeError pure
+        Left wasmtimeError ->
+          withObj wasmtimeError $ \error_ptr ->
+            -- TODO: or do we need to copy the error?
+            pure error_ptr
         Right epoch -> do
           poke epoch_ptr epoch
           pure nullPtr
