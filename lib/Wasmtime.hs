@@ -2560,7 +2560,7 @@ newInstance ::
   -- | This function requires that this `imports` vector has the same size as
   -- the imports of the given 'Module'. Additionally the `imports` must be 1:1
   -- lined up with the imports of the specified module. This is intended to be
-  -- relatively low level, and 'newInstanceLinked' is provided for a more
+  -- relatively low level, and 'linkerInstantiate' is provided for a more
   -- ergonomic name-based resolution API.
   Vector (Extern s) ->
   m (Either WasmException (Instance s))
