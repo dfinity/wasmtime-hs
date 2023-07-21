@@ -109,9 +109,16 @@ module Wasmtime
     -- * Stores
     Store,
     newStore,
+    StoreLimits (..),
+    defaultStoreLimits,
+    limitStore,
     addFuel,
     fuelConsumed,
+    fuelRemaining,
     consumeFuel,
+    gcStore,
+    setEpochDeadline,
+    setEpochDeadlineCallback,
 
     -- * Types of WASM values
     ValType (..),
@@ -978,7 +985,8 @@ data Store s = Store
     -- finalizer is run in the finalizer of the 'storeForeignPtr' in 'newStore'
     -- below.
     storeFinalizeRef :: !(IORef (IO ())),
-    storeForeignPtr :: !(ForeignPtr C'wasmtime_context_t)
+    storeForeignPtr :: !(ForeignPtr C'wasmtime_context_t),
+    storePtr :: !(Ptr C'wasmtime_store_t)
   }
 
 instance HasForeignPtr (Store s) C'wasmtime_context_t where
@@ -997,8 +1005,63 @@ newStore engine = unsafeIOToPrim $ withObj engine $ \engine_ptr -> mask_ $ try $
   pure
     Store
       { storeFinalizeRef = finalizeRef,
-        storeForeignPtr = storeFP
+        storeForeignPtr = storeFP,
+        storePtr = wasmtime_store_ptr
       }
+
+-- | Limits for a store.
+--
+-- Use any negative value for the parameters that should be kept on the default
+-- values. Also see 'defaultStoreLimits'.
+data StoreLimits = StoreLimits
+  { -- | The maximum number of bytes a linear memory can grow to. Growing a
+    -- linear memory beyond this limit will fail. By default, linear memory will
+    -- not be limited.
+    memorySize :: !Int64,
+    -- | The maximum number of elements in a table. Growing a table beyond this
+    -- limit will fail. By default, table elements will not be limited.
+    tableElements :: !Int64,
+    -- | The maximum number of instances that can be created for a
+    -- 'Store'. 'Module' instantiation will fail if this limit is exceeded. This
+    -- value defaults to 10,000.
+    instances :: !Int64,
+    -- | The maximum number of tables that can be created for a
+    -- 'Store'. 'Module' instantiation will fail if this limit is exceeded. This
+    -- value defaults to 10,000.
+    tables :: !Int64,
+    -- | The maximum number of linear memories that can be created for a
+    -- 'Store'. 'Module' instantiation will fail with an error if this limit is
+    -- exceeded. This value defaults to 10,000.
+    memories :: !Int64
+  }
+  deriving (Show, Eq)
+
+-- | Default limits for a store.
+defaultStoreLimits :: StoreLimits
+defaultStoreLimits =
+  StoreLimits
+    { memorySize = -1,
+      tableElements = -1,
+      instances = -1,
+      tables = -1,
+      memories = -1
+    }
+
+-- | Set the limits for a store. Used by hosts to limit resource consumption of
+-- instances.
+--
+-- Note that the limits are only used to limit the creation/growth of resources
+-- in the future, this does not retroactively attempt to apply limits to the
+-- store.
+limitStore :: MonadPrim s m => Store s -> StoreLimits -> m ()
+limitStore store storeLimits = unsafeIOToPrim $ withObj store $ \_ctx_ptr ->
+  unsafe'c'wasmtime_store_limiter
+    (storePtr store)
+    (memorySize storeLimits)
+    (tableElements storeLimits)
+    (instances storeLimits)
+    (tables storeLimits)
+    (memories storeLimits)
 
 -- | Adds fuel to this 'Store' for wasm to consume while executing.
 --
@@ -1033,6 +1096,20 @@ fuelConsumed store = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
       then pure Nothing
       else Just <$> peek amount_ptr
 
+-- | Returns the amount of fuel remaining in this store's execution before
+-- engine traps execution.
+--
+-- If fuel consumption is not enabled via 'setConsumeFuel' then this function
+-- will return 'Nothing'. Also note that fuel, if enabled, must be originally
+-- configured via 'addFuel'.
+fuelRemaining :: MonadPrim s m => Store s -> m (Maybe Word64)
+fuelRemaining store = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
+  alloca $ \amount_ptr -> do
+    res <- unsafe'c'wasmtime_context_fuel_remaining ctx_ptr amount_ptr
+    if not res
+      then pure Nothing
+      else Just <$> peek amount_ptr
+
 -- | Synthetically consumes fuel from this 'Store'.
 --
 -- For this method to work fuel consumption must be enabled via 'setConsumeFuel'.
@@ -1060,6 +1137,61 @@ consumeFuel store amount = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
     unsafe'c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
       >>= checkWasmtimeError
     peek remaining_ptr
+
+-- | Perform garbage collection within the given 'Store'.
+--
+-- Garbage collects externrefs that are used within this store. Any externrefs
+-- that are discovered to be unreachable by other code or objects will have
+-- their finalizers run.
+gcStore :: MonadPrim s m => Store s -> m ()
+gcStore store = unsafeIOToPrim $ withObj store unsafe'c'wasmtime_context_gc
+
+-- | Configures the relative deadline at which point WebAssembly code will trap
+-- or invoke the callback function.
+--
+-- See also 'setEpochInterruption' and 'setEpochDeadlineCallback'.
+setEpochDeadline :: MonadPrim s m => Store s -> Word64 -> m ()
+setEpochDeadline store ticks_beyond_current =
+  unsafeIOToPrim $
+    withObj store $ \ctx_ptr ->
+      unsafe'c'wasmtime_context_set_epoch_deadline ctx_ptr ticks_beyond_current
+
+-- | Sets an epoch deadline callback.
+--
+-- This function configures a store-local callback action that will be executed
+-- when the running WebAssembly function has exceeded its epoch deadline. That
+-- action can return @'Left' 'WasmtimeError'@ to terminate the function, or
+-- return @'Right' delta@ to update the epoch deadline and resume function
+-- execution.
+setEpochDeadlineCallback ::
+  (MonadPrim s m, PrimBase m) => Store s -> m (Either WasmtimeError Word64) -> m ()
+setEpochDeadlineCallback store action =
+  unsafeIOToPrim $
+    withObj store $ \_ctx_ptr -> do
+      callbackFunPtr <- newStoreEpochDeadlineCallbackFunPtr (storeFinalizeRef store) callback
+      unsafe'c'wasmtime_store_epoch_deadline_callback (storePtr store) callbackFunPtr nullPtr
+  where
+    callback :: StoreEpochDeadlineCallback
+    callback _ctx_ptr _env epoch_ptr = do
+      r <- unsafePrimToIO action
+      case r of
+        Left wasmtimeError -> withObj wasmtimeError pure
+        Right epoch -> do
+          poke epoch_ptr epoch
+          pure nullPtr
+
+type StoreEpochDeadlineCallback =
+  Ptr C'wasmtime_context_t ->
+  Ptr () ->
+  Ptr Word64 ->
+  IO (Ptr C'wasmtime_error_t)
+
+newStoreEpochDeadlineCallbackFunPtr ::
+  IORef (IO ()) -> StoreEpochDeadlineCallback -> IO (FunPtr StoreEpochDeadlineCallback)
+newStoreEpochDeadlineCallbackFunPtr finalizeRef callback = mask_ $ do
+  funPtr <- mk'store_epoch_deadline_callback callback
+  registerFreeHaskellFunPtr finalizeRef funPtr
+  pure funPtr
 
 --------------------------------------------------------------------------------
 -- Function Types

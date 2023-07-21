@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/release-23.05";
     flake-utils.url = "github:numtide/flake-utils";
     wasmtime = {
-      url = "github:bytecodealliance/wasmtime/v9.0.3";
+      url = "github:bytecodealliance/wasmtime/v10.0.1";
       flake = false;
     };
   };
