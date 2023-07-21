@@ -1166,10 +1166,17 @@ setEpochDeadlineCallback ::
 setEpochDeadlineCallback store action =
   unsafeIOToPrim $
     withObj store $ \_ctx_ptr -> do
-      callbackFunPtr <- newStoreEpochDeadlineCallbackFunPtr (storeFinalizeRef store) callback
+      callbackFunPtr <- mask_ $ do
+        funPtr <- mk'store_epoch_deadline_callback callback
+        registerFreeHaskellFunPtr (storeFinalizeRef store) funPtr
+        pure funPtr
       unsafe'c'wasmtime_store_epoch_deadline_callback (storePtr store) callbackFunPtr nullPtr
   where
-    callback :: StoreEpochDeadlineCallback
+    callback ::
+      Ptr C'wasmtime_context_t ->
+      Ptr () ->
+      Ptr Word64 ->
+      IO (Ptr C'wasmtime_error_t)
     callback _ctx_ptr _env epoch_ptr = do
       r <- unsafePrimToIO action
       case r of
@@ -1180,19 +1187,6 @@ setEpochDeadlineCallback store action =
         Right epoch -> do
           poke epoch_ptr epoch
           pure nullPtr
-
-type StoreEpochDeadlineCallback =
-  Ptr C'wasmtime_context_t ->
-  Ptr () ->
-  Ptr Word64 ->
-  IO (Ptr C'wasmtime_error_t)
-
-newStoreEpochDeadlineCallbackFunPtr ::
-  IORef (IO ()) -> StoreEpochDeadlineCallback -> IO (FunPtr StoreEpochDeadlineCallback)
-newStoreEpochDeadlineCallbackFunPtr finalizeRef callback = mask_ $ do
-  funPtr <- mk'store_epoch_deadline_callback callback
-  registerFreeHaskellFunPtr finalizeRef funPtr
-  pure funPtr
 
 --------------------------------------------------------------------------------
 -- Function Types
@@ -1547,21 +1541,6 @@ getFuncType store func =
         mask_ $
           unsafe'c'wasmtime_func_type ctx_ptr func_ptr >>= newFuncTypeFromPtr
 
-type FuncCallback =
-  Ptr () -> -- env
-  Ptr C'wasmtime_caller_t -> -- caller
-  Ptr C'wasmtime_val_t -> -- args
-  CSize -> -- nargs
-  Ptr C'wasmtime_val_t -> -- results
-  CSize -> -- nresults
-  IO (Ptr C'wasm_trap_t)
-
-newFuncCallbackFunPtr :: IORef (IO ()) -> FuncCallback -> IO (FunPtr FuncCallback)
-newFuncCallbackFunPtr finalizeRef callback = mask_ $ do
-  funPtr <- mk'wasmtime_func_callback_t callback
-  registerFreeHaskellFunPtr finalizeRef funPtr
-  pure funPtr
-
 registerFreeHaskellFunPtr :: IORef (IO ()) -> FunPtr a -> IO ()
 registerFreeHaskellFunPtr finalizeRef funPtr =
   atomicModifyIORef finalizeRef $ \(finalize :: IO ()) ->
@@ -1586,8 +1565,10 @@ newFunc store f =
   unsafeIOToPrim $
     withObj store $ \ctx_ptr ->
       withObj funcType $ \functype_ptr -> do
-        callback_funptr :: FunPtr FuncCallback <-
-          newFuncCallbackFunPtr (storeFinalizeRef store) callback
+        callback_funptr <- mask_ $ do
+          funPtr <- mk'wasmtime_func_callback_t callback
+          registerFreeHaskellFunPtr (storeFinalizeRef store) funPtr
+          pure funPtr
         func <- MkFunc <$> mallocForeignPtr
         withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
           unsafe'c'wasmtime_func_new
@@ -1604,6 +1585,15 @@ newFunc store f =
 
     callback :: FuncCallback
     callback = mkCallback f
+
+type FuncCallback =
+  Ptr () -> -- env
+  Ptr C'wasmtime_caller_t -> -- caller
+  Ptr C'wasmtime_val_t -> -- args
+  CSize -> -- nargs
+  Ptr C'wasmtime_val_t -> -- results
+  CSize -> -- nresults
+  IO (Ptr C'wasm_trap_t)
 
 mkCallback ::
   forall f m s.
@@ -2765,16 +2755,6 @@ data Linker s = Linker
 instance HasForeignPtr (Linker s) C'wasmtime_linker_t where
   getForeignPtr = linkerForeignPtr
 
--- | Given a callback, returns a function pointer to this callback and registers
--- the finalizer of this function pointer by adding an Arc to the given list of
--- Arcs.
-newFuncCallbackFunPtrArc :: IORef [Arc] -> FuncCallback -> IO (FunPtr FuncCallback)
-newFuncCallbackFunPtrArc funPtrArcsRef callback = mask_ $ do
-  funPtr <- mk'wasmtime_func_callback_t callback
-  arc <- newArc $ freeHaskellFunPtr funPtr
-  atomicModifyIORef funPtrArcsRef $ \(arcs :: [Arc]) -> (arc : arcs, ())
-  pure funPtr
-
 -- | Creates a new linker for the specified engine.
 newLinker :: MonadPrim s m => Engine -> m (Linker s)
 newLinker engine =
@@ -2868,8 +2848,11 @@ linkerDefineFunc linker modName name f =
       withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
         withCStringLen name $ \(name_ptr, name_sz) ->
           withObj funcType $ \functype_ptr -> do
-            callback_funptr :: FunPtr FuncCallback <-
-              newFuncCallbackFunPtrArc (linkerFunPtrArcsRef linker) callback
+            callback_funptr <- mask_ $ do
+              funPtr <- mk'wasmtime_func_callback_t callback
+              arc <- newArc $ freeHaskellFunPtr funPtr
+              atomicModifyIORef (linkerFunPtrArcsRef linker) $ \(arcs :: [Arc]) -> (arc : arcs, ())
+              pure funPtr
             unsafe'c'wasmtime_linker_define_func
               linker_ptr
               mod_name_ptr
