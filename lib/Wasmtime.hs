@@ -45,7 +45,7 @@ module Wasmtime
     setParallelCompilation,
     setCraneliftDebugVerifier,
     setCaneliftNanCanonicalization,
-    -- setStaticMemoryForced, -- seems absent
+    setStaticMemoryForced,
     setStaticMemoryMaximumSize,
     setStaticMemoryGuardSize,
     setDynamicMemoryGuardSize,
@@ -471,11 +471,9 @@ setCraneliftDebugVerifier = setConfig unsafe'c'wasmtime_config_cranelift_debug_v
 setCaneliftNanCanonicalization :: Bool -> Config
 setCaneliftNanCanonicalization = setConfig unsafe'c'wasmtime_config_cranelift_nan_canonicalization_set
 
--- Seems absent
-
 -- | Indicates that the “static” style of memory should always be used.
--- setStaticMemoryForced :: Bool -> Config -> Config
--- setStaticMemoryForced = setConfig unsafe'c'wasmtime_config_static_memory_forced_set
+setStaticMemoryForced :: Bool -> Config
+setStaticMemoryForced = setConfig unsafe'c'wasmtime_config_static_memory_forced_set
 
 -- | Configures the maximum size, in bytes, where a linear memory is considered
 -- static, above which it’ll be considered dynamic.
