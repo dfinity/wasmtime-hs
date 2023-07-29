@@ -1566,9 +1566,9 @@ newFunc store f =
     withObj store $ \ctx_ptr ->
       withObj funcType $ \functype_ptr -> do
         callback_funptr <- mask_ $ do
-          funPtr <- mk'wasmtime_func_callback_t callback
-          registerFreeHaskellFunPtr (storeFinalizeRef store) funPtr
-          pure funPtr
+          callback_funptr <- mk'wasmtime_func_callback_t callback
+          registerFreeHaskellFunPtr (storeFinalizeRef store) callback_funptr
+          pure callback_funptr
         func <- MkFunc <$> mallocForeignPtr
         withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
           unsafe'c'wasmtime_func_new
@@ -1658,13 +1658,6 @@ type FuncUncheckedCallback =
   CSize -> -- nargs
   IO (Ptr C'wasm_trap_t)
 
-newFuncUncheckedCallbackFunPtr ::
-  IORef (IO ()) -> FuncUncheckedCallback -> IO (FunPtr FuncUncheckedCallback)
-newFuncUncheckedCallbackFunPtr finalizeRef uncheckedCallback = mask_ $ do
-  funPtr <- mk'wasmtime_func_unchecked_callback_t uncheckedCallback
-  registerFreeHaskellFunPtr finalizeRef funPtr
-  pure funPtr
-
 -- | Creates a new host function in the same manner of 'newFunc', but the
 -- function-to-call has no type information available at runtime.
 newFuncUnchecked ::
@@ -1682,8 +1675,10 @@ newFuncUnchecked store f =
   unsafeIOToPrim $
     withObj store $ \ctx_ptr ->
       withObj funcType $ \functype_ptr -> do
-        unchecked_callback_funptr :: FunPtr FuncUncheckedCallback <-
-          newFuncUncheckedCallbackFunPtr (storeFinalizeRef store) uncheckedCallback
+        unchecked_callback_funptr <- mask_ $ do
+          unchecked_callback_funptr <- mk'wasmtime_func_unchecked_callback_t uncheckedCallback
+          registerFreeHaskellFunPtr (storeFinalizeRef store) unchecked_callback_funptr
+          pure unchecked_callback_funptr
         func <- MkFunc <$> mallocForeignPtr
         withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
           unsafe'c'wasmtime_func_new_unchecked
@@ -2849,10 +2844,10 @@ linkerDefineFunc linker modName name f =
         withCStringLen name $ \(name_ptr, name_sz) ->
           withObj funcType $ \functype_ptr -> do
             callback_funptr <- mask_ $ do
-              funPtr <- mk'wasmtime_func_callback_t callback
-              arc <- newArc $ freeHaskellFunPtr funPtr
+              callback_funptr <- mk'wasmtime_func_callback_t callback
+              arc <- newArc $ freeHaskellFunPtr callback_funptr
               atomicModifyIORef (linkerFunPtrArcsRef linker) $ \(arcs :: [Arc]) -> (arc : arcs, ())
-              pure funPtr
+              pure callback_funptr
             unsafe'c'wasmtime_linker_define_func
               linker_ptr
               mod_name_ptr
