@@ -45,7 +45,7 @@ module Wasmtime
     setParallelCompilation,
     setCraneliftDebugVerifier,
     setCaneliftNanCanonicalization,
-    -- setStaticMemoryForced, -- seems absent
+    setStaticMemoryForced,
     setStaticMemoryMaximumSize,
     setStaticMemoryGuardSize,
     setDynamicMemoryGuardSize,
@@ -109,9 +109,16 @@ module Wasmtime
     -- * Stores
     Store,
     newStore,
+    StoreLimits (..),
+    defaultStoreLimits,
+    limitStore,
     addFuel,
     fuelConsumed,
+    fuelRemaining,
     consumeFuel,
+    gcStore,
+    setEpochDeadline,
+    setEpochDeadlineCallback,
 
     -- * Types of WASM values
     ValType (..),
@@ -464,11 +471,9 @@ setCraneliftDebugVerifier = setConfig unsafe'c'wasmtime_config_cranelift_debug_v
 setCaneliftNanCanonicalization :: Bool -> Config
 setCaneliftNanCanonicalization = setConfig unsafe'c'wasmtime_config_cranelift_nan_canonicalization_set
 
--- Seems absent
-
 -- | Indicates that the “static” style of memory should always be used.
--- setStaticMemoryForced :: Bool -> Config -> Config
--- setStaticMemoryForced = setConfig unsafe'c'wasmtime_config_static_memory_forced_set
+setStaticMemoryForced :: Bool -> Config
+setStaticMemoryForced = setConfig unsafe'c'wasmtime_config_static_memory_forced_set
 
 -- | Configures the maximum size, in bytes, where a linear memory is considered
 -- static, above which it’ll be considered dynamic.
@@ -978,7 +983,8 @@ data Store s = Store
     -- finalizer is run in the finalizer of the 'storeForeignPtr' in 'newStore'
     -- below.
     storeFinalizeRef :: !(IORef (IO ())),
-    storeForeignPtr :: !(ForeignPtr C'wasmtime_context_t)
+    storeForeignPtr :: !(ForeignPtr C'wasmtime_context_t),
+    storePtr :: !(Ptr C'wasmtime_store_t)
   }
 
 instance HasForeignPtr (Store s) C'wasmtime_context_t where
@@ -997,8 +1003,63 @@ newStore engine = unsafeIOToPrim $ withObj engine $ \engine_ptr -> mask_ $ try $
   pure
     Store
       { storeFinalizeRef = finalizeRef,
-        storeForeignPtr = storeFP
+        storeForeignPtr = storeFP,
+        storePtr = wasmtime_store_ptr
       }
+
+-- | Limits for a store.
+--
+-- Use any negative value for the parameters that should be kept on the default
+-- values. Also see 'defaultStoreLimits'.
+data StoreLimits = StoreLimits
+  { -- | The maximum number of bytes a linear memory can grow to. Growing a
+    -- linear memory beyond this limit will fail. By default, linear memory will
+    -- not be limited.
+    memorySize :: !Int64,
+    -- | The maximum number of elements in a table. Growing a table beyond this
+    -- limit will fail. By default, table elements will not be limited.
+    tableElements :: !Int64,
+    -- | The maximum number of instances that can be created for a
+    -- 'Store'. 'Module' instantiation will fail if this limit is exceeded. This
+    -- value defaults to 10,000.
+    instances :: !Int64,
+    -- | The maximum number of tables that can be created for a
+    -- 'Store'. 'Module' instantiation will fail if this limit is exceeded. This
+    -- value defaults to 10,000.
+    tables :: !Int64,
+    -- | The maximum number of linear memories that can be created for a
+    -- 'Store'. 'Module' instantiation will fail with an error if this limit is
+    -- exceeded. This value defaults to 10,000.
+    memories :: !Int64
+  }
+  deriving (Show, Eq)
+
+-- | Default limits for a store.
+defaultStoreLimits :: StoreLimits
+defaultStoreLimits =
+  StoreLimits
+    { memorySize = -1,
+      tableElements = -1,
+      instances = -1,
+      tables = -1,
+      memories = -1
+    }
+
+-- | Set the limits for a store. Used by hosts to limit resource consumption of
+-- instances.
+--
+-- Note that the limits are only used to limit the creation/growth of resources
+-- in the future, this does not retroactively attempt to apply limits to the
+-- store.
+limitStore :: MonadPrim s m => Store s -> StoreLimits -> m ()
+limitStore store storeLimits = unsafeIOToPrim $ withObj store $ \_ctx_ptr ->
+  unsafe'c'wasmtime_store_limiter
+    (storePtr store)
+    (memorySize storeLimits)
+    (tableElements storeLimits)
+    (instances storeLimits)
+    (tables storeLimits)
+    (memories storeLimits)
 
 -- | Adds fuel to this 'Store' for wasm to consume while executing.
 --
@@ -1033,6 +1094,20 @@ fuelConsumed store = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
       then pure Nothing
       else Just <$> peek amount_ptr
 
+-- | Returns the amount of fuel remaining in this store's execution before
+-- engine traps execution.
+--
+-- If fuel consumption is not enabled via 'setConsumeFuel' then this function
+-- will return 'Nothing'. Also note that fuel, if enabled, must be originally
+-- configured via 'addFuel'.
+fuelRemaining :: MonadPrim s m => Store s -> m (Maybe Word64)
+fuelRemaining store = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
+  alloca $ \amount_ptr -> do
+    res <- unsafe'c'wasmtime_context_fuel_remaining ctx_ptr amount_ptr
+    if not res
+      then pure Nothing
+      else Just <$> peek amount_ptr
+
 -- | Synthetically consumes fuel from this 'Store'.
 --
 -- For this method to work fuel consumption must be enabled via 'setConsumeFuel'.
@@ -1060,6 +1135,58 @@ consumeFuel store amount = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
     unsafe'c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
       >>= checkWasmtimeError
     peek remaining_ptr
+
+-- | Perform garbage collection within the given 'Store'.
+--
+-- Garbage collects externrefs that are used within this store. Any externrefs
+-- that are discovered to be unreachable by other code or objects will have
+-- their finalizers run.
+gcStore :: MonadPrim s m => Store s -> m ()
+gcStore store = unsafeIOToPrim $ withObj store unsafe'c'wasmtime_context_gc
+
+-- | Configures the relative deadline at which point WebAssembly code will trap
+-- or invoke the callback function.
+--
+-- See also 'setEpochInterruption' and 'setEpochDeadlineCallback'.
+setEpochDeadline :: MonadPrim s m => Store s -> Word64 -> m ()
+setEpochDeadline store ticks_beyond_current =
+  unsafeIOToPrim $
+    withObj store $ \ctx_ptr ->
+      unsafe'c'wasmtime_context_set_epoch_deadline ctx_ptr ticks_beyond_current
+
+-- | Sets an epoch deadline callback.
+--
+-- This function configures a store-local callback action that will be executed
+-- when the running WebAssembly function has exceeded its epoch deadline. That
+-- action can return @'Left' 'WasmtimeError'@ to terminate the function, or
+-- return @'Right' delta@ to update the epoch deadline and resume function
+-- execution.
+setEpochDeadlineCallback ::
+  (MonadPrim s m, PrimBase m) => Store s -> m (Either WasmtimeError Word64) -> m ()
+setEpochDeadlineCallback store action =
+  unsafeIOToPrim $
+    withObj store $ \_ctx_ptr -> do
+      callback_funptr <- mask_ $ do
+        callback_funptr <- mk'store_epoch_deadline_callback callback
+        registerFreeHaskellFunPtr (storeFinalizeRef store) callback_funptr
+        pure callback_funptr
+      unsafe'c'wasmtime_store_epoch_deadline_callback (storePtr store) callback_funptr nullPtr
+  where
+    callback ::
+      Ptr C'wasmtime_context_t ->
+      Ptr () ->
+      Ptr Word64 ->
+      IO (Ptr C'wasmtime_error_t)
+    callback _ctx_ptr _env epoch_ptr = do
+      r <- unsafePrimToIO action
+      case r of
+        Left wasmtimeError ->
+          withObj wasmtimeError $ \error_ptr ->
+            -- TODO: or do we need to copy the error?
+            pure error_ptr
+        Right epoch -> do
+          poke epoch_ptr epoch
+          pure nullPtr
 
 --------------------------------------------------------------------------------
 -- Function Types
@@ -1414,21 +1541,6 @@ getFuncType store func =
         mask_ $
           unsafe'c'wasmtime_func_type ctx_ptr func_ptr >>= newFuncTypeFromPtr
 
-type FuncCallback =
-  Ptr () -> -- env
-  Ptr C'wasmtime_caller_t -> -- caller
-  Ptr C'wasmtime_val_t -> -- args
-  CSize -> -- nargs
-  Ptr C'wasmtime_val_t -> -- results
-  CSize -> -- nresults
-  IO (Ptr C'wasm_trap_t)
-
-newFuncCallbackFunPtr :: IORef (IO ()) -> FuncCallback -> IO (FunPtr FuncCallback)
-newFuncCallbackFunPtr finalizeRef callback = mask_ $ do
-  funPtr <- mk'wasmtime_func_callback_t callback
-  registerFreeHaskellFunPtr finalizeRef funPtr
-  pure funPtr
-
 registerFreeHaskellFunPtr :: IORef (IO ()) -> FunPtr a -> IO ()
 registerFreeHaskellFunPtr finalizeRef funPtr =
   atomicModifyIORef finalizeRef $ \(finalize :: IO ()) ->
@@ -1453,8 +1565,10 @@ newFunc store f =
   unsafeIOToPrim $
     withObj store $ \ctx_ptr ->
       withObj funcType $ \functype_ptr -> do
-        callback_funptr :: FunPtr FuncCallback <-
-          newFuncCallbackFunPtr (storeFinalizeRef store) callback
+        callback_funptr <- mask_ $ do
+          callback_funptr <- mk'wasmtime_func_callback_t callback
+          registerFreeHaskellFunPtr (storeFinalizeRef store) callback_funptr
+          pure callback_funptr
         func <- MkFunc <$> mallocForeignPtr
         withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
           unsafe'c'wasmtime_func_new
@@ -1471,6 +1585,15 @@ newFunc store f =
 
     callback :: FuncCallback
     callback = mkCallback f
+
+type FuncCallback =
+  Ptr () -> -- env
+  Ptr C'wasmtime_caller_t -> -- caller
+  Ptr C'wasmtime_val_t -> -- args
+  CSize -> -- nargs
+  Ptr C'wasmtime_val_t -> -- results
+  CSize -> -- nresults
+  IO (Ptr C'wasm_trap_t)
 
 mkCallback ::
   forall f m s.
@@ -1535,13 +1658,6 @@ type FuncUncheckedCallback =
   CSize -> -- nargs
   IO (Ptr C'wasm_trap_t)
 
-newFuncUncheckedCallbackFunPtr ::
-  IORef (IO ()) -> FuncUncheckedCallback -> IO (FunPtr FuncUncheckedCallback)
-newFuncUncheckedCallbackFunPtr finalizeRef uncheckedCallback = mask_ $ do
-  funPtr <- mk'wasmtime_func_unchecked_callback_t uncheckedCallback
-  registerFreeHaskellFunPtr finalizeRef funPtr
-  pure funPtr
-
 -- | Creates a new host function in the same manner of 'newFunc', but the
 -- function-to-call has no type information available at runtime.
 newFuncUnchecked ::
@@ -1559,8 +1675,10 @@ newFuncUnchecked store f =
   unsafeIOToPrim $
     withObj store $ \ctx_ptr ->
       withObj funcType $ \functype_ptr -> do
-        unchecked_callback_funptr :: FunPtr FuncUncheckedCallback <-
-          newFuncUncheckedCallbackFunPtr (storeFinalizeRef store) uncheckedCallback
+        unchecked_callback_funptr <- mask_ $ do
+          unchecked_callback_funptr <- mk'wasmtime_func_unchecked_callback_t uncheckedCallback
+          registerFreeHaskellFunPtr (storeFinalizeRef store) unchecked_callback_funptr
+          pure unchecked_callback_funptr
         func <- MkFunc <$> mallocForeignPtr
         withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
           unsafe'c'wasmtime_func_new_unchecked
@@ -2437,7 +2555,7 @@ newInstance ::
   -- | This function requires that this `imports` vector has the same size as
   -- the imports of the given 'Module'. Additionally the `imports` must be 1:1
   -- lined up with the imports of the specified module. This is intended to be
-  -- relatively low level, and 'newInstanceLinked' is provided for a more
+  -- relatively low level, and 'linkerInstantiate' is provided for a more
   -- ergonomic name-based resolution API.
   Vector (Extern s) ->
   m (Either WasmException (Instance s))
@@ -2632,16 +2750,6 @@ data Linker s = Linker
 instance HasForeignPtr (Linker s) C'wasmtime_linker_t where
   getForeignPtr = linkerForeignPtr
 
--- | Given a callback, returns a function pointer to this callback and registers
--- the finalizer of this function pointer by adding an Arc to the given list of
--- Arcs.
-newFuncCallbackFunPtrArc :: IORef [Arc] -> FuncCallback -> IO (FunPtr FuncCallback)
-newFuncCallbackFunPtrArc funPtrArcsRef callback = mask_ $ do
-  funPtr <- mk'wasmtime_func_callback_t callback
-  arc <- newArc $ freeHaskellFunPtr funPtr
-  atomicModifyIORef funPtrArcsRef $ \(arcs :: [Arc]) -> (arc : arcs, ())
-  pure funPtr
-
 -- | Creates a new linker for the specified engine.
 newLinker :: MonadPrim s m => Engine -> m (Linker s)
 newLinker engine =
@@ -2735,8 +2843,11 @@ linkerDefineFunc linker modName name f =
       withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
         withCStringLen name $ \(name_ptr, name_sz) ->
           withObj funcType $ \functype_ptr -> do
-            callback_funptr :: FunPtr FuncCallback <-
-              newFuncCallbackFunPtrArc (linkerFunPtrArcsRef linker) callback
+            callback_funptr <- mask_ $ do
+              callback_funptr <- mk'wasmtime_func_callback_t callback
+              arc <- newArc $ freeHaskellFunPtr callback_funptr
+              atomicModifyIORef (linkerFunPtrArcsRef linker) $ \(arcs :: [Arc]) -> (arc : arcs, ())
+              pure callback_funptr
             unsafe'c'wasmtime_linker_define_func
               linker_ptr
               mod_name_ptr
