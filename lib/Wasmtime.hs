@@ -1166,11 +1166,11 @@ setEpochDeadlineCallback ::
 setEpochDeadlineCallback store action =
   unsafeIOToPrim $
     withObj store $ \_ctx_ptr -> do
-      callbackFunPtr <- mask_ $ do
-        funPtr <- mk'store_epoch_deadline_callback callback
-        registerFreeHaskellFunPtr (storeFinalizeRef store) funPtr
-        pure funPtr
-      unsafe'c'wasmtime_store_epoch_deadline_callback (storePtr store) callbackFunPtr nullPtr
+      callback_funptr <- mask_ $ do
+        callback_funptr <- mk'store_epoch_deadline_callback callback
+        registerFreeHaskellFunPtr (storeFinalizeRef store) callback_funptr
+        pure callback_funptr
+      unsafe'c'wasmtime_store_epoch_deadline_callback (storePtr store) callback_funptr nullPtr
   where
     callback ::
       Ptr C'wasmtime_context_t ->
