@@ -291,7 +291,7 @@ import Bindings.Wasmtime.Table
 import Bindings.Wasmtime.Trap
 import Bindings.Wasmtime.Val
 import Control.Applicative ((<|>))
-import Control.Exception (Exception, bracket, mask_, onException, throwIO, try)
+import Control.Exception (Exception, bracket, mask, mask_, onException, throwIO, try)
 import Control.Monad (guard, join, unless, when, (>=>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Primitive (MonadPrim, PrimBase, unsafeIOToPrim, unsafePrimToIO)
@@ -315,7 +315,7 @@ import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
 import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtr, newForeignPtr, withForeignPtr)
-import Foreign.Marshal.Alloc (alloca)
+import Foreign.Marshal.Alloc (alloca, free, malloc)
 import Foreign.Marshal.Array (advancePtr, allocaArray)
 import Foreign.Marshal.Utils (copyBytes)
 import Foreign.Ptr (FunPtr, Ptr, castPtr, freeHaskellFunPtr, nullFunPtr, nullPtr)
@@ -3330,15 +3330,17 @@ peekByteVecAsString p = do
   peekCStringLen (data_ptr, fromIntegral size)
 
 withByteVecToByteString :: (Ptr C'wasm_byte_vec_t -> IO ()) -> IO B.ByteString
-withByteVecToByteString f =
-  alloca $ \(wasm_byte_vec_ptr :: Ptr C'wasm_byte_vec_t) -> mask_ $ do
-    f wasm_byte_vec_ptr
-    data_ptr :: Ptr CChar <- peek $ p'wasm_byte_vec_t'data wasm_byte_vec_ptr
-    size <- peek $ p'wasm_byte_vec_t'size wasm_byte_vec_ptr
-    out_fp <-
-      Foreign.Concurrent.newForeignPtr (castPtr data_ptr :: Ptr Word8) $
+withByteVecToByteString f = mask $ \restore -> do
+  wasm_byte_vec_ptr <- malloc
+  let finalize = do
+        -- Free the data in the byte_vec, then free the byte_vec itself
         unsafe'c'wasm_byte_vec_delete wasm_byte_vec_ptr
-    pure $ BI.fromForeignPtr0 out_fp $ fromIntegral size
+        free wasm_byte_vec_ptr
+  restore (f wasm_byte_vec_ptr) `onException` finalize
+  data_ptr :: Ptr CChar <- peek $ p'wasm_byte_vec_t'data wasm_byte_vec_ptr
+  size <- peek $ p'wasm_byte_vec_t'size wasm_byte_vec_ptr
+  out_fp <- Foreign.Concurrent.newForeignPtr (castPtr data_ptr :: Ptr Word8) finalize
+  pure $ BI.fromForeignPtr0 out_fp $ fromIntegral size
 
 withNonNullPtr :: (Ptr a -> IO b) -> Ptr a -> IO (Maybe b)
 withNonNullPtr f ptr
