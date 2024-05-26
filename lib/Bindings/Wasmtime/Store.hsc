@@ -49,17 +49,11 @@ import Data.Word (Word64)
 #ccall_unsafe wasmtime_context_gc , \
   Ptr <wasmtime_context_t> -> IO ()
 
-#ccall_unsafe wasmtime_context_add_fuel , \
+#ccall_unsafe wasmtime_context_set_fuel , \
   Ptr <wasmtime_context_t> -> Word64 -> IO (Ptr <wasmtime_error_t>)
 
-#ccall_unsafe wasmtime_context_fuel_consumed ,\
-  Ptr <wasmtime_context_t> -> Ptr Word64 -> IO Bool
-
-#ccall_unsafe wasmtime_context_fuel_remaining , \
-  Ptr <wasmtime_context_t> -> Ptr Word64 -> IO Bool
-
-#ccall_unsafe wasmtime_context_consume_fuel , \
-  Ptr <wasmtime_context_t> -> Word64 -> Ptr Word64 -> IO (Ptr <wasmtime_error_t>)
+#ccall_unsafe wasmtime_context_get_fuel , \
+  Ptr <wasmtime_context_t> -> Ptr Word64 -> IO (Ptr <wasmtime_error_t>)
 
 #ccall_unsafe wasmtime_context_set_wasi, \
   Ptr <wasmtime_context_t> -> Ptr <wasi_config_t> -> IO (Ptr <wasmtime_error_t>)

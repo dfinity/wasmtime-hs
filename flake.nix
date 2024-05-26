@@ -2,10 +2,10 @@
   description = "wasmtime-hs";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/release-23.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     wasmtime = {
-      url = "github:bytecodealliance/wasmtime/v10.0.1";
+      url = "github:bytecodealliance/wasmtime/v21.0.0";
       flake = false;
     };
   };
@@ -54,6 +54,7 @@
         packages.hello-c = check_c_example "hello";
         packages.gcd-c = check_c_example "gcd";
         packages.memory-c = check_c_example "memory";
+        packages.fuel-c = check_c_example "fuel";
 
         # The default development shell brings in all dependencies of
         # wasmtime-hs (like all Haskell dependencies, libwasmtime, GHC).
