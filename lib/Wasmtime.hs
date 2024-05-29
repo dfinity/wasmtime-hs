@@ -112,11 +112,9 @@ module Wasmtime
     StoreLimits (..),
     defaultStoreLimits,
     limitStore,
-    addFuel,
-    fuelConsumed,
-    fuelRemaining,
-    consumeFuel,
     gcStore,
+    setFuel,
+    getFuel,
     setEpochDeadline,
     setEpochDeadlineCallback,
 
@@ -718,7 +716,7 @@ instance Show ImportType where
     where
       appPrec = 10
 
-      showsArg :: forall a. Show a => a -> ShowS
+      showsArg :: forall a. (Show a) => a -> ShowS
       showsArg = showsPrec (appPrec + 1)
 
 newImportTypeFromPtr :: Ptr C'wasm_importtype_t -> IO ImportType
@@ -816,7 +814,7 @@ instance Show ExportType where
     where
       appPrec = 10
 
-      showsArg :: forall a. Show a => a -> ShowS
+      showsArg :: forall a. (Show a) => a -> ShowS
       showsArg = showsPrec (appPrec + 1)
 
 newExportTypeFromPtr :: Ptr C'wasm_exporttype_t -> IO ExportType
@@ -897,31 +895,31 @@ newExternTypeFromPtr :: Ptr C'wasm_externtype_t -> IO ExternType
 newExternTypeFromPtr externtype_ptr = do
   k <- unsafe'c'wasm_externtype_kind externtype_ptr
   if
-      | k == c'WASM_EXTERN_FUNC ->
-          ExternFuncType
-            <$> asSubType
-              unsafe'c'wasm_externtype_as_functype
-              unsafe'c'wasm_functype_copy
-              newFuncTypeFromPtr
-      | k == c'WASM_EXTERN_GLOBAL ->
-          ExternGlobalType
-            <$> asSubType
-              unsafe'c'wasm_externtype_as_globaltype
-              unsafe'c'wasm_globaltype_copy
-              newGlobalTypeFromPtr
-      | k == c'WASM_EXTERN_TABLE ->
-          ExternTableType
-            <$> asSubType
-              unsafe'c'wasm_externtype_as_tabletype
-              unsafe'c'wasm_tabletype_copy
-              newTableTypeFromPtr
-      | k == c'WASM_EXTERN_MEMORY ->
-          ExternMemoryType
-            <$> asSubType
-              unsafe'c'wasm_externtype_as_memorytype
-              unsafe'c'wasm_memorytype_copy
-              newMemoryTypeFromPtr
-      | otherwise -> error $ "Unknown wasm_externkind_t " ++ show k ++ "!"
+    | k == c'WASM_EXTERN_FUNC ->
+        ExternFuncType
+          <$> asSubType
+            unsafe'c'wasm_externtype_as_functype
+            unsafe'c'wasm_functype_copy
+            newFuncTypeFromPtr
+    | k == c'WASM_EXTERN_GLOBAL ->
+        ExternGlobalType
+          <$> asSubType
+            unsafe'c'wasm_externtype_as_globaltype
+            unsafe'c'wasm_globaltype_copy
+            newGlobalTypeFromPtr
+    | k == c'WASM_EXTERN_TABLE ->
+        ExternTableType
+          <$> asSubType
+            unsafe'c'wasm_externtype_as_tabletype
+            unsafe'c'wasm_tabletype_copy
+            newTableTypeFromPtr
+    | k == c'WASM_EXTERN_MEMORY ->
+        ExternMemoryType
+          <$> asSubType
+            unsafe'c'wasm_externtype_as_memorytype
+            unsafe'c'wasm_memorytype_copy
+            newMemoryTypeFromPtr
+    | otherwise -> error $ "Unknown wasm_externkind_t " ++ show k ++ "!"
   where
     asSubType ::
       forall sub_ptr sub.
@@ -991,7 +989,7 @@ instance HasForeignPtr (Store s) C'wasmtime_context_t where
   getForeignPtr = storeForeignPtr
 
 -- | Creates a new store within the specified engine.
-newStore :: MonadPrim s m => Engine -> m (Either WasmException (Store s))
+newStore :: (MonadPrim s m) => Engine -> m (Either WasmException (Store s))
 newStore engine = unsafeIOToPrim $ withObj engine $ \engine_ptr -> mask_ $ try $ do
   wasmtime_store_ptr <- unsafe'c'wasmtime_store_new engine_ptr nullPtr nullFunPtr
   checkAllocation wasmtime_store_ptr
@@ -1051,7 +1049,7 @@ defaultStoreLimits =
 -- Note that the limits are only used to limit the creation/growth of resources
 -- in the future, this does not retroactively attempt to apply limits to the
 -- store.
-limitStore :: MonadPrim s m => Store s -> StoreLimits -> m ()
+limitStore :: (MonadPrim s m) => Store s -> StoreLimits -> m ()
 limitStore store storeLimits = unsafeIOToPrim $ withObj store $ \_ctx_ptr ->
   unsafe'c'wasmtime_store_limiter
     (storePtr store)
@@ -1061,94 +1059,45 @@ limitStore store storeLimits = unsafeIOToPrim $ withObj store $ \_ctx_ptr ->
     (tables storeLimits)
     (memories storeLimits)
 
--- | Adds fuel to this 'Store' for wasm to consume while executing.
---
--- For this method to work fuel consumption must be enabled via
--- 'setConsumeFuel'. By default a 'Store' starts with 0 fuel for wasm to execute
--- with (meaning it will immediately 'Trap'). This function must be called for
--- the store to have some fuel to allow WebAssembly to execute.
---
--- Most WebAssembly instructions consume 1 unit of fuel. Some instructions, such
--- as @nop@, @drop@, @block@, and @loop@, consume 0 units, as any execution cost
--- associated with them involves other instructions which do consume fuel.
---
--- Note that at this time when fuel is entirely consumed it will cause wasm to
--- trap. More usages of fuel are planned for the future.
---
--- This function will return an error if fuel consumption is not enabled via
--- 'setConsumeFuel'.
-addFuel :: MonadPrim s m => Store s -> Word64 -> m (Either WasmtimeError ())
-addFuel store amount = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
-  unsafe'c'wasmtime_context_add_fuel ctx_ptr amount >>= try . checkWasmtimeError
-
--- | Returns the amount of fuel consumed by this store’s execution so far.
---
--- If fuel consumption is not enabled via 'setConsumeFuel' then this function
--- will return 'Nothing'. Also note that fuel, if enabled, must be originally
--- configured via 'addFuel'.
-fuelConsumed :: MonadPrim s m => Store s -> m (Maybe Word64)
-fuelConsumed store = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
-  alloca $ \amount_ptr -> do
-    res <- unsafe'c'wasmtime_context_fuel_consumed ctx_ptr amount_ptr
-    if not res
-      then pure Nothing
-      else Just <$> peek amount_ptr
-
--- | Returns the amount of fuel remaining in this store's execution before
--- engine traps execution.
---
--- If fuel consumption is not enabled via 'setConsumeFuel' then this function
--- will return 'Nothing'. Also note that fuel, if enabled, must be originally
--- configured via 'addFuel'.
-fuelRemaining :: MonadPrim s m => Store s -> m (Maybe Word64)
-fuelRemaining store = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
-  alloca $ \amount_ptr -> do
-    res <- unsafe'c'wasmtime_context_fuel_remaining ctx_ptr amount_ptr
-    if not res
-      then pure Nothing
-      else Just <$> peek amount_ptr
-
--- | Synthetically consumes fuel from this 'Store'.
---
--- For this method to work fuel consumption must be enabled via 'setConsumeFuel'.
---
--- WebAssembly execution will automatically consume fuel but if so desired the
--- embedder can also consume fuel manually to account for relative costs of host
--- functions, for example.
---
--- This function will attempt to consume @fuel@ units of fuel from within this
--- store. If the remaining amount of fuel allows this then @'Just' n@ is
--- returned where @n@ is the amount of remaining fuel. Otherwise an error is
--- returned and no fuel is consumed.
---
--- This function will return an error either if fuel consumption is not enabled
--- via 'setConsumeFuel' or if fuel exceeds the amount of remaining fuel within
--- this store.
-consumeFuel ::
-  MonadPrim s m =>
-  Store s ->
-  -- | Amount of @fuel@ to consume.
-  Word64 ->
-  m (Either WasmtimeError Word64)
-consumeFuel store amount = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
-  alloca $ \remaining_ptr -> try $ do
-    unsafe'c'wasmtime_context_consume_fuel ctx_ptr amount remaining_ptr
-      >>= checkWasmtimeError
-    peek remaining_ptr
-
 -- | Perform garbage collection within the given 'Store'.
 --
 -- Garbage collects externrefs that are used within this store. Any externrefs
 -- that are discovered to be unreachable by other code or objects will have
 -- their finalizers run.
-gcStore :: MonadPrim s m => Store s -> m ()
+gcStore :: (MonadPrim s m) => Store s -> m ()
 gcStore store = unsafeIOToPrim $ withObj store unsafe'c'wasmtime_context_gc
+
+-- | Set fuel to this 'Store' for wasm to consume while executing.
+--
+-- For this method to work fuel consumption must be enabled via 'setConsumeFuel'
+-- By default a 'Store' starts with 0 fuel for wasm to execute with (meaning it
+-- will immediately trap). This function must be called for the store to have
+-- some fuel to allow WebAssembly to execute.
+--
+-- Note that when fuel is entirely consumed it will cause wasm to trap.
+--
+-- If fuel is not enabled within this store then an error is returned.
+setFuel :: (MonadPrim s m) => Store s -> Word64 -> m (Either WasmtimeError ())
+setFuel store fuel = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
+  unsafe'c'wasmtime_context_set_fuel ctx_ptr fuel >>= try . checkWasmtimeError
+
+-- | Returns the amount of fuel remaining in this 'Store'.
+--
+-- If fuel consumption is not enabled via 'setConsumeFuel' then this function
+-- will return an error.
+--
+-- Also note that fuel, if enabled, must be originally configured via 'setFuel'.
+getFuel :: (MonadPrim s m) => Store s -> m (Either WasmtimeError Word64)
+getFuel store = unsafeIOToPrim $ withObj store $ \ctx_ptr ->
+  alloca $ \fuel_ptr -> try $ do
+    unsafe'c'wasmtime_context_get_fuel ctx_ptr fuel_ptr >>= checkWasmtimeError
+    peek fuel_ptr
 
 -- | Configures the relative deadline at which point WebAssembly code will trap
 -- or invoke the callback function.
 --
 -- See also 'setEpochInterruption' and 'setEpochDeadlineCallback'.
-setEpochDeadline :: MonadPrim s m => Store s -> Word64 -> m ()
+setEpochDeadline :: (MonadPrim s m) => Store s -> Word64 -> m ()
 setEpochDeadline store ticks_beyond_current =
   unsafeIOToPrim $
     withObj store $ \ctx_ptr ->
@@ -1504,15 +1453,15 @@ peekTableVal :: Ptr C'wasmtime_val_t -> IO TableValue
 peekTableVal val_ptr = do
   k <- peek kind_ptr
   if
-      | k == c'WASMTIME_FUNCREF -> do
-          func <- MkFunc <$> mallocForeignPtr
-          withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
-            copy func_ptr (castPtr of_ptr)
-            pure $ FuncRefValue func
-      | k == c'WASMTIME_EXTERNREF ->
-          ExternRefValue
-            <$> peek (castPtr of_ptr :: Ptr (Ptr C'wasmtime_externref_t))
-      | otherwise -> error $ "unsupported valkind " ++ show k
+    | k == c'WASMTIME_FUNCREF -> do
+        func <- MkFunc <$> mallocForeignPtr
+        withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+          copy func_ptr (castPtr of_ptr)
+          pure $ FuncRefValue func
+    | k == c'WASMTIME_EXTERNREF ->
+        ExternRefValue
+          <$> peek (castPtr of_ptr :: Ptr (Ptr C'wasmtime_externref_t))
+    | otherwise -> error $ "unsupported valkind " ++ show k
   where
     kind_ptr = p'wasmtime_val'kind val_ptr
     of_ptr = p'wasmtime_val'of val_ptr
@@ -1533,7 +1482,7 @@ instance HasForeignPtr (Func s) C'wasmtime_func_t where
   getForeignPtr = unFunc
 
 -- | Returns the type of the given function.
-getFuncType :: MonadPrim s m => Store s -> Func s -> m FuncType
+getFuncType :: (MonadPrim s m) => Store s -> Func s -> m FuncType
 getFuncType store func =
   unsafeIOToPrim $
     withObj store $ \ctx_ptr ->
@@ -1846,7 +1795,7 @@ instance Show GlobalType where
 
 -- | Returns a new 'GlobalType' with the kind of the given Haskell type and the
 -- specified 'Mutability'.
-newGlobalType :: Val a => Proxy a -> Mutability -> GlobalType
+newGlobalType :: (Val a) => Proxy a -> Mutability -> GlobalType
 newGlobalType proxy mutability = unsafePerformIO $ do
   globaltype_ptr <- newGlobalTypePtr proxy mutability
   newGlobalTypeFromPtr globaltype_ptr
@@ -1855,7 +1804,7 @@ newGlobalTypeFromPtr :: Ptr C'wasm_globaltype_t -> IO GlobalType
 newGlobalTypeFromPtr globaltype_ptr =
   GlobalType <$> newForeignPtr unsafe'p'wasm_globaltype_delete globaltype_ptr
 
-newGlobalTypePtr :: forall a. Val a => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
+newGlobalTypePtr :: forall a. (Val a) => Proxy a -> Mutability -> IO (Ptr C'wasm_globaltype_t)
 newGlobalTypePtr _proxy mutability = do
   valtype_ptr <- unsafe'c'wasm_valtype_new $ kind $ Proxy @a
   unsafe'c'wasm_globaltype_new valtype_ptr $ toWasmMutability mutability
@@ -2040,7 +1989,7 @@ instance Show TableType where
     where
       appPrec = 10
 
-      showsArg :: forall a. Show a => a -> ShowS
+      showsArg :: forall a. (Show a) => a -> ShowS
       showsArg = showsPrec (appPrec + 1)
 
       tableRefType = tableTypeElement tt
@@ -2086,13 +2035,13 @@ tableTypeElement tt = unsafePerformIO $
     valtype_ptr <- unsafe'c'wasm_tabletype_element tt_ptr
     valkind <- unsafe'c'wasm_valtype_kind valtype_ptr
     if
-        | valkind == c'WASMTIME_FUNCREF -> pure FuncRef
-        | valkind == c'WASMTIME_EXTERNREF -> pure ExternRef
-        | otherwise ->
-            error $
-              "Got invalid valkind "
-                ++ show valkind
-                ++ " from unsafe'c'wasm_valtype_kind."
+      | valkind == c'WASMTIME_FUNCREF -> pure FuncRef
+      | valkind == c'WASMTIME_EXTERNREF -> pure ExternRef
+      | otherwise ->
+          error $
+            "Got invalid valkind "
+              ++ show valkind
+              ++ " from unsafe'c'wasm_valtype_kind."
 
 -- | Returns the minimum and maximum size of this tabletype
 tableTypeLimits :: TableType -> TableLimits
@@ -2128,7 +2077,7 @@ withTableValue (ExternRefValue _) _f = error "not implemented: ExternRefValue Ta
 
 -- | Create a new table
 newTable ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   Store s ->
   TableType ->
   -- | An optional initial value which will be used to fill in the table,
@@ -2155,7 +2104,7 @@ newTable store tt mbVal =
 
 -- | Grow the table by delta elements.
 growTable ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   Store s ->
   Table s ->
   -- | Delta
@@ -2179,7 +2128,7 @@ growTable store table delta mbVal =
 
 -- | Get value at index from table. If index > length table, Nothing is returned.
 tableGet ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   Store s ->
   Table s ->
   -- | Index into table
@@ -2198,7 +2147,7 @@ tableGet store table ix = unsafeIOToPrim $
 --
 -- This function will return an error if the index is too large.
 tableSet ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   Store s ->
   Table s ->
   -- | Index
@@ -2253,7 +2202,7 @@ instance Show MemoryType where
     where
       appPrec = 10
 
-      showsArg :: forall a. Show a => a -> ShowS
+      showsArg :: forall a. (Show a) => a -> ShowS
       showsArg = showsPrec (appPrec + 1)
 
       mini = getMin mt
@@ -2319,7 +2268,7 @@ instance HasForeignPtr (Memory s) C'wasmtime_memory_t where
   getForeignPtr = unMemory
 
 -- | Create new memory with the properties described in the 'MemoryType' argument.
-newMemory :: MonadPrim s m => Store s -> MemoryType -> m (Either WasmtimeError (Memory s))
+newMemory :: (MonadPrim s m) => Store s -> MemoryType -> m (Either WasmtimeError (Memory s))
 newMemory store memtype =
   unsafeIOToPrim $
     withObj store $ \ctx_ptr ->
@@ -2339,13 +2288,13 @@ getMemoryType store mem = unsafePerformIO $
       MemoryType <$> newForeignPtr unsafe'p'wasm_memorytype_delete memtype_ptr
 
 -- | Returns the linear memory size in bytes. Always a multiple of 64KB (65536).
-getMemorySizeBytes :: MonadPrim s m => Store s -> Memory s -> m Word64
+getMemorySizeBytes :: (MonadPrim s m) => Store s -> Memory s -> m Word64
 getMemorySizeBytes store mem = unsafeIOToPrim $
   withObj store $ \ctx_ptr ->
     withObj mem (fmap fromIntegral . unsafe'c'wasmtime_memory_data_size ctx_ptr)
 
 -- | Returns the length of the linear memory in WebAssembly pages
-getMemorySizePages :: MonadPrim s m => Store s -> Memory s -> m Word64
+getMemorySizePages :: (MonadPrim s m) => Store s -> Memory s -> m Word64
 getMemorySizePages store mem = unsafeIOToPrim $
   withObj store $ \ctx_ptr ->
     withObj mem $ \mem_ptr ->
@@ -2353,7 +2302,7 @@ getMemorySizePages store mem = unsafeIOToPrim $
 
 -- | Grow the linar memory by delta number of pages. Return the size before.
 growMemory ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   Store s ->
   Memory s ->
   -- | Delta
@@ -2384,11 +2333,11 @@ unsafeWithMemory store mem f =
       f mem_data_ptr mem_size
 
 -- | Returns a copy of the whole linear memory as a bytestring.
-readMemory :: MonadPrim s m => Store s -> Memory s -> m B.ByteString
+readMemory :: (MonadPrim s m) => Store s -> Memory s -> m B.ByteString
 readMemory store mem = unsafeIOToPrim $
   unsafeWithMemory store mem $ \mem_data_ptr mem_size ->
     BI.create (fromIntegral mem_size) $ \dst_ptr ->
-      BI.memcpy dst_ptr mem_data_ptr (fromIntegral mem_size)
+      copyBytes dst_ptr mem_data_ptr (fromIntegral mem_size)
 
 -- | Takes an offset and a length, and returns a copy of the memory starting at
 -- offset until offset + length.
@@ -2396,7 +2345,7 @@ readMemory store mem = unsafeIOToPrim $
 -- Returns @Left MemoryAccessError@ if offset + length exceeds the length of the
 -- memory.
 readMemoryAt ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   Store s ->
   Memory s ->
   -- | Offset
@@ -2412,7 +2361,7 @@ readMemoryAt store mem offset sz = do
       else do
         res <- unsafeWithMemory store mem $ \mem_data_ptr mem_size ->
           BI.create (fromIntegral mem_size) $ \dst_ptr ->
-            BI.memcpy
+            copyBytes
               dst_ptr
               (advancePtr mem_data_ptr (fromIntegral offset))
               (fromIntegral mem_size)
@@ -2424,7 +2373,7 @@ readMemoryAt store mem offset sz = do
 -- current memory capacity, then none of the @ByteString@ is written
 -- to memory and @'Left' 'MemoryAccessError'@ is returned.
 writeMemory ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   Store s ->
   Memory s ->
   -- | Offset
@@ -2436,7 +2385,7 @@ writeMemory store mem offset (BI.BS fp n) =
     if offset + n > fromIntegral sz
       then pure $ Left MemoryAccessError
       else withForeignPtr fp $ \src ->
-        Right <$> BI.memcpy (advancePtr dst offset) src n
+        Right <$> copyBytes (advancePtr dst offset) src n
 
 -- | Error for out of bounds 'Memory' access.
 data MemoryAccessError = MemoryAccessError deriving (Show)
@@ -2549,7 +2498,7 @@ instance HasForeignPtr (Instance s) C'wasmtime_instance_t where
 -- imports, creating a WebAssembly instance. The returned instance can then
 -- afterwards be inspected for exports.
 newInstance ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   Store s ->
   Module ->
   -- | This function requires that this `imports` vector has the same size as
@@ -2579,7 +2528,7 @@ newInstance store m externs = unsafeIOToPrim $
             pure inst
 
 -- | Get an export by name from an instance.
-getExport :: MonadPrim s m => Store s -> Instance s -> String -> m (Maybe (Extern s))
+getExport :: (MonadPrim s m) => Store s -> Instance s -> String -> m (Maybe (Extern s))
 getExport store inst name = unsafeIOToPrim $
   withObj store $ \ctx_ptr ->
     withObj inst $ \(inst_ptr :: Ptr C'wasmtime_instance_t) ->
@@ -2689,7 +2638,7 @@ getExportedTypedGlobal store inst name = runMaybeT $ do
 
 -- | Get an export by index from an instance.
 getExportAtIndex ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   Store s ->
   Instance s ->
   -- | Index of the export within the module.
@@ -2751,7 +2700,7 @@ instance HasForeignPtr (Linker s) C'wasmtime_linker_t where
   getForeignPtr = linkerForeignPtr
 
 -- | Creates a new linker for the specified engine.
-newLinker :: MonadPrim s m => Engine -> m (Linker s)
+newLinker :: (MonadPrim s m) => Engine -> m (Linker s)
 newLinker engine =
   unsafeIOToPrim $
     withObj engine $ \engine_ptr ->
@@ -2771,7 +2720,7 @@ newLinker engine =
 -- definitions.
 --
 -- By default this setting is 'False'.
-linkerAllowShadowing :: MonadPrim s m => Linker s -> Bool -> m ()
+linkerAllowShadowing :: (MonadPrim s m) => Linker s -> Bool -> m ()
 linkerAllowShadowing linker allowShadowing =
   unsafeIOToPrim $
     withObj linker $ \linker_ptr ->
@@ -2786,7 +2735,7 @@ type Name = String
 -- For more information about name resolution consult the
 -- <https://docs.wasmtime.dev/api/wasmtime/struct.Linker.html#name-resolution Rust documentation>.
 linkerDefine ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   -- | The linker the name is being defined in.
   Linker s ->
   -- | The store that the item is owned by.
@@ -2875,7 +2824,7 @@ linkerDefineFunc linker modName name f =
 -- For more information about name resolution consult the
 -- <https://docs.wasmtime.dev/api/wasmtime/struct.Linker.html#name-resolution Rust documentation>.
 linkerDefineInstance ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   -- | The linker the name is being defined in.
   Linker s ->
   -- | The store that owns the given 'Instance'.
@@ -2910,7 +2859,7 @@ linkerDefineInstance linker store name inst =
 --
 -- For more information about name resolution consult the
 -- <https://docs.wasmtime.dev/api/wasmtime/struct.Linker.html#name-resolution Rust documentation>.
-linkerDefineWasi :: MonadPrim s m => Linker s -> m (Either WasmtimeError ())
+linkerDefineWasi :: (MonadPrim s m) => Linker s -> m (Either WasmtimeError ())
 linkerDefineWasi linker =
   unsafeIOToPrim $
     withObj linker $
@@ -2919,7 +2868,7 @@ linkerDefineWasi linker =
 
 -- | Loads an item by name from this linker.
 linkerGet ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   -- | The linker to load from.
   Linker s ->
   -- | The store to load the item into.
@@ -2954,7 +2903,7 @@ linkerGet linker store modName name =
 -- For more information see the
 -- <https://bytecodealliance.github.io/wasmtime/api/wasmtime/struct.Linker.html#method.get_default Rust documentation>.
 linkerGetDefault ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   -- | The linker to load from.
   Linker s ->
   -- | The store to load the item into.
@@ -2985,7 +2934,7 @@ linkerGetDefault linker store name =
 -- defined in the linker than an error is returned. (or if the previously
 -- defined item is of the wrong type).
 linkerInstantiate ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   -- | The linker used to instantiate the provided module.
   Linker s ->
   -- | The store that is used to instantiate within.
@@ -3026,7 +2975,7 @@ linkerInstantiate linker store m =
 -- For more information see the
 -- <https://bytecodealliance.github.io/wasmtime/api/wasmtime/struct.Linker.html#method.module Rust documentation>.
 linkerModule ::
-  MonadPrim s m =>
+  (MonadPrim s m) =>
   -- | The linker the module is being added to.
   Linker s ->
   -- | The store that is used to instantiate the given module.
@@ -3320,7 +3269,7 @@ instance Show WasmtimeError where
 class HasForeignPtr obj c'obj | obj -> c'obj where
   getForeignPtr :: obj -> ForeignPtr c'obj
 
-withObj :: HasForeignPtr obj c'obj => obj -> (Ptr c'obj -> IO a) -> IO a
+withObj :: (HasForeignPtr obj c'obj) => obj -> (Ptr c'obj -> IO a) -> IO a
 withObj = withForeignPtr . getForeignPtr
 
 peekByteVecAsString :: Ptr C'wasm_byte_vec_t -> IO String
@@ -3356,7 +3305,7 @@ allocaNullPtr f = alloca $ \ptr_ptr -> do
 
 -- | Uses 'sizeOf' to copy bytes from the second pointer (source) into the first
 --  (destination); the copied areas may /not/ overlap.
-copy :: forall a. Storable a => Ptr a -> Ptr a -> IO ()
+copy :: forall a. (Storable a) => Ptr a -> Ptr a -> IO ()
 copy dest src = copyBytes dest src $ sizeOf (undefined :: a)
 
 --------------------------------------------------------------------------------
@@ -3400,7 +3349,7 @@ instance Curry '[] where
   uncurryList f _ = f
   curryList f = f Nil
 
-instance Curry as => Curry (a ': as) where
+instance (Curry as) => Curry (a ': as) where
   uncurryList f (x :. xs) = uncurryList (f x) xs
   curryList f x = curryList $ f . (x :.)
 
@@ -3411,7 +3360,7 @@ class Len (l :: [Type]) where
 instance Len '[] where
   len _proxy = 0
 
-instance Len as => Len (a ': as) where
+instance (Len as) => Len (a ': as) where
   len _proxy = 1 + len (Proxy @as)
 
 -- | WASM functions can return zero or more results of different types. These

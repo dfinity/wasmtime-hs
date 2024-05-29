@@ -7,7 +7,10 @@ module Main (main) where
 
 import Control.Exception (Exception, throwIO)
 import Control.Monad.ST (ST, runST)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, withExceptT)
 import qualified Data.ByteString as B
+import Data.Maybe (fromJust)
 import Data.STRef
 import Paths_wasmtime_hs (getDataFileName)
 import Test.Tasty.HUnit ((@?=))
@@ -25,30 +28,31 @@ main = do
 
   myModule :: Module <- handleException $ newModule engine wasm
 
-  let i :: Int
-      i = runST (st engine myModule)
+  let r :: Either String Int
+      r = runST (st engine myModule)
 
-  i @?= 2
+  r @?= Right 2
 
-st :: forall s. Engine -> Module -> ST s Int
-st engine myModule = do
-  Right (store :: Store s) <- newStore engine
+st :: forall s. Engine -> Module -> ST s (Either String Int)
+st engine myModule = runExceptT $ do
+  store :: Store s <- withExceptT show $ ExceptT $ newStore engine
 
-  stRef :: STRef s Int <- newSTRef 1
+  stRef :: STRef s Int <- lift $ newSTRef 1
 
-  func :: Func s <- newFuncUnchecked store $ inc stRef
+  func :: Func s <- lift $ newFuncUnchecked store $ inc stRef
 
-  Right (inst :: Instance s) <- newInstance store myModule [toExtern func]
+  inst :: Instance s <- withExceptT show $ ExceptT $ newInstance store myModule [toExtern func]
 
-  Just (run :: ST s (Either WasmException ())) <-
-    getExportedFunction store inst "run"
+  run :: ST s (Either WasmException ()) <-
+    lift $
+      fromJust <$> getExportedFunction store inst "run"
 
-  Right () <- run
+  withExceptT show $ ExceptT $ run
 
-  readSTRef stRef
+  lift $ readSTRef stRef
 
 inc :: STRef s Int -> ST s (Either Trap ())
 inc stRef = Right <$> modifySTRef stRef (+ 1)
 
-handleException :: Exception e => Either e r -> IO r
+handleException :: (Exception e) => Either e r -> IO r
 handleException = either throwIO pure

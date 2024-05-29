@@ -19,7 +19,7 @@ main = do
   putStrLn "Initializing..."
   engine <- newEngineWithConfig $ setConsumeFuel True
   store <- newStore engine >>= handleException
-  Right () <- addFuel store 10000
+  Right () <- setFuel store 10000
 
   wasm <- wasmFromPath "test/fuel.wat"
 
@@ -33,22 +33,22 @@ main = do
   Just (fib :: Int32 -> IO (Either WasmException Int32)) <-
     getExportedFunction store inst "fibonacci"
   Left (Trap trap) <- try $ for_ ([1 ..] :: [Int32]) $ \i -> do
-    Just fuel_before <- fuelConsumed store
+    Right fuel_before <- getFuel store
     res <- fib i
     case res of
       Left ex -> putStrLn ("Exhausted fuel computing fib " ++ show i) >> throwIO ex
       Right m -> do
-        Just fuel_after <- fuelConsumed store
+        Right fuel_after <- getFuel store
         let diff = fuel_after - fuel_before
         putStrLn $ "fib " ++ show i ++ " = " ++ show m ++ " consumed " ++ show diff ++ " fuel."
-        Right () <- addFuel store diff
+        Right () <- setFuel store 10000
         pure ()
   trapCode trap @?= Just TRAP_CODE_OUT_OF_FUEL
 
   putStrLn "Shutting down..."
   putStrLn "Done."
 
-handleException :: Exception e => Either e r -> IO r
+handleException :: (Exception e) => Either e r -> IO r
 handleException = either throwIO pure
 
 wasmFromPath :: FilePath -> IO Wasm

@@ -13,29 +13,29 @@ import Bindings.Wasmtime.Store
 import Data.Word (Word64)
 
 #starttype struct wasmtime_func
-#field store_id , Word64
-#field index    , CSize
+#field store_id  , Word64
+#field __private , CSize
 #stoptype
 
 #synonym_t wasmtime_func_t , <wasmtime_func>
 
 #starttype struct wasmtime_table
-#field store_id , Word64
-#field index    , CSize
+#field store_id  , Word64
+#field __private , CSize
 #stoptype
 
 #synonym_t wasmtime_table_t , <wasmtime_table>
 
 #starttype struct wasmtime_memory
-#field store_id , Word64
-#field index    , CSize
+#field store_id  , Word64
+#field __private , CSize
 #stoptype
 
 #synonym_t wasmtime_memory_t , <wasmtime_memory>
 
 #starttype struct wasmtime_global
-#field store_id , Word64
-#field index    , CSize
+#field store_id  , Word64
+#field __private , CSize
 #stoptype
 
 #synonym_t wasmtime_global_t , <wasmtime_global>
