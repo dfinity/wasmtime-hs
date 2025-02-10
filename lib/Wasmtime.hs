@@ -45,10 +45,9 @@ module Wasmtime
     setParallelCompilation,
     setCraneliftDebugVerifier,
     setCaneliftNanCanonicalization,
-    setStaticMemoryForced,
-    setStaticMemoryMaximumSize,
-    setStaticMemoryGuardSize,
-    setDynamicMemoryGuardSize,
+    setMemoryMayMove,
+    setMemoryReservation,
+    setMemoryGuardSize,
     loadCacheConfig,
 
     -- ** Compilation Strategy
@@ -469,41 +468,17 @@ setCraneliftDebugVerifier = setConfig unsafe'c'wasmtime_config_cranelift_debug_v
 setCaneliftNanCanonicalization :: Bool -> Config
 setCaneliftNanCanonicalization = setConfig unsafe'c'wasmtime_config_cranelift_nan_canonicalization_set
 
--- | Indicates that the “static” style of memory should always be used.
-setStaticMemoryForced :: Bool -> Config
-setStaticMemoryForced = setConfig unsafe'c'wasmtime_config_static_memory_forced_set
+-- | Indicates whether linear memories may relocate their base pointer at runtime.
+setMemoryMayMove :: Bool -> Config
+setMemoryMayMove = setConfig unsafe'c'wasmtime_config_memory_may_move_set
 
--- | Configures the maximum size, in bytes, where a linear memory is considered
--- static, above which it’ll be considered dynamic.
---
--- The default value for this property depends on the host platform. For 64-bit
--- platforms there’s lots of address space available, so the default configured
--- here is 4GB. WebAssembly linear memories currently max out at 4GB which means
--- that on 64-bit platforms Wasmtime by default always uses a static
--- memory. This, coupled with a sufficiently sized guard region, should produce
--- the fastest JIT code on 64-bit platforms, but does require a large address
--- space reservation for each wasm memory.  For 32-bit platforms this value
--- defaults to 1GB. This means that wasm memories whose maximum size is less
--- than 1GB will be allocated statically, otherwise they’ll be considered
--- dynamic.
-setStaticMemoryMaximumSize :: Word64 -> Config
-setStaticMemoryMaximumSize = setConfig unsafe'c'wasmtime_config_static_memory_maximum_size_set
+-- | Specifies the capacity of linear memories, in bytes, in their initial allocation.
+setMemoryReservation :: Word64 -> Config
+setMemoryReservation = setConfig unsafe'c'wasmtime_config_memory_reservation_set
 
--- | Configures the size, in bytes, of the guard region used at the end of a
--- static memory’s address space reservation.
---
--- The default value for this property is 2GB on 64-bit platforms. This allows
--- eliminating almost all bounds checks on loads/stores with an immediate offset
--- of less than 2GB. On 32-bit platforms this defaults to 64KB.
-setStaticMemoryGuardSize :: Word64 -> Config
-setStaticMemoryGuardSize = setConfig unsafe'c'wasmtime_config_static_memory_guard_size_set
-
--- | Configures the size, in bytes, of the guard region used at the end of a
--- dynamic memory’s address space reservation.
---
--- Defaults to 64KB
-setDynamicMemoryGuardSize :: Word64 -> Config
-setDynamicMemoryGuardSize = setConfig unsafe'c'wasmtime_config_dynamic_memory_guard_size_set
+-- | Configures the size, in bytes, of the guard region used at the end of a linear memory’s address space reservation.
+setMemoryGuardSize :: Word64 -> Config
+setMemoryGuardSize = setConfig unsafe'c'wasmtime_config_memory_guard_size_set
 
 -- | Enables Wasmtime's cache and loads configuration from the specified path.
 --
