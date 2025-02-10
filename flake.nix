@@ -9,7 +9,23 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachSystem [ "aarch64-darwin" "x86_64-linux" ] (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs { inherit system overlays; };
+
+        overlays = [
+          (self: super: {
+            # To use c-api, build by cmake is also required.
+            # [wasmtime/crates/c-api at main · bytecodealliance/wasmtime](https://github.com/bytecodealliance/wasmtime/tree/b981b08c3c1c13276df9b3c0dc2cdae1de750572/crates/c-api)
+            wasmtime = super.wasmtime.overrideAttrs (oldAttrs: {
+              postInstall = ''
+                ${oldAttrs.postInstall or ""}
+                cmake -S crates/c-api -B target/c-api --install-prefix "$(pwd)/artifacts"
+                cmake --build target/c-api
+                cmake --install target/c-api
+                install -m0644 $(pwd)/artifacts/include/wasmtime/conf.h $dev/include/wasmtime
+              '';
+            });
+          })
+        ];
 
         wasmtime = pkgs.wasmtime;
 
