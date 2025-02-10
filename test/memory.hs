@@ -13,10 +13,13 @@ import Data.Int (Int32)
 import Data.Word (Word8)
 import Paths_wasmtime_hs (getDataFileName)
 import Test.Tasty.HUnit ((@?=))
+import System.IO (BufferMode (NoBuffering), hSetBuffering, stdout)
 import Wasmtime
 
 main :: IO ()
 main = do
+  hSetBuffering stdout NoBuffering -- Mysteriously, if removing the buffering specification, the test fails to run in `nix build`.
+
   putStrLn "Initializing..."
   engine <- newEngine
   store <- newStore engine >>= handleException
