@@ -4,16 +4,14 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    wasmtime = {
-      url = "github:bytecodealliance/wasmtime/v21.0.0";
-      flake = false;
-    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, wasmtime }:
+  outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachSystem [ "aarch64-darwin" "x86_64-linux" ] (system:
       let
         pkgs = import nixpkgs { inherit system; };
+
+        wasmtime = pkgs.wasmtime;
 
         haskellPackages = pkgs.haskellPackages;
 
