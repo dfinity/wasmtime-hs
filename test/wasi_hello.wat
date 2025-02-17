@@ -3,7 +3,7 @@
     (func $fd_write (param i32 i32 i32 i32) (result i32))
   )
   (memory 1)
-  (export "memory" (memory 0)) 
+  (export "memory" (memory 0))
   (data (i32.const 0) "Hello, World!\n")
 
   (func $hello_world (result i32)
