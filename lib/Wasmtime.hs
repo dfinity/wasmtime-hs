@@ -244,10 +244,19 @@ module Wasmtime
     linkerDefineFunc,
     linkerDefineInstance,
     linkerDefineWasi,
+    linkerDefineWasiWith,
     linkerGet,
     linkerGetDefault,
     linkerInstantiate,
     linkerModule,
+
+    -- * WASI
+    WasiConfig,
+    setWasiConfig,
+    wasiInheritArgv,
+    wasiInheritStdin,
+    wasiInheritStdout,
+    wasiInheritStderr,
 
     -- * Traps
     Trap,
@@ -272,6 +281,7 @@ module Wasmtime
 where
 
 import Bindings.Wasm
+import Bindings.Wasi
 import Bindings.Wasmtime
 import Bindings.Wasmtime.Config
 import Bindings.Wasmtime.Engine
@@ -2834,12 +2844,19 @@ linkerDefineInstance linker store name inst =
 --
 -- For more information about name resolution consult the
 -- <https://docs.wasmtime.dev/api/wasmtime/struct.Linker.html#name-resolution Rust documentation>.
-linkerDefineWasi :: (MonadPrim s m) => Linker s -> m (Either WasmtimeError ())
-linkerDefineWasi linker =
+linkerDefineWasi :: (MonadPrim s m) => Linker s -> Store s -> m (Either WasmtimeError ())
+linkerDefineWasi = linkerDefineWasiWith mempty
+
+linkerDefineWasiWith :: (MonadPrim s m) => WasiConfig -> Linker s -> Store s -> m (Either WasmtimeError ())
+linkerDefineWasiWith conf linker store =
   unsafeIOToPrim $
-    withObj linker $
-      unsafe'c'wasmtime_linker_define_wasi
-        >=> try . checkWasmtimeError
+    withObj store $ \context_ptr -> do
+      conf_ptr <- unsafe'c'wasi_config_new
+      unWasiConfig conf conf_ptr
+      unsafe'c'wasmtime_context_set_wasi context_ptr conf_ptr >>= checkWasmtimeError
+      withObj linker $
+        unsafe'c'wasmtime_linker_define_wasi
+          >=> try . checkWasmtimeError
 
 -- | Loads an item by name from this linker.
 linkerGet ::
@@ -2972,6 +2989,36 @@ linkerModule linker store modName m =
               mod_name_ptr
               (fromIntegral mod_name_sz)
               >=> try . checkWasmtimeError
+
+--------------------------------------------------------------------------------
+-- WASI
+--------------------------------------------------------------------------------
+
+newtype WasiConfig = WasiConfig {unWasiConfig :: Ptr C'wasi_config_t -> IO ()}
+
+instance Semigroup WasiConfig where
+  cfg1 <> cfg2 = WasiConfig $ \cfg_ptr -> do
+    unWasiConfig cfg1 cfg_ptr
+    unWasiConfig cfg2 cfg_ptr
+
+instance Monoid WasiConfig where
+  mempty = WasiConfig $ \_cfg_ptr -> pure ()
+
+
+setWasiConfig :: (Ptr C'wasi_config_t -> a -> IO ()) -> a -> WasiConfig
+setWasiConfig f x = WasiConfig $ \cfg_ptr -> f cfg_ptr x
+
+wasiInheritArgv :: WasiConfig
+wasiInheritArgv = WasiConfig unsafe'c'wasi_config_inherit_argv
+
+wasiInheritStdin :: WasiConfig
+wasiInheritStdin = WasiConfig unsafe'c'wasi_config_inherit_stdin
+
+wasiInheritStdout :: WasiConfig
+wasiInheritStdout = WasiConfig unsafe'c'wasi_config_inherit_stdout
+
+wasiInheritStderr :: WasiConfig
+wasiInheritStderr = WasiConfig unsafe'c'wasi_config_inherit_stderr
 
 --------------------------------------------------------------------------------
 -- Arcs
