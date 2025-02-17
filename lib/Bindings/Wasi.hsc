@@ -9,3 +9,9 @@ module Bindings.Wasi where
 #strict_import
 
 #opaque_t wasi_config_t
+
+#ccall_unsafe wasi_config_new, IO (Ptr <wasi_config_t>)
+#ccall_unsafe wasi_config_inherit_argv, Ptr <wasi_config_t> -> IO ()
+#ccall_unsafe wasi_config_inherit_stdin, Ptr <wasi_config_t> -> IO ()
+#ccall_unsafe wasi_config_inherit_stderr, Ptr <wasi_config_t> -> IO ()
+#ccall_unsafe wasi_config_inherit_stdout, Ptr <wasi_config_t> -> IO ()
