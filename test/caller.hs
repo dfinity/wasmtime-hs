@@ -8,7 +8,7 @@ module Main (main) where
 import Control.Exception (Exception, throwIO)
 import qualified Data.ByteString as B
 import Paths_wasmtime_hs (getDataFileName)
-import System.Mem (performGC)
+import Data.Int
 import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 
@@ -16,8 +16,8 @@ main :: IO ()
 main = do
   engine <- newEngine
 
-  linker <- newLinker engine
-  linkerDefineFuncWithCaller linker "" "some_func" someFunc >>= handleException
+  linker <- newLinker engine 
+  linkerDefineFuncWithCaller linker "" "someFunc" someFunc >>= handleException
 
   watPath <- getDataFileName "test/caller.wat"
   watBytes <- B.readFile watPath
@@ -31,17 +31,17 @@ main = do
   inst <- linkerInstantiate linker store myModule >>= handleException
 
   -- run x = someFunc (x + 1)
-  Just (run :: IO (Either WasmException ())) <-
+  Just (run :: Int32 -> IO (Either WasmException Int32)) <-
     getExportedFunction store inst "run"
 
   result <- run 2 >>= handleException
   result @?= 6
 
 someFunc :: Caller -> Int32 -> IO (Either Trap Int32)
-someFunc caller x = do
+someFunc caller x = Right <$> do
   putStrLn $ "> someFunc got: " <> show x
-  Just (double :: Int32 -> IO (Either Trap ())) <- getExportedFunctionByCaller caller "double"
-  double x
+  Just (double :: Int32 -> IO (Either WasmException Int32)) <- getExportedFunctionFromCaller caller "double"
+  double x >>= handleException
 
 handleException :: Exception e => Either e r -> IO r
 handleException = either throwIO pure
