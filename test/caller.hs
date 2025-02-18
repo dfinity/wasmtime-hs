@@ -9,6 +9,7 @@ import Control.Exception (Exception, throwIO)
 import qualified Data.ByteString as B
 import Paths_wasmtime_hs (getDataFileName)
 import System.Mem (performGC)
+import Test.Tasty.HUnit ((@?=))
 import Wasmtime
 
 main :: IO ()
@@ -16,10 +17,10 @@ main = do
   engine <- newEngine
 
   linker <- newLinker engine
-  linkerDefineFunc linker "" "hello" hello >>= handleException
+  linkerDefineFuncWithCaller linker "" "some_func" someFunc >>= handleException
 
-  helloWatPath <- getDataFileName "test/hello.wat"
-  watBytes <- B.readFile helloWatPath
+  watPath <- getDataFileName "test/caller.wat"
+  watBytes <- B.readFile watPath
 
   wasm <- handleException $ wat2wasm watBytes
 
@@ -29,20 +30,18 @@ main = do
 
   inst <- linkerInstantiate linker store myModule >>= handleException
 
-  -- Force the linker to be garbage collected to test if calling "run" and thus
-  -- "hello" still works as expected.
-  performGC
-
+  -- run x = someFunc (x + 1)
   Just (run :: IO (Either WasmException ())) <-
     getExportedFunction store inst "run"
 
-  run >>= handleException
+  result <- run 2 >>= handleException
+  result @?= 6
 
-hello :: IO (Either Trap ())
-hello =
-  Right <$> do
-    putStrLn "Calling back..."
-    putStrLn "> Hello World!"
+someFunc :: Caller -> Int32 -> IO (Either Trap Int32)
+someFunc caller x = do
+  putStrLn $ "> someFunc got: " <> show x
+  Just (double :: Int32 -> IO (Either Trap ())) <- getExportedFunctionByCaller caller "double"
+  double x
 
 handleException :: Exception e => Either e r -> IO r
 handleException = either throwIO pure
