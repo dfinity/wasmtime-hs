@@ -139,10 +139,16 @@ module Wasmtime
 
     -- ** Funcs
     Func,
+    Caller,
     getFuncType,
     newFunc,
     newFuncUnchecked,
     funcToFunction,
+    getExportFromCaller,
+    getExportedFunctionFromCaller,
+    getExportedMemoryFromCaller,
+    getExportedTableFromCaller,
+    getExportedTypedGlobalFromCaller,
 
     -- * Globals
 
@@ -242,6 +248,7 @@ module Wasmtime
     Name,
     linkerDefine,
     linkerDefineFunc,
+    linkerDefineFuncWithCaller,
     linkerDefineInstance,
     linkerDefineWasi,
     linkerGet,
@@ -311,7 +318,7 @@ import Data.Word (Word32, Word64, Word8)
 import Foreign.C.String (peekCStringLen, withCString, withCStringLen)
 import Foreign.C.Types (CChar, CSize)
 import qualified Foreign.Concurrent
-import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtr, newForeignPtr, withForeignPtr)
+import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtr, newForeignPtr, withForeignPtr, newForeignPtr_)
 import Foreign.Marshal.Alloc (alloca, free, malloc)
 import Foreign.Marshal.Array (advancePtr, allocaArray)
 import Foreign.Marshal.Utils (copyBytes)
@@ -1308,6 +1315,9 @@ class Val a where
   pokeRawVal :: Store s -> Ptr C'wasmtime_val_raw_t -> a -> IO ()
   peekRawVal :: Store s -> Ptr C'wasmtime_val_raw_t -> IO a
 
+  pokeRawValWithCaller :: Caller -> Ptr C'wasmtime_val_raw_t -> a -> IO ()
+  peekRawValWithCaller :: Caller -> Ptr C'wasmtime_val_raw_t -> IO a
+
   default pokeVal :: (Storable a) => Ptr C'wasmtime_val_t -> a -> IO ()
   pokeVal val_ptr x = do
     poke (p'wasmtime_val'kind val_ptr) $ kind $ Proxy @a
@@ -1336,6 +1346,12 @@ class Val a where
 
   default peekRawVal :: (Storable a) => Store s -> Ptr C'wasmtime_val_raw_t -> IO a
   peekRawVal _store = peek . castPtr
+
+  default pokeRawValWithCaller :: (Storable a) => Caller -> Ptr C'wasmtime_val_raw_t -> a -> IO ()
+  pokeRawValWithCaller  _ = poke . castPtr
+
+  default peekRawValWithCaller :: (Storable a) => Caller -> Ptr C'wasmtime_val_raw_t -> IO a
+  peekRawValWithCaller _ = peek . castPtr
 
 instance Val Int32 where kind _proxy = c'WASMTIME_I32
 
@@ -1382,6 +1398,21 @@ instance Val (Func s) where
         unsafe'c'wasmtime_func_from_raw ctx_ptr raw_func_ptr func_ptr
         pure func
 
+  pokeRawValWithCaller caller val_raw_ptr func =
+    withObj caller $ \caller_ptr -> do
+      ctx_ptr <- unsafe'c'wasmtime_caller_context caller_ptr
+      withObj func $ unsafe'c'wasmtime_func_to_raw ctx_ptr >=> copy (castPtr val_raw_ptr)
+
+  peekRawValWithCaller caller val_raw_ptr =
+    withObj caller $ \caller_ptr -> do
+      ctx_ptr <- unsafe'c'wasmtime_caller_context caller_ptr
+      func <- MkFunc <$> mallocForeignPtr
+      withObj func $ \(func_ptr :: Ptr C'wasmtime_func_t) -> do
+        let raw_func_ptr :: Ptr ()
+            raw_func_ptr = castPtr val_raw_ptr
+        unsafe'c'wasmtime_func_from_raw ctx_ptr raw_func_ptr func_ptr
+        pure func
+
 instance Val (Ptr C'wasmtime_externref_t) where kind _proxy = c'WASMTIME_EXTERNREF
 
 -- | Class of types (of kind list of types) that can be passed and returned from
@@ -1392,6 +1423,8 @@ class Vals (v :: [Type]) where
   peekVals :: Ptr C'wasmtime_val_t -> MaybeT IO (List v)
   pokeRawVals :: Store s -> Ptr C'wasmtime_val_raw_t -> List v -> IO ()
   peekRawVals :: Store s -> Ptr C'wasmtime_val_raw_t -> IO (List v)
+  pokeRawValsWithCaller :: Caller -> Ptr C'wasmtime_val_raw_t -> List v -> IO ()
+  peekRawValsWithCaller :: Caller -> Ptr C'wasmtime_val_raw_t -> IO (List v)
 
 instance Vals '[] where
   pokeValTypes _valtypes_ptr_ptr _proxy = pure ()
@@ -1399,6 +1432,8 @@ instance Vals '[] where
   peekVals _vals_ptr = pure Nil
   pokeRawVals _store _raw_vals_ptr Nil = pure ()
   peekRawVals _store _raw_vals_ptr = pure Nil
+  pokeRawValsWithCaller _store _raw_vals_ptr Nil = pure ()
+  peekRawValsWithCaller _store _raw_vals_ptr = pure Nil
 
 instance (Val v, Vals vs) => Vals (v ': vs) where
   pokeValTypes valtypes_ptr_ptr _proxy = do
@@ -1423,6 +1458,15 @@ instance (Val v, Vals vs) => Vals (v ': vs) where
     (:.)
       <$> peekRawVal store raw_vals_ptr
       <*> peekRawVals store (advancePtr raw_vals_ptr 1)
+  
+  pokeRawValsWithCaller caller raw_vals_ptr (v :. vs) = do
+    pokeRawValWithCaller caller raw_vals_ptr v
+    pokeRawValsWithCaller caller (advancePtr raw_vals_ptr 1) vs
+
+  peekRawValsWithCaller caller raw_vals_ptr =
+    (:.)
+      <$> peekRawValWithCaller caller raw_vals_ptr
+      <*> peekRawValsWithCaller caller (advancePtr raw_vals_ptr 1)
 
 peekTableVal :: Ptr C'wasmtime_val_t -> IO TableValue
 peekTableVal val_ptr = do
@@ -1456,11 +1500,26 @@ newtype Func s = MkFunc {unFunc :: ForeignPtr C'wasmtime_func_t}
 instance HasForeignPtr (Func s) C'wasmtime_func_t where
   getForeignPtr = unFunc
 
+-- | Representation of a caller in Wasmtime.
+newtype Caller = Caller {unCaller :: ForeignPtr C'wasmtime_caller_t}
+
+instance HasForeignPtr (Caller) C'wasmtime_caller_t where
+  getForeignPtr = unCaller
+
 -- | Returns the type of the given function.
 getFuncType :: (MonadPrim s m) => Store s -> Func s -> m FuncType
 getFuncType store func =
   unsafeIOToPrim $
     withObj store $ \ctx_ptr ->
+      withObj func $ \func_ptr ->
+        mask_ $
+          unsafe'c'wasmtime_func_type ctx_ptr func_ptr >>= newFuncTypeFromPtr
+
+getFuncTypeFromCaller :: (MonadPrim s m) => Caller -> Func s -> m FuncType
+getFuncTypeFromCaller caller func =
+  unsafeIOToPrim $ 
+    withObj caller $ \caller_ptr -> do
+      ctx_ptr <- unsafe'c'wasmtime_caller_context caller_ptr
       withObj func $ \func_ptr ->
         mask_ $
           unsafe'c'wasmtime_func_type ctx_ptr func_ptr >>= newFuncTypeFromPtr
@@ -1574,6 +1633,66 @@ mkCallback f _env _caller params_ptr nargs result_ptr nresults = do
 
     callFunctionOnParams :: List (Params f) -> m (Either Trap (Result f))
     callFunctionOnParams = uncurryList f
+
+-- TODO: It must be able to be generalized with the above
+mkCallbackWithCaller ::
+  forall f m s.
+  ( Funcable f,
+    Action f ~ m (Either Trap (Result f)),
+    MonadPrim s m,
+    PrimBase m
+  ) =>
+  (Caller -> f) ->
+  FuncCallback
+mkCallbackWithCaller f0 _env caller0 params_ptr nargs result_ptr nresults = do
+  caller <- Caller <$> unsafePrimToIO (newForeignPtr_ caller0)
+  let f = f0 caller
+      expectedNrOfArgs = len $ Proxy @(Params f)
+      expectedNrOfResults = len $ Proxy @(Types (Result f))
+
+      callFunctionOnParams :: List (Params f) -> m (Either Trap (Result f))
+      callFunctionOnParams = uncurryList f
+  if actualNrOfArgs /= expectedNrOfArgs
+    then
+      newTrapPtr $
+        "Expected "
+          ++ show expectedNrOfArgs
+          ++ " number of arguments but got "
+          ++ show actualNrOfArgs
+          ++ "!"
+    else do
+      mbParams <- runMaybeT $ peekVals params_ptr
+      case mbParams of
+        Nothing -> newTrapPtr "ValType mismatch!"
+        Just params -> do
+          e <- unsafePrimToIO $ callFunctionOnParams params
+          case e of
+            Left trap ->
+              -- As the docs of <wasmtime_func_callback_t> mention:
+              --
+              -- > This callback can optionally return a wasm_trap_t indicating
+              -- > that a trap should be raised in WebAssembly. It's expected
+              -- > that in this case the caller relinquishes ownership of the
+              -- > trap and it is passed back to the engine.
+              --
+              -- Since trap is a ForeignPtr which will be garbage collected
+              -- later we need to copy the trap to safely hand it to the engine.
+              withObj trap unsafe'c'wasm_trap_copy
+            Right r -> do
+              let n = fromIntegral nresults
+              if n == expectedNrOfResults
+                then pokeVals result_ptr (toHList r) $> nullPtr
+                else
+                  newTrapPtr $
+                    "Expected the number of results to be "
+                      ++ show expectedNrOfResults
+                      ++ " but got "
+                      ++ show n
+                      ++ "!"
+  where
+    actualNrOfArgs = fromIntegral nargs
+
+
 
 type FuncUncheckedCallback =
   Ptr () -> -- env
@@ -1708,6 +1827,25 @@ funcToFunction store func = do
   where
     expectedFuncType = newFuncType $ Proxy @f
 
+funcToFunctionWithCaller ::
+  forall f m s.
+  ( Funcable f,
+    Action f ~ m (Either WasmException (Result f)),
+    MonadPrim s m
+  ) =>
+  Caller ->
+  -- | WASM function.
+  Func s ->
+  m (Maybe f)
+funcToFunctionWithCaller caller func = do
+  actualFuncType <- getFuncTypeFromCaller caller func
+  pure $
+    if actualFuncType == expectedFuncType
+      then Just $ callFuncWithCaller caller func
+      else Nothing
+  where
+    expectedFuncType = newFuncType $ Proxy @f
+
 callFunc ::
   forall f m s.
   ( Funcable f,
@@ -1740,6 +1878,112 @@ callFunc store func = curryList callFuncOnParams
                 fmap fromHList $ liftIO $ peekRawVals store args_and_results_ptr
     n :: Int
     n = max (len $ Proxy @(Params f)) (len $ Proxy @(Types (Result f)))
+
+callFuncWithCaller ::
+  forall f m s.
+  ( Funcable f,
+    Action f ~ m (Either WasmException (Result f)),
+    MonadPrim s m
+  ) =>
+  Caller ->
+  -- | See 'funcToFunction'.
+  Func s ->
+  f
+callFuncWithCaller caller func = curryList callFuncOnParams
+  where
+    callFuncOnParams :: List (Params f) -> m (Either WasmException (Result f))
+    callFuncOnParams params =
+      unsafeIOToPrim $
+        withObj caller $ \caller_ptr ->
+          withObj func $ \func_ptr ->
+            allocaArray n $ \(args_and_results_ptr :: Ptr C'wasmtime_val_raw_t) -> do
+              pokeRawValsWithCaller caller args_and_results_ptr params
+              ctx_ptr <- unsafe'c'wasmtime_caller_context caller_ptr
+              handleTrap $ \(trap_ptr_ptr :: Ptr (Ptr C'wasm_trap_t)) -> do
+                liftIO
+                  ( c'wasmtime_func_call_unchecked
+                      ctx_ptr
+                      func_ptr
+                      args_and_results_ptr
+                      (fromIntegral n)
+                      trap_ptr_ptr
+                  )
+                  >>= checkWasmtimeErrorT
+                fmap fromHList $ liftIO $ peekRawValsWithCaller caller args_and_results_ptr
+    n :: Int
+    n = max (len $ Proxy @(Params f)) (len $ Proxy @(Types (Result f)))
+
+-- | Get an export by name from a caller
+getExportFromCaller :: (MonadPrim s m) => Caller -> String -> m (Maybe (Extern s))
+getExportFromCaller caller name = unsafeIOToPrim $
+  withObj caller $ \caller_ptr -> do
+    withCStringLen name $ \(name_ptr, sz) ->
+      alloca $ \(extern_ptr :: Ptr C'wasmtime_extern) -> do
+        found <-
+          unsafe'c'wasmtime_caller_export_get
+            caller_ptr
+            name_ptr
+            (fromIntegral sz)
+            extern_ptr
+        if not found
+          then pure Nothing
+          else Just <$> fromExternPtr extern_ptr
+
+-- | Convenience function which gets the named export from the caller
+-- ('getExportFromCaller'), checks if it's a 'Func' ('fromExtern') and finally converts
+-- the 'Func' to the Haskell function @f@ in case their types match
+-- ('funcToFunction').
+getExportedFunctionFromCaller ::
+  forall f m s.
+  ( Funcable f,
+    Action f ~ m (Either WasmException (Result f)),
+    MonadPrim s m
+  ) =>
+  Caller ->
+  -- | Name of the export.
+  String ->
+  m (Maybe f)
+getExportedFunctionFromCaller caller name = runMaybeT $ do
+  extern <- MaybeT $ getExportFromCaller caller name
+  (func :: Func s) <- MaybeT $ pure $ fromExtern extern
+  MaybeT $ funcToFunctionWithCaller caller func
+
+-- | Convenience function which gets the named export from the caller
+-- ('getExport') and checks if it's a 'Memory' ('fromExtern').
+getExportedMemoryFromCaller ::
+  forall s m.
+  (MonadPrim s m) =>
+  Caller ->
+  -- | Name of the export.
+  String ->
+  m (Maybe (Memory s))
+getExportedMemoryFromCaller caller name = (>>= fromExtern) <$> getExportFromCaller caller name
+
+-- | Convenience function which gets the named export from the caller
+-- ('getExport') and checks if it's a 'Table' ('fromExtern').
+getExportedTableFromCaller ::
+  forall s m.
+  (MonadPrim s m) =>
+  Caller ->
+  -- | Name of the export.
+  String ->
+  m (Maybe (Table s))
+getExportedTableFromCaller caller name = (>>= fromExtern) <$> getExportFromCaller caller name
+
+-- | Convenience function which gets the named export from the caller
+-- ('getExport'), checks if it's a 'Global' ('fromExtern') and finally checks if
+-- the type of the global matches the desired type @a@ ('toTypedGlobal').
+getExportedTypedGlobalFromCaller ::
+  forall s m a.
+  (MonadPrim s m, Val a) =>
+  Caller ->
+  -- | Name of the export.
+  String ->
+  m (Maybe (TypedGlobal s a))
+getExportedTypedGlobalFromCaller caller name = runMaybeT $ do
+  extern <- MaybeT $ getExportFromCaller caller name
+  (global :: Global s) <- MaybeT $ pure $ fromExtern extern
+  MaybeT $ toTypedGlobalFromCaller caller global
 
 --------------------------------------------------------------------------------
 -- Globals
@@ -1843,6 +2087,15 @@ getGlobalType store global =
         globaltype_ptr <- unsafe'c'wasmtime_global_type ctx_ptr global_ptr
         newGlobalTypeFromPtr globaltype_ptr
 
+getGlobalTypeFromCaller :: (MonadPrim s m) => Caller -> Global s -> m GlobalType
+getGlobalTypeFromCaller caller global =
+  unsafeIOToPrim $
+    withObj caller $ \caller_ptr ->
+      withObj global $ \global_ptr -> mask_ $ do
+        ctx_ptr <- unsafe'c'wasmtime_caller_context caller_ptr
+        globaltype_ptr <- unsafe'c'wasmtime_global_type ctx_ptr global_ptr
+        newGlobalTypeFromPtr globaltype_ptr
+
 -- | Retrieves the type of the given 'Global' from the 'Store' and checks if it
 -- matches the desired type @a@ of the returned 'TypedGlobal'.
 toTypedGlobal ::
@@ -1853,6 +2106,20 @@ toTypedGlobal ::
   m (Maybe (TypedGlobal s a))
 toTypedGlobal store global = do
   globalType <- getGlobalType store global
+  let actualKind = toWasmKind $ globalTypeValType globalType
+      expectedKind = kind $ Proxy @a
+  if actualKind == expectedKind
+    then pure $ Just $ TypedGlobal global
+    else pure Nothing
+
+toTypedGlobalFromCaller ::
+  forall s m a.
+  (MonadPrim s m, Val a) =>
+  Caller ->
+  Global s ->
+  m (Maybe (TypedGlobal s a))
+toTypedGlobalFromCaller caller global = do
+  globalType <- getGlobalTypeFromCaller caller global
   let actualKind = toWasmKind $ globalTypeValType globalType
       expectedKind = kind $ Proxy @a
   if actualKind == expectedKind
@@ -2789,6 +3056,51 @@ linkerDefineFunc linker modName name f =
 
     callback :: FuncCallback
     callback = mkCallback f
+
+-- | Defines a new function taken a caller in this linker.
+linkerDefineFuncWithCaller ::
+  forall f m s.
+  ( Funcable f,
+    Action f ~ m (Either Trap (Result f)),
+    MonadPrim s m,
+    PrimBase m
+  ) =>
+  -- | The linker the name is being defined in.
+  Linker s ->
+  -- | The module name the item is defined under.
+  ModuleName ->
+  -- | The field name the item is defined under
+  Name ->
+  (Caller -> f) ->
+  m (Either WasmtimeError ())
+linkerDefineFuncWithCaller linker modName name f =
+  unsafeIOToPrim $
+    withObj linker $ \linker_ptr ->
+      withCStringLen modName $ \(mod_name_ptr, mod_name_sz) ->
+        withCStringLen name $ \(name_ptr, name_sz) ->
+          withObj funcType $ \functype_ptr -> do
+            callback_funptr <- mask_ $ do
+              callback_funptr <- mk'wasmtime_func_callback_t callback
+              arc <- newArc $ freeHaskellFunPtr callback_funptr
+              atomicModifyIORef (linkerFunPtrArcsRef linker) $ \(arcs :: [Arc]) -> (arc : arcs, ())
+              pure callback_funptr
+            unsafe'c'wasmtime_linker_define_func
+              linker_ptr
+              mod_name_ptr
+              (fromIntegral mod_name_sz)
+              name_ptr
+              (fromIntegral name_sz)
+              functype_ptr
+              callback_funptr
+              nullPtr
+              nullFunPtr
+              >>= try . checkWasmtimeError
+  where
+    funcType :: FuncType
+    funcType = newFuncType $ Proxy @f
+
+    callback :: FuncCallback
+    callback = mkCallbackWithCaller f
 
 -- | Defines an instance under the specified name in this linker.
 --
