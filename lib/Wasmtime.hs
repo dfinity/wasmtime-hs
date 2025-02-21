@@ -3058,6 +3058,13 @@ linkerDefineFunc linker modName name f =
     callback = mkCallback f
 
 -- | Defines a new function taken a caller in this linker.
+--
+-- A function taken a caller requires type annotation.
+-- @
+--   someFunc :: s ~ PrimState IO => Caller s -> Int32 -> IO (Either Trap Int32)
+--   someFunc caller x =  do
+--  ...
+-- @
 linkerDefineFuncWithCaller ::
   forall f m s.
   ( Funcable f,
@@ -3133,8 +3140,6 @@ linkerDefineInstance linker store name inst =
               name_ptr
               (fromIntegral name_sz)
               >=> try . checkWasmtimeError
-
--- TODO: Bind wasmtime_context_set_wasi
 
 -- | Defines WASI functions in this linker.
 --
